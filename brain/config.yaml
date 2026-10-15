@@ -1,0 +1,29 @@
+server:
+  host: "0.0.0.0"
+  port: 3390
+  cors_origins: ["*"]
+
+ollama:
+  base_url: "http://localhost:11434"
+  timeout_seconds: 180.0
+  keep_alive_lease: "10m"
+  ramdisk_path: null  # Set to "R:\\models" if using dedicated RAMDisk
+
+models:
+  tiers:
+    low: "qwen3.5:4b"
+    medium: "qwen3.5:9b"
+    high: "qwen3.8-27b-vl:latest"
+
+thinking:
+  budgets:
+    "off": 0
+    "fast": 256
+    "deep": 2048
+
+skills:
+  directory: "../skills"
+  watch_reload: true
+
+telemetry:
+  poll_interval_seconds: 2.0
