@@ -211,7 +211,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
       cleanPrompt: rawPrompt,
       modeDirective: '',
       maxToolSteps: 32,
-      maxAutoContinues: 6,
+      maxAutoContinues: 1,
       subagentRole: 'Autonomous Engineer',
     };
   }
@@ -231,7 +231,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '2. Execute all required file inspections, edits, and terminal verifications.\n' +
           '3. Never stop after merely reading files—follow through all the way to the finished deliverable.',
         maxToolSteps: 50,
-        maxAutoContinues: 10,
+        maxAutoContinues: 1,
         subagentRole: 'Goal Executor',
       };
     case 'plan':
@@ -246,7 +246,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '3. Step-by-Step Execution Checklist\n' +
           '4. Verification & Testing Strategy',
         maxToolSteps: 25,
-        maxAutoContinues: 5,
+        maxAutoContinues: 1,
         subagentRole: 'System Architect',
       };
     case 'boost':
@@ -258,7 +258,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           'Engage maximum analytical rigor: evaluate correctness, edge cases, concurrency/state bugs, and maintainability.\n' +
           'Cross-check assumptions against the real source files before delivering a comprehensive, verified solution.',
         maxToolSteps: 38,
-        maxAutoContinues: 8,
+        maxAutoContinues: 1,
         forceThinkingBudget: 'deep',
         subagentRole: 'Principal Verifier',
       };
@@ -271,7 +271,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           'Briefly inspect the workspace context if helpful, then ask the user 3 to 5 high-leverage architectural/design questions.\n' +
           'For each question, provide clear options with a "(Recommended)" default and explain the trade-off concisely.',
         maxToolSteps: 15,
-        maxAutoContinues: 3,
+        maxAutoContinues: 1,
         subagentRole: 'Design Interviewer',
       };
     case 'teamwork':
@@ -287,7 +287,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '- [Subagent 4: QA Verifier] — Validate build & runtime integrity.\n' +
           'Present the final output clearly organized by team findings and actions.',
         maxToolSteps: 45,
-        maxAutoContinues: 8,
+        maxAutoContinues: 1,
         subagentRole: 'Team Coordinator',
       };
     case 'browser':
@@ -298,7 +298,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '=== SLASH COMMAND ACTIVE: /browser (PLAYWRIGHT WEB AUTOMATION AGENT) ===\n' +
           'Immediately use the `browse_url` tool (Playwright headless browser) to navigate to the URL or search target, extract the live DOM text, and synthesize the findings.',
         maxToolSteps: 25,
-        maxAutoContinues: 5,
+        maxAutoContinues: 1,
         subagentRole: 'Browser Agent',
       };
     case 'learn':
@@ -309,7 +309,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '=== SLASH COMMAND ACTIVE: /learn (PERSIST TO HARNESS² MEMORY) ===\n' +
           'Read `.localgravity/harness/memory.md` (or `skills.md`), distill the user\'s instruction or lesson into a clear, permanent engineering rule, write the updated file back to disk using `write_file`, and confirm what was learned.',
         maxToolSteps: 20,
-        maxAutoContinues: 4,
+        maxAutoContinues: 1,
         subagentRole: 'Harness² Learner',
       };
     case 'schedule':
@@ -320,7 +320,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
           '=== SLASH COMMAND ACTIVE: /schedule (BACKGROUND AUTOMATION DESIGNER) ===\n' +
           'Design a scheduled automation workflow for the user\'s request, specifying the cron schedule, execution command, and persistence in `.localgravity/harness/scripts.md`.',
         maxToolSteps: 20,
-        maxAutoContinues: 4,
+        maxAutoContinues: 1,
         subagentRole: 'Automation Scheduler',
       };
     default:
@@ -329,7 +329,7 @@ function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResul
         cleanPrompt: rawPrompt,
         modeDirective: '',
         maxToolSteps: 32,
-        maxAutoContinues: 6,
+        maxAutoContinues: 1,
         subagentRole: 'Autonomous Engineer',
       };
   }
@@ -341,6 +341,7 @@ function detectPrematureStop(
   autoContinueCount: number,
   maxAutoContinues: number
 ): { shouldContinue: boolean; continuationPrompt: string } {
+  // Never allow more than maxAutoContinues (default 1)
   if (autoContinueCount >= maxAutoContinues) {
     return { shouldContinue: false, continuationPrompt: '' };
   }
@@ -352,52 +353,29 @@ function detectPrematureStop(
     return {
       shouldContinue: true,
       continuationPrompt:
-        '[SELF-CATCH CONTINUATION]: You finished thinking without invoking a tool or writing your response. Proceed immediately: either call the next tool you need OR write out your complete, thorough final answer now.',
+        '[ACTION REQUIRED]: You finished thinking without executing a tool or delivering an answer. Please either invoke the tool you need or write out your complete solution now.',
     };
   }
 
-  // 2. Output ends with a colon ":" and is relatively short (< 650 chars), indicating it was about to call a tool or list findings
-  if (trimmed.endsWith(':') && trimmed.length < 650) {
+  // 2. Output is a very short transitional line (< 140 chars) ending with colon ":"
+  if (trimmed.endsWith(':') && trimmed.length < 140) {
     return {
       shouldContinue: true,
       continuationPrompt:
-        '[SELF-CATCH CONTINUATION]: You stopped right after a colon ("' +
-        trimmed.slice(-100).replace(/\s+/g, ' ') +
-        '") without invoking the tool or writing the content. Keep going immediately—invoke the tool call now or write the complete response.',
+        '[ACTION REQUIRED]: Please proceed directly with the tool execution or output the planned content now.',
     };
   }
 
-  // 3. Short transitional "promise to act" (< 480 chars) where the model says "Let me read...", "I'll check...", "Let me dump...", etc. and stops
-  if (trimmed.length < 480) {
+  // 3. Output is ONLY a very short single-sentence promise (< 140 chars, e.g. "Let me read the files now.")
+  // If the model wrote a substantial answer (>= 140 chars), NEVER treat it as premature stop!
+  if (trimmed.length < 140 && !trimmed.includes('\n')) {
     const actionIntentRegex =
-      /\b(let me|i will|i'll|let's|now i'll|now let me|next,? i|i am going to|i'm going to|i need to|time to)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|continue|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build|proceed|grab|get|use|try|see|find|scan)\b/i;
+      /^\s*(let me|now let me|i'll|i will|let's|i am going to|i need to)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
     if (actionIntentRegex.test(trimmed)) {
       return {
         shouldContinue: true,
         continuationPrompt:
-          '[SELF-CATCH CONTINUATION]: You stated your next action ("' +
-          trimmed.slice(-140).replace(/\s+/g, ' ') +
-          '") and stopped without emitting the tool call or completing the task. Do not stop—immediately invoke the tool call or provide the full final deliverable now.',
-      };
-    }
-  }
-
-  // 4. Even in a slightly longer message (< 800 chars), if the very last sentence is a "Let me ..." promise to act after having used tools
-  if (hasExecutedTools && trimmed.length < 800) {
-    const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const lastLine = lines[lines.length - 1] || '';
-    if (
-      lastLine.length < 220 &&
-      /^(let me|now let me|i'll|i will|next,? i'll|let's)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|continue|pull|fetch|search|analyze|map)\b/i.test(
-        lastLine
-      )
-    ) {
-      return {
-        shouldContinue: true,
-        continuationPrompt:
-          '[SELF-CATCH CONTINUATION]: Your last line stated an unexecuted action ("' +
-          lastLine +
-          '"). Keep going: execute that tool call now, or if you already have enough context, deliver the complete final solution.',
+          '[ACTION REQUIRED]: Please execute the tool call for the action you planned, or if ready, deliver your complete answer directly.',
       };
     }
   }

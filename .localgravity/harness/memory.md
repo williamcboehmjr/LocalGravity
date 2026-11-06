@@ -17,3 +17,10 @@
   - Class name: `TabbyEngine`
   - Public Methods: `streamChatCompletion(...)`, `getTelemetry()`, `switchModelTier(...)`, `checkConnection()`.
   - Properties like `activeTier`, `tokensPerSec`, `sysramCache` are accessed via `getTelemetry()`.
+
+## User Output Formatting Preferences (standing)
+- **Narrower margins**: keep prose tight — short paragraphs, no wide walls of text.
+- **Bullets over paragraphs**: break findings/changes into bullet lists, not dense prose.
+- **Formatting tricks**: use bold for key terms, tables for comparisons, code blocks for snippets.
+- **Broken down**: split answers into small labeled sections (What / Why / Next) rather than one long block.
+- **Scannable first**: lead with the outcome, then details. User should get the gist in 5 seconds.

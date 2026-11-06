@@ -680,6 +680,8 @@ export class TabbyEngine {
           stream: true,
           temperature: params.thinkingBudget === 'off' ? 0.2 : 0.55,
           max_tokens: 6144,
+          presence_penalty: 0.15,
+          frequency_penalty: 0.1,
           chat_template_kwargs: {
             enable_thinking: params.thinkingBudget === 'deep' && !shouldPrefillClosedThink,
           },
