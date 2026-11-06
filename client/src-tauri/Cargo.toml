@@ -1,6 +1,6 @@
 [package]
 name = "localgravity-edge"
-version = "2.0.0"
+version = "0.1.0"
 description = "LocalGravity Edge Executor - Tauri v2 Rust Core"
 edition = "2021"
 

@@ -1,16 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Send,
   Image as ImageIcon,
   X,
   Zap,
-  Sparkles,
   Square,
-  CornerDownLeft,
-  AtSign,
+  Plus,
+  ChevronDown,
   FileCode2,
   Folder,
   Plug,
+  ShieldAlert,
+  ArrowUp,
+  Check,
 } from 'lucide-react';
 import { useSessionStore, QueuedMessage } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
@@ -31,6 +32,18 @@ interface PromptBarProps {
   onInterruptAndSend?: (item: QueuedMessage) => void;
 }
 
+const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
+  low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM' },
+  medium: { name: 'Qwen 3.5 9B Medium', sub: 'Balanced Workhorse' },
+  high: { name: 'Qwen 3.8 27B High', sub: 'Deep Multimodal' },
+};
+
+const BUDGET_LABELS: Record<ThinkingBudget, string> = {
+  off: 'Think: Off',
+  fast: 'Fast',
+  deep: 'Deep',
+};
+
 export const PromptBar: React.FC<PromptBarProps> = ({
   onSend,
   onTierChange,
@@ -43,25 +56,28 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setSelectedTier,
     thinkingBudget,
     setThinkingBudget,
+    executionPolicy,
+    setExecutionPolicy,
     isGenerating,
-    setIsGenerating,
-    modelStatus,
   } = useSessionStore();
 
   const { workspaceFiles } = useArtifactStore();
-  const { tokensPerSec, lastSwapDurationMs, mcpServers } = useTelemetryStore();
+  const { mcpServers } = useTelemetryStore();
 
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [showMentionPopover, setShowMentionPopover] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showBudgetMenu, setShowBudgetMenu] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastCompositionEndAtRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (textareaRef.current) {
+    if (textareaRef.current && !CSS.supports('field-sizing', 'content')) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
     }
@@ -148,7 +164,6 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         onQueue(input.trim(), images.length > 0 ? images : undefined);
         setInput('');
         setImages([]);
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
       }
       return;
     }
@@ -157,21 +172,30 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setInput('');
     setImages([]);
     setShowMentionPopover(false);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (e.nativeEvent.isComposing) return;
+      if (
+        lastCompositionEndAtRef.current !== null &&
+        Math.abs(e.nativeEvent.timeStamp - lastCompositionEndAtRef.current) < 50
+      ) {
+        return;
+      }
       handleSubmit();
     } else if (e.key === 'Escape') {
       setShowMentionPopover(false);
+      setShowModelMenu(false);
+      setShowBudgetMenu(false);
     }
   };
 
   const handleSelectTier = (tier: ModelTier) => {
     setSelectedTier(tier);
     onTierChange?.(tier);
+    setShowModelMenu(false);
   };
 
   const mentionCandidates = [
@@ -190,6 +214,8 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         ]),
   ].filter((c) => c.label.toLowerCase().includes(mentionFilter));
 
+  const hasContent = Boolean(input.trim() || images.length > 0);
+
   return (
     <div
       onDragOver={(e) => {
@@ -198,31 +224,31 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       }}
       onDragLeave={() => setIsDraggingOver(false)}
       onDrop={handleDrop}
-      className={`relative p-3.5 bg-[#1C2029] border rounded-2xl shadow-2xl space-y-2.5 shrink-0 transition-colors ${
+      className={`relative px-3.5 pt-3 pb-2.5 bg-[#1E1E20] border rounded-2xl shadow-lg space-y-2 shrink-0 transition-colors ${
         isDraggingOver
-          ? 'border-[#8AB4F8] bg-[#8AB4F8]/5'
-          : 'border-[#262B36] focus-within:border-[#8AB4F8]'
+          ? 'border-[#60A5FA] bg-[#60A5FA]/5'
+          : 'border-[#2C2C30] focus-within:border-[#3E3E44]'
       }`}
     >
       {/* @file / @folder / @mcp Autocomplete Popover */}
       {showMentionPopover && mentionCandidates.length > 0 && (
-        <div className="absolute bottom-full left-3 mb-2 w-72 max-h-52 overflow-y-auto bg-[#1C2029] border border-[#262B36] rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[#5F6368] px-2 py-1">
-            Context Mentions (@file / @folder / @mcp)
+        <div className="absolute bottom-full left-3 mb-2 w-72 max-h-52 overflow-y-auto bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5 select-none">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[#6E6E73] px-2 py-1">
+            Context Mentions
           </div>
           {mentionCandidates.slice(0, 8).map((item, idx) => (
             <button
               key={idx}
               type="button"
               onClick={() => insertMention(item.label)}
-              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono text-[#E8EAED] hover:bg-[#8AB4F8]/15 hover:text-[#8AB4F8] text-left transition-colors"
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono text-[#E3E3E3] hover:bg-[#28282C] text-left transition-colors"
             >
               {item.type === 'mcp' ? (
-                <Plug className="w-3.5 h-3.5 text-[#C58AF9] shrink-0" />
+                <Plug className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />
               ) : item.type === 'folder' ? (
-                <Folder className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <Folder className="w-3.5 h-3.5 text-[#FBBF24] shrink-0" />
               ) : (
-                <FileCode2 className="w-3.5 h-3.5 text-[#8AB4F8] shrink-0" />
+                <FileCode2 className="w-3.5 h-3.5 text-[#60A5FA] shrink-0" />
               )}
               <span className="truncate">{item.label}</span>
             </button>
@@ -238,11 +264,11 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
       {/* Attached Screenshots Tray */}
       {images.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 select-none">
           {images.map((img, idx) => (
             <div
               key={idx}
-              className="relative group shrink-0 w-16 h-16 rounded-xl overflow-hidden border border-[#262B36]"
+              className="relative group shrink-0 w-14 h-14 rounded-lg overflow-hidden border border-[#2E2E32]"
             >
               <img src={img} alt="attachment" className="w-full h-full object-cover" />
               <button
@@ -263,102 +289,28 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         rows={1}
         value={input}
         onChange={(e) => handleInputChange(e.target.value)}
+        onCompositionEnd={(e) => {
+          lastCompositionEndAtRef.current = e.nativeEvent.timeStamp;
+        }}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        placeholder="Ask LocalGravity, paste a screenshot, or type @file / @mcp..."
-        className="w-full bg-transparent resize-none outline-none text-sm sm:text-base text-[#E8EAED] placeholder:text-[#5F6368] font-sans leading-relaxed max-h-40 px-1"
+        placeholder="Ask anything, @ to mention, / for actions"
+        className="auto-fit-textarea bg-transparent resize-none outline-none text-[13px] text-[#E3E3E3] placeholder:text-[#6E6E73] font-sans leading-relaxed"
       />
 
-      {/* Bottom Cockpit Bar: 3x3 Matrix Pills (Model Tier × Thinking Budget) + Actions */}
-      <div className="flex items-center justify-between pt-2 border-t border-[#262B36] gap-2 flex-wrap sm:flex-nowrap">
-        <div className="flex items-center gap-2 overflow-x-auto min-w-0">
-          {/* Model Tier Selector Pill: [ Low 4B ] | [ Med 9B ] | [ High 27B ] */}
-          <div className="flex items-center bg-[#0B0D11] p-1 rounded-xl border border-[#262B36] shrink-0">
-            <button
-              type="button"
-              onClick={() => handleSelectTier('low')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono transition-all cursor-pointer ${
-                selectedTier === 'low'
-                  ? 'bg-[#1A73E8]/25 text-[#8AB4F8] font-semibold border border-[#8AB4F8]/60'
-                  : 'text-[#9AA0A6] hover:text-[#E8EAED]'
-              }`}
-              title="Qwen 3.5 4B (EXL3 ~4.5 bpw) • ViT pinned in VRAM"
-            >
-              <Zap className="w-3 h-3" />
-              <span>Low 4B</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectTier('medium')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono transition-all cursor-pointer ${
-                selectedTier === 'medium'
-                  ? 'bg-[#1A73E8]/25 text-[#8AB4F8] font-semibold border border-[#8AB4F8]/60'
-                  : 'text-[#9AA0A6] hover:text-[#E8EAED]'
-              }`}
-              title="Qwen 3.5 9B (EXL3 ~4.0 bpw) • Primary coding workhorse"
-            >
-              <Zap className="w-3 h-3" />
-              <span>Med 9B</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectTier('high')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono transition-all cursor-pointer ${
-                selectedTier === 'high'
-                  ? 'bg-[#C58AF9]/25 text-[#C58AF9] font-semibold border border-[#C58AF9]/60'
-                  : 'text-[#9AA0A6] hover:text-[#E8EAED]'
-              }`}
-              title="Qwen 3.8 27B VL (EXL3 ~3.5 bpw) • Deep architectural reasoning"
-            >
-              <Zap className="w-3 h-3" />
-              <span>High 27B</span>
-            </button>
-          </div>
+      {/* Bottom Toolbar inside Composer (Antigravity 2.0 layout) */}
+      <div className="flex items-center justify-between pt-1 gap-2 select-none">
+        {/* Left side: + button, Model Dropdown, Thinking Budget Dropdown */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleImageUpload}
+            className="hidden"
+          />
 
-          {/* Thinking Budget Selector Pill: [ Off ] | [ Fast ] | [ Deep ] */}
-          <div className="flex items-center bg-[#0B0D11] p-1 rounded-xl border border-[#262B36] shrink-0">
-            <span className="flex items-center gap-1 px-2 text-[11px] text-[#9AA0A6] font-medium">
-              <Sparkles className="w-3 h-3 text-[#C58AF9]" />
-              <span className="hidden md:inline">Think:</span>
-            </span>
-            {(['off', 'fast', 'deep'] as ThinkingBudget[]).map((b) => (
-              <button
-                key={b}
-                type="button"
-                onClick={() => setThinkingBudget(b)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-mono capitalize transition-all cursor-pointer ${
-                  thinkingBudget === b
-                    ? 'bg-gradient-to-r from-[#1A73E8]/30 to-[#C58AF9]/30 text-[#E8EAED] font-semibold border border-[#8AB4F8]/60'
-                    : 'text-[#9AA0A6] hover:text-[#E8EAED]'
-                }`}
-                title={
-                  b === 'off'
-                    ? 'Off: 0ms overhead (<think></think> prefill)'
-                    : b === 'fast'
-                    ? 'Fast: ~250-token rapid verification check'
-                    : 'Deep: Unconstrained chain-of-thought deliberation'
-                }
-              >
-                {b}
-              </button>
-            ))}
-          </div>
-
-          {/* Live Swap & Speed Telemetry Pill */}
-          <span className="hidden xl:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#0B0D11] border border-[#262B36] text-[11px] font-mono text-[#9AA0A6] shrink-0">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                modelStatus === 'swapping' ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'
-              }`}
-            />
-            <span>{tokensPerSec.toFixed(1)} tok/s</span>
-            <span className="text-[#5F6368]">•</span>
-            <span>{lastSwapDurationMs}ms swap</span>
-          </span>
-        </div>
-
-        {/* Right Actions: @Mention, Attach Image, Stop/Queue/Send */}
-        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -367,64 +319,154 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               setShowMentionPopover(true);
               textareaRef.current?.focus();
             }}
-            className="p-2 rounded-xl hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED] transition-colors"
-            title="Insert @file / @folder / @mcp context mention"
+            className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            title="Add context (@file / @mcp)"
           >
-            <AtSign className="w-4 h-4" />
+            <Plus className="w-4 h-4" />
           </button>
 
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleImageUpload}
-            accept="image/*"
-            multiple
-            className="hidden"
-          />
+          {/* Model Tier Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowModelMenu(!showModelMenu);
+                setShowBudgetMenu(false);
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#9A9A9E] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            >
+              <span>{TIER_LABELS[selectedTier].name}</span>
+              <ChevronDown className="w-3 h-3 text-[#6E6E73]" />
+            </button>
+
+            {showModelMenu && (
+              <div className="absolute bottom-full left-0 mb-1.5 w-52 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                {(['low', 'medium', 'high'] as ModelTier[]).map((tier) => (
+                  <button
+                    key={tier}
+                    type="button"
+                    onClick={() => handleSelectTier(tier)}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                      selectedTier === tier
+                        ? 'bg-[#28282C] text-[#E3E3E3]'
+                        : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                    }`}
+                  >
+                    <div>
+                      <div className="font-medium">{TIER_LABELS[tier].name}</div>
+                      <div className="text-[10px] text-[#6E6E73]">{TIER_LABELS[tier].sub}</div>
+                    </div>
+                    {selectedTier === tier && <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Thinking Effort Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowBudgetMenu(!showBudgetMenu);
+                setShowModelMenu(false);
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+              title="Thinking Effort"
+            >
+              <span>{BUDGET_LABELS[thinkingBudget]}</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+
+            {showBudgetMenu && (
+              <div className="absolute bottom-full left-0 mb-1.5 w-36 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                {(['off', 'fast', 'deep'] as ThinkingBudget[]).map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => {
+                      setThinkingBudget(b);
+                      setShowBudgetMenu(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                      thinkingBudget === b
+                        ? 'bg-[#28282C] text-[#E3E3E3]'
+                        : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                    }`}
+                  >
+                    <span className="capitalize">{b === 'off' ? 'Off' : `${b} Thinking`}</span>
+                    {thinkingBudget === b && <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right side: Turbo / Policy Toggle, Image Upload, Send / Stop Button */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() =>
+              setExecutionPolicy(
+                executionPolicy === 'always_proceed' ? 'request_review' : 'always_proceed'
+              )
+            }
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
+              executionPolicy === 'always_proceed'
+                ? 'text-[#9A9A9E] hover:text-[#E3E3E3] hover:bg-[#28282C]'
+                : 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/20'
+            }`}
+            title={
+              executionPolicy === 'always_proceed'
+                ? 'Turbo Mode: Auto-execute commands without review'
+                : 'Review Mode: Ask before executing commands'
+            }
+          >
+            {executionPolicy === 'always_proceed' ? (
+              <>
+                <Zap className="w-3 h-3" />
+                <span>Turbo</span>
+              </>
+            ) : (
+              <>
+                <ShieldAlert className="w-3 h-3" />
+                <span>Review</span>
+              </>
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2 rounded-xl hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED] transition-colors"
-            title="Attach screenshot or image"
+            className="p-1.5 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            title="Attach Image or Screenshot"
           >
-            <ImageIcon className="w-4 h-4" />
+            <ImageIcon className="w-3.5 h-3.5" />
           </button>
 
-          {isGenerating ? (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => (onStop ? onStop() : setIsGenerating(false))}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F28B82]/20 text-[#F28B82] border border-[#F28B82]/50 hover:bg-[#F28B82]/30 transition-colors font-semibold text-xs cursor-pointer"
-              >
-                <Square className="w-3 h-3 fill-current" />
-                <span>Stop</span>
-              </button>
-
-              {(input.trim() || images.length > 0) && (
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#1A73E8] hover:bg-[#4285F4] text-white font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  <CornerDownLeft className="w-3.5 h-3.5" />
-                  <span>Queue</span>
-                </button>
-              )}
-            </div>
+          {isGenerating && !hasContent ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="w-7 h-7 rounded-lg bg-[#DC2626] hover:bg-[#EF4444] text-white flex items-center justify-center transition-colors shadow-sm"
+              title="Stop Generation"
+            >
+              <Square className="w-3 h-3 fill-current" />
+            </button>
           ) : (
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!input.trim() && images.length === 0}
-              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-xl font-semibold text-xs transition-all ${
-                input.trim() || images.length > 0
-                  ? 'bg-gradient-to-r from-[#1A73E8] to-[#4285F4] text-white hover:brightness-110 shadow-md cursor-pointer'
-                  : 'bg-[#262B36] text-[#5F6368] cursor-not-allowed'
+              disabled={!hasContent}
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                hasContent
+                  ? 'bg-[#E3E3E3] hover:bg-white text-[#131314] cursor-pointer shadow-sm'
+                  : 'bg-[#28282C] text-[#55555A] cursor-not-allowed'
               }`}
+              title={isGenerating ? 'Queue Follow-Up Prompt' : 'Send Prompt (Enter)'}
             >
-              <Send className="w-3.5 h-3.5" />
-              <span>Send</span>
+              <ArrowUp className="w-4 h-4 stroke-[2.25]" />
             </button>
           )}
         </div>

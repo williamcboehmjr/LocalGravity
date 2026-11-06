@@ -48,10 +48,10 @@ export const Splitter: React.FC<SplitterProps> = ({
     <div
       onMouseDown={handleMouseDown}
       className={`group relative flex items-center justify-center cursor-col-resize select-none transition-colors duration-150 ${
-        direction === 'horizontal' ? 'w-1 hover:w-1.5 h-full' : 'h-1 hover:h-1.5 w-full cursor-row-resize'
-      } ${isDragging ? 'bg-accent-blue/80' : 'bg-border-subtle hover:bg-accent-blue/50'} ${className}`}
+        direction === 'horizontal' ? 'w-[1px] hover:w-1 h-full' : 'h-[1px] hover:h-1 w-full cursor-row-resize'
+      } ${isDragging ? 'bg-[#8AB4F8]/70' : 'bg-[#222226] hover:bg-[#3A3A3F]'} ${className}`}
     >
-      <div className="opacity-0 group-hover:opacity-100 transition-opacity w-1 h-8 rounded-full bg-accent-blue" />
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity w-0.5 h-8 rounded-full bg-[#8AB4F8]/60" />
     </div>
   );
 };

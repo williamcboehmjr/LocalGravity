@@ -122,15 +122,15 @@ export const WorkbenchEditor: React.FC = () => {
   const onlyFiles = workspaceFiles.filter((f) => f.type === 'file');
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#161920]">
+    <div className="flex-1 flex flex-col min-h-0 bg-[#131314]">
       {/* Editor Toolbar */}
-      <div className="p-2 border-b border-[#262B36] bg-[#111318] flex items-center justify-between gap-2 flex-wrap">
+      <div className="p-2 border-b border-[#222226] bg-[#101012] flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <FileCode2 className="w-4 h-4 text-[#8AB4F8] shrink-0" />
           <select
             value={activeFilePath}
             onChange={(e) => loadFile(e.target.value)}
-            className="bg-[#1C2029] border border-[#262B36] focus:border-[#8AB4F8] rounded-lg px-2 py-1 text-xs font-mono text-[#E8EAED] outline-none truncate max-w-[220px]"
+            className="bg-[#1E1E20] border border-[#2C2C30] focus:border-[#8AB4F8] rounded-lg px-2 py-1 text-xs font-mono text-[#E3E3E3] outline-none truncate max-w-[220px]"
           >
             {onlyFiles.length === 0 && <option value="README.md">README.md</option>}
             {onlyFiles.map((f) => (
@@ -143,7 +143,7 @@ export const WorkbenchEditor: React.FC = () => {
           <button
             type="button"
             onClick={loadWorkspaceFiles}
-            className="p-1 rounded hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]"
+            className="p-1 rounded hover:bg-[#242427] text-[#9A9A9E] hover:text-[#E3E3E3]"
             title="Refresh file tree"
           >
             <FolderOpen className="w-3.5 h-3.5" />
@@ -161,7 +161,7 @@ export const WorkbenchEditor: React.FC = () => {
             className={`px-2 py-1 rounded-lg text-[11px] font-mono flex items-center gap-1 border transition-colors ${
               isDiffMode
                 ? 'bg-[#8AB4F8]/20 border-[#8AB4F8]/50 text-[#8AB4F8]'
-                : 'bg-[#1C2029] border-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]'
+                : 'bg-[#1E1E20] border-[#2C2C30] text-[#9A9A9E] hover:text-[#E3E3E3]'
             }`}
             title="Toggle Inline Diff View"
           >
@@ -196,7 +196,7 @@ export const WorkbenchEditor: React.FC = () => {
           <button
             type="button"
             onClick={handleSave}
-            className="px-2.5 py-1 rounded-lg bg-[#1A73E8] hover:bg-[#4285F4] text-white text-[11px] font-medium flex items-center gap-1"
+            className="px-2.5 py-1 rounded-lg bg-[#242427] hover:bg-[#2E2E32] border border-[#34343A] text-[#E3E3E3] text-[11px] font-medium flex items-center gap-1"
           >
             <Save className="w-3 h-3" />
             <span>Save</span>
@@ -206,8 +206,8 @@ export const WorkbenchEditor: React.FC = () => {
 
       {/* Checkpoint Time-Travel Strip (when checkpoints exist in current thread) */}
       {checkpoints.length > 0 && (
-        <div className="px-2.5 py-1.5 bg-[#1C2029] border-b border-[#262B36] flex items-center gap-2 overflow-x-auto text-[11px]">
-          <span className="flex items-center gap-1 text-[#9AA0A6] font-medium shrink-0">
+        <div className="px-2.5 py-1.5 bg-[#18181B] border-b border-[#222226] flex items-center gap-2 overflow-x-auto text-[11px]">
+          <span className="flex items-center gap-1 text-[#9A9A9E] font-medium shrink-0">
             <History className="w-3 h-3 text-[#C58AF9]" />
             <span>Checkpoints:</span>
           </span>
@@ -225,7 +225,7 @@ export const WorkbenchEditor: React.FC = () => {
                 className={`px-2 py-0.5 rounded font-mono text-[10px] border shrink-0 transition-colors ${
                   isSelected
                     ? 'bg-[#8AB4F8]/20 border-[#8AB4F8] text-[#8AB4F8]'
-                    : 'bg-[#111318] border-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]'
+                    : 'bg-[#101012] border-[#2C2C30] text-[#9A9A9E] hover:text-[#E3E3E3]'
                 }`}
               >
                 {shortFile}

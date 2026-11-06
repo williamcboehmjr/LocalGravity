@@ -126,12 +126,12 @@ export const HarnessWorkbenchTab: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#161920] text-xs">
+    <div className="flex-1 flex flex-col min-h-0 bg-[#131314] text-xs">
       {/* Header */}
-      <div className="p-2.5 bg-[#111318] border-b border-[#262B36] flex items-center justify-between gap-2">
+      <div className="p-2.5 bg-[#101012] border-b border-[#222226] flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <ShieldCheck className="w-4 h-4 text-[#C58AF9] shrink-0" />
-          <span className="font-semibold text-[#E8EAED] truncate">
+          <span className="font-semibold text-[#E3E3E3] truncate">
             Harness² 8-Component Engine (.localgravity/harness/)
           </span>
         </div>
@@ -146,16 +146,16 @@ export const HarnessWorkbenchTab: React.FC = () => {
             type="button"
             onClick={handleTriggerPpcLoop}
             disabled={isRunningPpc}
-            className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-[#1A73E8] to-[#C58AF9] text-white font-medium text-[11px] flex items-center gap-1 hover:brightness-110 cursor-pointer"
+            className="px-2.5 py-1 rounded-lg bg-[#242427] hover:bg-[#2E2E32] border border-[#34343A] text-[#E3E3E3] font-medium text-[11px] flex items-center gap-1 cursor-pointer"
             title="Run Recursive Propose-Probe-Compose Self-Improvement Cycle"
           >
-            <Play className="w-3 h-3" />
+            <Play className="w-3 h-3 text-[#C58AF9]" />
             <span>{isRunningPpc ? 'Running PPC...' : 'Propose-Probe-Compose'}</span>
           </button>
           <button
             type="button"
             onClick={loadHarness}
-            className="p-1 rounded hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]"
+            className="p-1 rounded hover:bg-[#242427] text-[#9A9A9E] hover:text-[#E3E3E3]"
             title="Reload Harness Files"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -164,7 +164,7 @@ export const HarnessWorkbenchTab: React.FC = () => {
       </div>
 
       {/* Component Selector Pills */}
-      <div className="p-2 bg-[#1C2029] border-b border-[#262B36] flex items-center gap-1 overflow-x-auto">
+      <div className="p-2 bg-[#18181B] border-b border-[#222226] flex items-center gap-1 overflow-x-auto">
         {components.map((comp) => {
           const isSelected = comp.id === selectedId;
           return (
@@ -175,7 +175,7 @@ export const HarnessWorkbenchTab: React.FC = () => {
               className={`px-2.5 py-1 rounded-lg font-mono text-[11px] flex items-center gap-1 border shrink-0 transition-colors cursor-pointer ${
                 isSelected
                   ? 'bg-[#8AB4F8]/20 border-[#8AB4F8] text-[#8AB4F8] font-semibold'
-                  : 'bg-[#111318] border-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]'
+                  : 'bg-[#101012] border-[#2C2C30] text-[#9A9A9E] hover:text-[#E3E3E3]'
               }`}
             >
               {comp.kind === 'directory' ? (
@@ -192,12 +192,12 @@ export const HarnessWorkbenchTab: React.FC = () => {
       {/* Active Component Editor */}
       {activeComp && (
         <div className="flex-1 flex flex-col min-h-0 p-2.5 space-y-2">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[#9AA0A6]">
+          <div className="flex items-center justify-between text-[11px] font-mono text-[#9A9A9E]">
             <span>{activeComp.relativePath}</span>
             <button
               type="button"
               onClick={handleSaveComponent}
-              className="px-2.5 py-1 rounded bg-[#1A73E8] hover:bg-[#4285F4] text-white font-sans font-medium flex items-center gap-1"
+              className="px-2.5 py-1 rounded bg-[#242427] hover:bg-[#2E2E32] border border-[#34343A] text-[#E3E3E3] font-sans font-medium flex items-center gap-1"
             >
               <Save className="w-3 h-3" />
               <span>Save Component</span>
@@ -207,14 +207,14 @@ export const HarnessWorkbenchTab: React.FC = () => {
           <textarea
             value={editorText}
             onChange={(e) => setEditorText(e.target.value)}
-            className="flex-1 w-full bg-[#0B0D11] border border-[#262B36] focus:border-[#8AB4F8] rounded-xl p-3 font-mono text-xs text-[#E8EAED] outline-none resize-none leading-relaxed"
+            className="flex-1 w-full bg-[#101012] border border-[#2C2C30] focus:border-[#8AB4F8] rounded-xl p-3 font-mono text-xs text-[#E3E3E3] outline-none resize-none leading-relaxed"
           />
         </div>
       )}
 
       {/* Recent Propose-Probe-Compose Audit Log */}
       {ppcHistory.length > 0 && (
-        <div className="p-2.5 border-t border-[#262B36] bg-[#111318] max-h-36 overflow-y-auto space-y-1.5">
+        <div className="p-2.5 border-t border-[#222226] bg-[#101012] max-h-36 overflow-y-auto space-y-1.5">
           <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#C58AF9]">
             <Sparkles className="w-3 h-3" />
             <span>Propose-Probe-Compose Audit Log ({ppcHistory.length})</span>
@@ -222,16 +222,16 @@ export const HarnessWorkbenchTab: React.FC = () => {
           {ppcHistory.slice(0, 3).map((cycle) => (
             <div
               key={cycle.id}
-              className="p-2 rounded-lg bg-[#1C2029] border border-[#262B36] font-mono text-[10px] text-[#9AA0A6] space-y-0.5"
+              className="p-2 rounded-lg bg-[#18181B] border border-[#2C2C30] font-mono text-[10px] text-[#9A9A9E] space-y-0.5"
             >
-              <div className="flex items-center justify-between text-[#E8EAED]">
+              <div className="flex items-center justify-between text-[#E3E3E3]">
                 <span>
                   Tool: <strong>{cycle.failedToolName}</strong> → Patched{' '}
                   <strong className="text-[#8AB4F8]">{cycle.proposedTargetFile}</strong>
                 </span>
                 <span className="text-emerald-400">Probe Exit: {cycle.probeExitCode}</span>
               </div>
-              <div className="truncate text-[#9AA0A6]">{cycle.proposedPatch}</div>
+              <div className="truncate text-[#9A9A9E]">{cycle.proposedPatch}</div>
             </div>
           ))}
         </div>

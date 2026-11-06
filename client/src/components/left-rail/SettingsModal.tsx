@@ -278,7 +278,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           <button
             type="button"
             onClick={handleSave}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium bg-accent-blue text-white hover:bg-blue-600 transition-colors shadow-sm"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium bg-[#E3E3E3] text-[#101012] hover:bg-white transition-colors shadow-sm"
           >
             <span>Save & Connect</span>
             <ArrowRight className="w-3.5 h-3.5" />

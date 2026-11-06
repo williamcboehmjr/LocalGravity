@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 
 interface ThoughtAccordionProps {
   thought: string;
@@ -17,7 +17,6 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [liveMs, setLiveMs] = useState(elapsedMs);
 
-  // Real-time millisecond stopwatch while actively thinking
   useEffect(() => {
     setLiveMs(elapsedMs);
     if (!isStreaming) return;
@@ -30,45 +29,41 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
 
   if (!thought && !isStreaming) return null;
 
-  const formattedSeconds = (Math.max(100, liveMs) / 1000).toFixed(1);
+  const seconds = Math.max(0.1, liveMs / 1000);
+  const formattedTime = seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
   const effectiveTokens = tokenCount || Math.max(1, Math.ceil((thought || '').length / 4));
-  const headerText = isStreaming
-    ? `Thinking for ${formattedSeconds}s • ${effectiveTokens} tokens`
-    : `Thought for ${formattedSeconds}s • ${effectiveTokens} tokens`;
 
   return (
-    <div className="my-1.5 select-none">
+    <div className="my-1 select-none">
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="group inline-flex items-center gap-2 text-xs text-[#9AA0A6] hover:text-[#E8EAED] transition-all py-1.5 px-2.5 rounded-xl bg-[#1C2029] hover:bg-[#262B36] border border-[#262B36] cursor-pointer focus:outline-none"
+        className="group inline-flex items-center gap-1.5 text-xs text-[#8E8E93] hover:text-[#E3E3E3] transition-colors py-1 cursor-pointer focus:outline-none"
       >
-        <span
-          className={`w-4 h-4 rounded-md flex items-center justify-center bg-gradient-to-br from-[#8AB4F8] via-[#C58AF9] to-[#F28B82] text-[#0B0D11] shrink-0 ${
-            isStreaming ? 'animate-sparkle' : ''
-          }`}
-        >
-          <Sparkles className="w-2.5 h-2.5" />
+        {isStreaming && (
+          <Loader2 className="w-3 h-3 text-[#8E8E93] animate-spin shrink-0" />
+        )}
+
+        <span className="font-sans">
+          {isStreaming ? `Thinking for ${formattedTime}` : `Thought for ${formattedTime}`}
         </span>
 
-        <span
-          className={`font-sans font-medium ${
-            isStreaming ? 'antigravity-gradient-text font-semibold' : 'text-[#E8EAED]'
-          }`}
-        >
-          {headerText}
-        </span>
+        {effectiveTokens > 0 && (
+          <span className="text-[11px] text-[#5E5E63] hidden sm:inline">
+            ({effectiveTokens} tok)
+          </span>
+        )}
 
         {isOpen ? (
-          <ChevronDown className="w-3.5 h-3.5 text-[#9AA0A6] transition-transform" />
+          <ChevronDown className="w-3.5 h-3.5 text-[#6E6E73] group-hover:text-[#9A9A9E] transition-transform" />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-[#9AA0A6] transition-transform group-hover:translate-x-0.5" />
+          <ChevronRight className="w-3.5 h-3.5 text-[#6E6E73] group-hover:text-[#9A9A9E] transition-transform group-hover:translate-x-0.5" />
         )}
       </button>
 
       {isOpen && (
-        <div className="mt-1.5 ml-1 pl-3.5 border-l-2 border-[#C58AF9]/60 font-mono text-xs text-[#9AA0A6] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto bg-[#1C2029]/90 p-3 rounded-r-xl border-y border-r border-[#262B36] shadow-inner">
-          {thought || 'Initializing chain-of-thought reasoning...'}
+        <div className="mt-1 ml-1 pl-3 border-l border-[#2C2C30] text-xs text-[#9A9A9E] leading-relaxed whitespace-pre-wrap max-h-72 overflow-y-auto py-1 select-text">
+          {thought || 'Thinking...'}
         </div>
       )}
     </div>

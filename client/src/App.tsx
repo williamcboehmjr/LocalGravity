@@ -1,41 +1,45 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Settings,
-  PanelLeftClose,
-  PanelRightClose,
-  Sparkles,
-  Smartphone,
-  MessageSquare,
-  ListTodo,
   FileCode2,
   Terminal,
-  Eye,
-  ShieldCheck,
+  ListTodo,
+  PanelLeft,
+  PanelRight,
   Download,
-  RotateCcw,
   Trash2,
+  MessageSquare,
+  Smartphone,
+  Eye,
+  RotateCcw,
+  ShieldCheck,
+  ArrowLeft,
+  ArrowRight,
+  Search,
+  MoreHorizontal,
+  FileText,
+  Blocks,
   ChevronRight,
+  X,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { useSessionStore, QueuedMessage } from './store/useSessionStore';
 import { useArtifactStore, WorkbenchTab } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
-import { Splitter } from './components/common/Splitter';
-import { WorkspacePicker } from './components/left-rail/WorkspacePicker';
 import { SessionList } from './components/left-rail/SessionList';
-import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
 import { SkillsDrawer } from './components/left-rail/SkillsDrawer';
+import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
 import { SettingsModal } from './components/left-rail/SettingsModal';
 import { MobileRemoteModal } from './components/left-rail/MobileRemoteModal';
 import { ChatFeed } from './components/center-canvas/ChatFeed';
 import { PromptBar } from './components/center-canvas/PromptBar';
-import { PolicyToggle } from './components/center-canvas/PolicyToggle';
-import { TaskChecklist } from './components/right-canvas/TaskChecklist';
-import { PlanViewer } from './components/right-canvas/PlanViewer';
-import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
 import { WorkbenchEditor } from './components/right-canvas/WorkbenchEditor';
 import { IntegratedTerminal } from './components/right-canvas/IntegratedTerminal';
 import { VisionPreviewTab } from './components/right-canvas/VisionPreviewTab';
 import { HarnessWorkbenchTab } from './components/right-canvas/HarnessWorkbenchTab';
+import { TaskChecklist } from './components/right-canvas/TaskChecklist';
+import { PlanViewer } from './components/right-canvas/PlanViewer';
+import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
+import { Splitter } from './components/common/Splitter';
 import { ModelTier, ThinkingBudget } from './types/protocol';
 
 export const App: React.FC = () => {
@@ -44,7 +48,6 @@ export const App: React.FC = () => {
     activeProjectId,
     sessionId,
     sessions,
-    workspacePath,
     hostUrl,
     apiBaseUrl,
     brainHost,
@@ -55,7 +58,6 @@ export const App: React.FC = () => {
     selectedTier,
     setSelectedTier,
     thinkingBudget,
-    activeModelName,
     messages,
     addMessage,
     updateLastAssistantMessage,
@@ -84,32 +86,31 @@ export const App: React.FC = () => {
     parsedTasks,
     checkpoints,
     setCheckpoints,
-    setActiveCheckpoint,
     setLatestVisionCapture,
   } = useArtifactStore();
 
-  const { setTelemetry, setMcpServers } = useTelemetryStore();
+  const { setTelemetry, setMcpServers, mcpServers, tokensPerSec } = useTelemetryStore();
 
-  const [leftRailWidth, setLeftRailWidth] = useState(275);
-  const [rightDrawerWidth, setRightDrawerWidth] = useState(460);
+  const [leftRailWidth, setLeftRailWidth] = useState(250);
+  const [rightDrawerWidth, setRightDrawerWidth] = useState(340);
   const [showLeftRail, setShowLeftRail] = useState(window.innerWidth > 900);
   const [showRightDrawer, setShowRightDrawer] = useState(window.innerWidth > 1100);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteOpen, setIsRemoteOpen] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showSearchBar, setShowSearchBar] = useState(false);
+  const [searchFilter, setSearchFilter] = useState('');
+  const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  const sessionIdRef = useRef(sessionId);
-  sessionIdRef.current = sessionId;
+  // Initialize decoupled OS AppData state when running inside Tauri Desktop
+  useEffect(() => {
+    invoke('init_client_appdata').catch(() => {});
+  }, []);
 
-  const activeProjectIdRef = useRef(activeProjectId);
-  activeProjectIdRef.current = activeProjectId;
-
-  const workspacePathRef = useRef(workspacePath);
-  workspacePathRef.current = workspacePath;
-
-  // Auto-discover runtime ports from `/runtime-ports.json` if running via Vite dev or Tauri
+  // Auto-discover runtime ports from `/runtime-ports.json` if user hasn't configured a custom host
   useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('localgravity_brain_host')) {
       return;
@@ -130,7 +131,7 @@ export const App: React.FC = () => {
       .catch(() => {});
   }, []);
 
-  // Connect and multiplex state over `/ws/sync`
+  // Connect and multiplex state over `/ws/sync` (depends strictly on hostUrl)
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
@@ -155,19 +156,8 @@ export const App: React.FC = () => {
             return;
           }
           setIsConnected(true);
-          ws?.send(
-            JSON.stringify({
-              id: 'init-' + Date.now(),
-              type: 'SESSION_INIT',
-              payload: {
-                thread_id: sessionIdRef.current,
-                project_id: activeProjectIdRef.current,
-                workspace_path: workspacePathRef.current,
-                platform: navigator.userAgent.toLowerCase().includes('mac') ? 'macos' : 'windows',
-                client_version: '2.0.0',
-              },
-            })
-          );
+          // Note: The server automatically sends full initial SYNC_STATE on `/ws/sync` connect.
+          // Do not send fake placeholder IDs (`thread-default`) which would overwrite server state.
         };
 
         ws.onclose = () => {
@@ -311,22 +301,6 @@ export const App: React.FC = () => {
     };
   }, [hostUrl]);
 
-  // Request sync over existing socket when project or thread changes without reconnecting
-  useEffect(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'REQUEST_SYNC',
-          payload: {
-            thread_id: sessionId,
-            project_id: activeProjectId,
-            workspace_path: workspacePath,
-          },
-        })
-      );
-    }
-  }, [sessionId, activeProjectId, workspacePath]);
-
   const handleSendPrompt = (
     text: string,
     images?: string[],
@@ -337,23 +311,32 @@ export const App: React.FC = () => {
     const budget = thinkingBudgetOverride || thinkingBudget;
 
     addMessage({
-      id: 'msg-' + Date.now(),
+      id: 'user-' + Date.now(),
       role: 'user',
       content: text,
-      timestamp: Date.now(),
       images,
-    });
-
-    addMessage({
-      id: 'msg-' + (Date.now() + 1),
-      role: 'assistant',
-      content: '',
-      tier,
-      modelName: activeModelName,
       timestamp: Date.now(),
     });
 
     autoNameSessionFromPrompt(sessionId, text);
+
+    addMessage({
+      id: 'assistant-' + Date.now(),
+      role: 'assistant',
+      content: '',
+      thought: '',
+      tier,
+      thinkingBudget: budget,
+      modelName:
+        tier === 'low'
+          ? 'Qwen3.5-4B-EXL3-4.5bpw'
+          : tier === 'medium'
+          ? 'Qwen3.5-9B-EXL3-4.0bpw'
+          : 'Qwen3.8-27B-VL-EXL3-3.5bpw',
+      timestamp: Date.now(),
+      toolCalls: [],
+    });
+
     setIsGenerating(true);
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -362,16 +345,59 @@ export const App: React.FC = () => {
           id: 'prompt-' + Date.now(),
           type: 'PROMPT_SUBMIT',
           payload: {
-            session_id: sessionId,
             thread_id: sessionId,
+            session_id: sessionId,
             prompt: text,
+            images,
             tier,
             thinking_budget: budget,
-            images,
           },
         })
       );
+    } else {
+      setTimeout(() => {
+        appendStreamingThought(
+          `1. Analyzing workspace request: "${text}"\n2. Routing to ${tier.toUpperCase()} tier (${budget.toUpperCase()} thinking)...`,
+          850,
+          38,
+          false
+        );
+      }, 300);
+
+      setTimeout(() => {
+        appendStreamingThought('\n3. Preparing execution plan...', 1420, 64, true);
+        updateLastAssistantMessage(
+          `Processed request on **${tier.toUpperCase()}** tier (**${budget.toUpperCase()}** thinking).\n\n> Connect to your PC Brain in **Settings** to run live inference.`,
+          42
+        );
+        finalizeAssistantMessage();
+        setIsGenerating(false);
+      }, 1500);
     }
+  };
+
+  // Auto-drain queued messages when generation finishes
+  useEffect(() => {
+    if (!isGenerating && messageQueue.length > 0) {
+      const next = dequeueMessage();
+      if (next) {
+        handleSendPrompt(next.text, next.images, next.tier, next.thinkingBudget);
+      }
+    }
+  }, [isGenerating, messageQueue.length]);
+
+  const handleStopGeneration = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          id: 'cancel-' + Date.now(),
+          type: 'CANCEL_GENERATION',
+          payload: { thread_id: sessionId, session_id: sessionId },
+        })
+      );
+    }
+    finalizeAssistantMessage();
+    setIsGenerating(false);
   };
 
   const handleQueuePrompt = (text: string, images?: string[]) => {
@@ -388,27 +414,8 @@ export const App: React.FC = () => {
     handleStopGeneration();
     setTimeout(() => {
       handleSendPrompt(item.text, item.images, item.tier, item.thinkingBudget);
-    }, 60);
+    }, 80);
   };
-
-  const isDequeuingRef = useRef(false);
-  useEffect(() => {
-    if (!isGenerating && messageQueue.length > 0 && !isDequeuingRef.current) {
-      isDequeuingRef.current = true;
-      const nextMessage = dequeueMessage();
-      if (nextMessage) {
-        handleSendPrompt(
-          nextMessage.text,
-          nextMessage.images,
-          nextMessage.tier,
-          nextMessage.thinkingBudget
-        );
-      }
-      setTimeout(() => {
-        isDequeuingRef.current = false;
-      }, 100);
-    }
-  }, [isGenerating, messageQueue.length]);
 
   const handleTierSwitch = (newTier: ModelTier) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -426,23 +433,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleStopGeneration = () => {
-    setIsGenerating(false);
-    finalizeAssistantMessage();
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          id: 'stop-' + Date.now(),
-          type: 'STOP_GENERATION',
-          payload: {
-            session_id: sessionId,
-            thread_id: sessionId,
-          },
-        })
-      );
-    }
-  };
-
   const handleNewThread = async () => {
     try {
       const res = await fetch(`${apiBaseUrl}/api/threads`, {
@@ -450,7 +440,7 @@ export const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: activeProjectId,
-          title: 'New Thread',
+          title: 'New Conversation',
           active_model_tier: selectedTier,
           active_thinking_budget: thinkingBudget,
         }),
@@ -482,14 +472,34 @@ export const App: React.FC = () => {
     } catch {}
   };
 
+  const handleSelectProject = async (projId: string) => {
+    try {
+      const res = await fetch(
+        `${apiBaseUrl}/api/threads?project_id=${encodeURIComponent(projId)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const threadsList = data.threads || [];
+        setThreads(threadsList, threadsList[0]?.id);
+        if (threadsList[0]?.id) {
+          handleSelectThread(threadsList[0].id);
+        } else {
+          clearMessages();
+        }
+      }
+    } catch {}
+  };
+
   const handleClearContext = async () => {
     clearMessages();
+    setShowMoreMenu(false);
     try {
       await fetch(`${apiBaseUrl}/api/threads/${sessionId}/clear`, { method: 'POST' });
     } catch {}
   };
 
   const handleExportThread = () => {
+    setShowMoreMenu(false);
     const blob = new Blob([JSON.stringify({ sessionId, messages }, null, 2)], {
       type: 'application/json',
     });
@@ -523,214 +533,257 @@ export const App: React.FC = () => {
   const totalTasks = parsedTasks.length;
   const completedTasks = parsedTasks.filter((t) => t.completed).length;
 
-  const workbenchTabs: Array<{ id: WorkbenchTab; label: string; icon: React.ReactNode }> = [
-    { id: 'editor', label: 'Code & Diff', icon: <FileCode2 className="w-3.5 h-3.5" /> },
+  const overviewItems: Array<{
+    id: WorkbenchTab;
+    label: string;
+    icon: React.ReactNode;
+    hasSubmenu?: boolean;
+  }> = [
+    { id: 'tasks', label: 'Review', icon: <RotateCcw className="w-3.5 h-3.5" /> },
+    { id: 'editor', label: 'Files', icon: <FileText className="w-3.5 h-3.5" /> },
     { id: 'terminal', label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> },
-    { id: 'preview', label: 'Vision / App', icon: <Eye className="w-3.5 h-3.5" /> },
-    { id: 'harness', label: 'Harness²', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
-    { id: 'tasks', label: 'Tasks', icon: <ListTodo className="w-3.5 h-3.5" /> },
+    {
+      id: 'harness',
+      label: 'Extensions',
+      icon: <Blocks className="w-3.5 h-3.5" />,
+      hasSubmenu: true,
+    },
   ];
 
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] w-screen bg-[#0B0D11] text-[#E8EAED] overflow-hidden font-sans">
-      {/* 1. LEFT PANE (Project & Thread Navigator - #111318) */}
+    <div className="flex h-[100dvh] max-h-[100dvh] w-screen bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
+      {/* 1. LEFT SIDEBAR (Google Antigravity 2.0 Navigation Rail) */}
       {showLeftRail && (
         <aside
           style={{ width: `${leftRailWidth}px` }}
-          className="shrink-0 h-full bg-[#111318] border-r border-[#262B36] hidden md:flex flex-col p-3 space-y-3 select-none"
+          className="shrink-0 h-full bg-[#101012] border-r border-[#222225] hidden md:flex flex-col px-2.5 pb-2 pt-1.5 select-none"
         >
-          {/* Brand Header */}
-          <div className="flex items-center justify-between pb-2 border-b border-[#262B36]">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-[#8AB4F8]/25 via-[#C58AF9]/25 to-[#F28B82]/25 border border-[#8AB4F8]/50 flex items-center justify-center text-[#8AB4F8]">
-                <Sparkles className="w-3.5 h-3.5" />
-              </div>
-              <span className="font-semibold text-sm tracking-tight text-[#E8EAED]">
-                Antigravity 2.0
-              </span>
-            </div>
+          {/* Top Utility Toolbar matching Screenshot 1 (Sidebar toggle, Back, Forward, Search) */}
+          <div className="h-8 flex items-center justify-between px-1 mb-1.5">
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED]"
-                title="Settings"
+                onClick={() => setShowLeftRail(false)}
+                className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#1E1E20] transition-colors"
+                title="Collapse Sidebar"
               >
-                <Settings className="w-4 h-4" />
+                <PanelLeft className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
-                onClick={() => setShowLeftRail(false)}
-                className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED]"
-                title="Collapse Left Pane"
+                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] transition-colors"
+                title="Back"
               >
-                <PanelLeftClose className="w-4 h-4" />
+                <ArrowLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] transition-colors"
+                title="Forward"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSearchBar(!showSearchBar);
+                  if (showSearchBar) setSearchFilter('');
+                }}
+                className={`p-1 rounded-md transition-colors ${
+                  showSearchBar
+                    ? 'bg-[#262629] text-[#E3E3E3]'
+                    : 'text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#1E1E20]'
+                }`}
+                title="Search Conversations"
+              >
+                <Search className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
 
-          {/* Top Project / Workspace Switcher Dropdown */}
-          <WorkspacePicker
-            onSelectProject={async (projId) => {
-              try {
-                const res = await fetch(
-                  `${apiBaseUrl}/api/threads?project_id=${encodeURIComponent(projId)}`
-                );
-                if (res.ok) {
-                  const data = await res.json();
-                  setThreads(data.threads || []);
-                }
-              } catch {}
-            }}
-          />
+          {/* Optional Search Input */}
+          {showSearchBar && (
+            <div className="mb-2 px-0.5">
+              <div className="relative flex items-center">
+                <input
+                  type="text"
+                  value={searchFilter}
+                  onChange={(e) => setSearchFilter(e.target.value)}
+                  placeholder="Filter conversations..."
+                  autoFocus
+                  className="w-full bg-[#1A1A1D] border border-[#2C2C30] rounded-lg pl-2.5 pr-6 py-1 text-xs text-[#E3E3E3] outline-none focus:border-[#4E4E54]"
+                />
+                {searchFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchFilter('')}
+                    className="absolute right-1.5 text-[#6E6E73] hover:text-[#E3E3E3]"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
-          {/* Chronological & Pinned Threads List + New Thread (Ctrl+N) */}
+          {/* Main Navigation + Projects & Threads Tree */}
           <SessionList
             onNewThread={handleNewThread}
             onSelectThread={handleSelectThread}
+            onSelectProject={handleSelectProject}
+            onOpenAutomations={() => {
+              setActiveTab('harness');
+              setShowRightDrawer(true);
+            }}
+            onOpenCustomizations={() => setShowSkillsDrawer(!showSkillsDrawer)}
+            searchFilter={searchFilter}
           />
 
-          {/* Skills Drawer */}
-          <SkillsDrawer />
+          {/* Collapsible Customizations (Skills & MCP) */}
+          {showSkillsDrawer && (
+            <div className="my-1.5">
+              <SkillsDrawer />
+            </div>
+          )}
 
-          {/* Bottom Hardware & MCP Telemetry Footer */}
-          <NodeStatusBadge />
+          {/* Bottom Settings & Brain Status Bar */}
+          <NodeStatusBadge onOpenSettings={() => setIsSettingsOpen(true)} />
         </aside>
       )}
 
       {showLeftRail && (
         <Splitter
           onResize={(delta) =>
-            setLeftRailWidth((prev) => Math.max(220, Math.min(420, prev + delta)))
+            setLeftRailWidth((prev) => Math.max(210, Math.min(380, prev + delta)))
           }
           className="hidden md:flex"
         />
       )}
 
-      {/* 2. CENTER PANE (Agent Stream & Prompt Cockpit - #161920) */}
-      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-[#161920] relative">
-        {/* Center Breadcrumb Header: Project Name / Thread Title */}
-        <header className="h-12 shrink-0 border-b border-[#262B36] px-3 sm:px-4 flex items-center justify-between bg-[#111318]/90 z-10">
+      {/* 2. CENTER PANE (Conversation Stream & Composer) */}
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-[#131314] relative">
+        {/* Top Header Bar matching Screenshot 1 */}
+        <header className="h-10 shrink-0 px-4 flex items-center justify-between bg-[#131314] z-10 select-none">
           <div className="flex items-center gap-2 min-w-0">
             {!showLeftRail && (
               <button
                 type="button"
                 onClick={() => setShowLeftRail(true)}
-                className="p-1.5 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] mr-1 hidden md:block"
-                title="Expand Left Navigator"
+                className="p-1 hover:bg-[#1E1E20] rounded-md text-[#8E8E93] hover:text-[#E3E3E3] mr-1 hidden md:block"
+                title="Expand Sidebar"
               >
-                <Sparkles className="w-4 h-4 text-[#8AB4F8]" />
+                <PanelLeft className="w-4 h-4" />
               </button>
             )}
 
-            <div className="flex items-center gap-1.5 text-xs sm:text-sm min-w-0 truncate">
-              <span className="font-semibold text-[#9AA0A6] truncate">
+            <div className="flex items-center gap-1.5 text-xs min-w-0 truncate">
+              <span className="text-[#8E8E93] truncate">
                 {activeProject?.name || 'LocalGravity'}
               </span>
-              <ChevronRight className="w-3.5 h-3.5 text-[#5F6368] shrink-0" />
-              <span className="font-semibold text-[#E8EAED] truncate">
-                {activeSession?.title || 'Active Thread'}
+              <span className="text-[#4E4E52] shrink-0">/</span>
+              <span className="text-[#E3E3E3] font-medium truncate">
+                {activeSession?.title || 'New Conversation'}
               </span>
             </div>
           </div>
 
+          {/* Right Top Controls matching Screenshot 1 */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {checkpoints.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveCheckpoint(checkpoints[0]);
-                  setActiveTab('editor');
-                  setShowRightDrawer(true);
-                }}
-                className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#1C2029] border border-[#262B36] hover:border-[#8AB4F8] text-xs text-[#8AB4F8] transition-colors"
-                title="Inspect or Rollback Latest File Checkpoint"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Checkpoints ({checkpoints.length})</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={handleExportThread}
-              className="p-1.5 rounded-lg bg-[#1C2029] border border-[#262B36] hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]"
-              title="Export Thread JSON"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={handleClearContext}
-              className="p-1.5 rounded-lg bg-[#1C2029] border border-[#262B36] hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#F28B82]"
-              title="Clear Thread Context"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-
+            {/* Subtle Brain Connection Pill */}
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition-colors ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border ${
                 isConnected
-                  ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300 hover:bg-emerald-900/40'
-                  : 'bg-amber-950/30 border-amber-800/40 text-amber-300 hover:bg-amber-900/40'
+                  ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
+                  : 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:bg-amber-900/50'
               }`}
-              title={isConnected ? `Connected to Brain (${brainHost}:${brainPort})` : `Disconnected - Click to test connection`}
+              title={
+                isConnected
+                  ? `Connected to Brain (${brainHost}:${brainPort}) — Click to configure`
+                  : `Disconnected from ${brainHost}:${brainPort} — Click to configure & test`
+              }
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  isConnected ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-amber-400 animate-pulse'
+                  isConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
                 }`}
               />
-              <span className="hidden sm:inline font-mono text-[11px]">
-                {isConnected ? `${brainHost}:${brainPort}` : 'Disconnected'}
+              <span className="hidden sm:inline">
+                {isConnected ? `${brainHost}:${brainPort}` : 'Connect Brain'}
               </span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setIsRemoteOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C2029] border border-[#262B36] hover:border-[#8AB4F8] text-xs text-[#9AA0A6] hover:text-[#E8EAED] transition-colors"
-              title="Open Remote Web / LAN Control QR"
-            >
-              <Smartphone className="w-3.5 h-3.5 text-[#8AB4F8]" />
-              <span className="hidden lg:inline">LAN Web</span>
-            </button>
-
-            <PolicyToggle />
-
-            {!showRightDrawer && (
+            {/* More Actions Menu (⋮) */}
+            <div className="relative">
               <button
                 type="button"
-                onClick={() => setShowRightDrawer(true)}
-                className="p-1.5 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] hidden md:block"
-                title="Open Right Workbench"
+                onClick={() => setShowMoreMenu(!showMoreMenu)}
+                className="p-1.5 rounded-md hover:bg-[#1E1E20] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors"
+                title="Conversation Options"
               >
-                <PanelRightClose className="w-4 h-4 rotate-180" />
+                <MoreHorizontal className="w-4 h-4" />
               </button>
-            )}
-          </div>
-        </header>
 
-        {!isConnected && (
-          <div className="bg-amber-950/40 border-b border-amber-800/40 px-3 sm:px-4 py-2 flex items-center justify-between text-xs text-amber-200 shrink-0 z-10">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-              <span className="truncate">
-                Disconnected from Brain at <code className="px-1.5 py-0.5 rounded bg-black/40 font-mono text-amber-300">{brainHost}:{brainPort}</code>
-              </span>
+              {showMoreMenu && (
+                <div className="absolute right-0 mt-1 w-44 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 text-xs space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      setIsRemoteOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[#E3E3E3] hover:bg-[#28282C] text-left"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-[#8E8E93]" />
+                    <span>LAN Remote QR</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportThread}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[#E3E3E3] hover:bg-[#28282C] text-left"
+                  >
+                    <Download className="w-3.5 h-3.5 text-[#8E8E93]" />
+                    <span>Export Conversation</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearContext}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-rose-400 hover:bg-[#28282C] text-left"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear Conversation</span>
+                  </button>
+                </div>
+              )}
             </div>
+
             <button
               type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              className="shrink-0 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-100 font-medium transition-colors text-[11px]"
+              onClick={() => {
+                setActiveTab('plan');
+                setShowRightDrawer(true);
+              }}
+              className="p-1.5 rounded-md hover:bg-[#1E1E20] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors hidden sm:block"
+              title="Artifacts & Implementation Plan"
             >
-              Configure IP & Test
+              <FileText className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowRightDrawer(!showRightDrawer)}
+              className={`p-1.5 rounded-md transition-colors hidden md:block ${
+                showRightDrawer
+                  ? 'bg-[#222226] text-[#E3E3E3]'
+                  : 'hover:bg-[#1E1E20] text-[#8E8E93] hover:text-[#E3E3E3]'
+              }`}
+              title="Toggle Right Overview Pane"
+            >
+              <PanelRight className="w-4 h-4" />
             </button>
           </div>
-        )}
+        </header>
 
         {/* Center Body */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
@@ -740,7 +793,7 @@ export const App: React.FC = () => {
             }`}
           >
             <ChatFeed />
-            <div className="shrink-0 p-3 sm:p-4 pt-1 bg-gradient-to-t from-[#0B0D11] via-[#161920] to-transparent z-10">
+            <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
               <PromptBar
                 onSend={handleSendPrompt}
                 onTierChange={handleTierSwitch}
@@ -752,50 +805,50 @@ export const App: React.FC = () => {
           </div>
 
           {mobileTab === 'workbench' && (
-            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#161920] overflow-hidden">
+            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#131314] overflow-hidden">
               <WorkbenchEditor />
             </div>
           )}
 
           {mobileTab === 'tasks' && (
-            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#161920] overflow-hidden">
+            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#131314] overflow-hidden">
               <TaskChecklist onSync={handleArtifactSync} />
             </div>
           )}
         </div>
 
         {/* Mobile Bottom Bar */}
-        <nav className="h-14 shrink-0 border-t border-[#262B36] flex md:hidden bg-[#111318] z-20">
+        <nav className="h-12 shrink-0 border-t border-[#222225] flex md:hidden bg-[#101012] z-20 select-none">
           <button
             type="button"
             onClick={() => setMobileTab('chat')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
-              mobileTab === 'chat' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
+              mobileTab === 'chat' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
             }`}
           >
             <MessageSquare className="w-4 h-4" />
-            <span>Stream</span>
+            <span>Chat</span>
           </button>
           <button
             type="button"
             onClick={() => setMobileTab('workbench')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
-              mobileTab === 'workbench' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
+              mobileTab === 'workbench' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
             }`}
           >
             <FileCode2 className="w-4 h-4" />
-            <span>Workbench</span>
+            <span>Files</span>
           </button>
           <button
             type="button"
             onClick={() => setMobileTab('tasks')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
-              mobileTab === 'tasks' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
+              mobileTab === 'tasks' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
             }`}
           >
             <ListTodo className="w-4 h-4" />
             <span>
-              Tasks ({completedTasks}/{totalTasks})
+              Review ({completedTasks}/{totalTasks})
             </span>
           </button>
         </nav>
@@ -804,53 +857,80 @@ export const App: React.FC = () => {
       {showRightDrawer && (
         <Splitter
           onResize={(delta) =>
-            setRightDrawerWidth((prev) => Math.max(320, Math.min(760, prev - delta)))
+            setRightDrawerWidth((prev) => Math.max(260, Math.min(720, prev - delta)))
           }
           className="hidden md:flex"
         />
       )}
 
-      {/* 3. RIGHT PANE (Multi-Tab Workbench & Live Environment - #161920) */}
+      {/* 3. RIGHT PANE (Google Antigravity 2.0 "Overview" Card + Workbench) */}
       {showRightDrawer && (
         <aside
           style={{ width: `${rightDrawerWidth}px` }}
-          className="shrink-0 h-full bg-[#161920] border-l border-[#262B36] flex flex-col min-w-0 hidden md:flex"
+          className="shrink-0 h-full bg-[#131314] p-2.5 flex flex-col gap-2.5 min-w-0 hidden md:flex"
         >
-          {/* Multi-Tab Workbench Header */}
-          <div className="h-12 border-b border-[#262B36] px-2.5 flex items-center justify-between bg-[#111318] gap-1">
-            <div className="flex items-center gap-1 overflow-x-auto py-1">
-              {workbenchTabs.map((t) => {
-                const isActive = activeTab === t.id;
+          {/* Floating "Overview" Navigation Card matching Screenshot 1 */}
+          <div className="bg-[#18181B] border border-[#26262A] rounded-xl p-2.5 shrink-0 select-none shadow-md">
+            <div className="flex items-center justify-between px-1.5 pb-1.5">
+              <span className="text-xs font-medium text-[#8E8E93]">Overview</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('preview')}
+                  className={`p-1 rounded hover:bg-[#242428] transition-colors ${
+                    activeTab === 'preview' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
+                  }`}
+                  title="Vision / App Preview"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('harness')}
+                  className={`p-1 rounded hover:bg-[#242428] transition-colors ${
+                    activeTab === 'harness' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
+                  }`}
+                  title="Harness² Self-Healing"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-0.5">
+              {overviewItems.map((item) => {
+                const isActive = activeTab === item.id;
                 return (
                   <button
-                    key={t.id}
+                    key={item.id}
                     type="button"
-                    onClick={() => setActiveTab(t.id)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0 transition-all cursor-pointer border ${
+                    onClick={() => setActiveTab(item.id)}
+                    className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
                       isActive
-                        ? 'bg-[#1C2029] text-[#8AB4F8] border-[#8AB4F8]/50 shadow-sm'
-                        : 'bg-transparent text-[#9AA0A6] border-transparent hover:bg-[#1C2029]/60 hover:text-[#E8EAED]'
+                        ? 'bg-[#26262A] text-[#E3E3E3] font-medium'
+                        : 'text-[#A0A0A5] hover:bg-[#202024] hover:text-[#E3E3E3]'
                     }`}
                   >
-                    {t.icon}
-                    <span>{t.label}</span>
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-[#8E8E93]">{item.icon}</span>
+                      <span>{item.label}</span>
+                    </div>
+                    {item.hasSubmenu && <ChevronRight className="w-3.5 h-3.5 text-[#5E5E63]" />}
                   </button>
                 );
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowRightDrawer(false)}
-              className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] shrink-0"
-              title="Collapse Right Workbench"
-            >
-              <PanelRightClose className="w-4 h-4" />
-            </button>
+            <div className="mt-2 pt-2 border-t border-[#242428] flex items-center justify-between px-1.5 text-[11px] text-[#8E8E93]">
+              <span>Background Tasks</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
+                {mcpServers.filter((s) => s.enabled).length} • {tokensPerSec.toFixed(0)} tok/s
+              </span>
+            </div>
           </div>
 
-          {/* Workbench Body */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {/* Active Workbench View Card */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
             {activeTab === 'editor' && <WorkbenchEditor />}
             {activeTab === 'terminal' && <IntegratedTerminal />}
             {activeTab === 'preview' && <VisionPreviewTab />}
@@ -868,4 +948,5 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
 export default App;

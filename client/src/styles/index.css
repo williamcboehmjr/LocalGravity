@@ -4,33 +4,44 @@
 
 :root {
   color-scheme: dark;
-  --bg-obsidian: #0B0D11;
-  --surface-1: #111318;
-  --surface-2: #161920;
-  --surface-elevated: #1C2029;
-  --border-hairline: #262B36;
-  --border-focus: #8AB4F8;
-  --accent-blue: #8AB4F8;
-  --text-primary: #E8EAED;
-  --text-secondary: #9AA0A6;
-  --text-muted: #5F6368;
+  --bg-obsidian: #101012;
+  --surface-1: #131314;
+  --surface-2: #161618;
+  --surface-elevated: #1E1E20;
+  --border-hairline: #242427;
+  --border-focus: #3E3E44;
+  --accent-blue: #60A5FA;
+  --text-primary: #E3E3E3;
+  --text-secondary: #9A9A9E;
+  --text-muted: #6E6E73;
+  scrollbar-color: #3A3A3F transparent;
+  scrollbar-width: thin;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: #0B0D11;
-  color: #E8EAED;
-  font-family: 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  user-select: none;
-  font-size: 14px;
+  background-color: #131314;
+  color: #E3E3E3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Google Sans', sans-serif;
+  font-size: 13px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 code, pre, .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, monospace;
   font-variant-ligatures: normal;
   font-feature-settings: "liga" 1, "calt" 1;
+}
+
+.auto-fit-textarea {
+  field-sizing: content;
+  width: 100%;
+  height: auto;
+  min-block-size: 1.5lh;
+  max-block-size: 8lh;
 }
 
 /* Custom Hairline Scrollbars */
@@ -44,40 +55,20 @@ code, pre, .font-mono {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #262B36;
+  background: #3A3A3F;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #384050;
+  background: #4E4E55;
+}
+
+::selection {
+  background-color: rgba(96, 165, 250, 0.28);
+  color: #FFFFFF;
 }
 
 ::placeholder {
-  color: #5F6368 !important;
+  color: #6E6E73 !important;
   opacity: 1 !important;
-}
-
-@keyframes sparklePulse {
-  0%, 100% {
-    transform: scale(1) rotate(0deg);
-    filter: drop-shadow(0 0 6px rgba(138, 180, 248, 0.65));
-  }
-  50% {
-    transform: scale(1.1) rotate(12deg);
-    filter: drop-shadow(0 0 10px rgba(197, 138, 249, 0.85));
-  }
-}
-
-.animate-sparkle {
-  animation: sparklePulse 2.2s ease-in-out infinite;
-}
-
-.antigravity-gradient-text {
-  background: linear-gradient(135deg, #8AB4F8 0%, #C58AF9 50%, #F28B82 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.antigravity-gradient-border {
-  background: linear-gradient(135deg, #8AB4F8 0%, #C58AF9 50%, #F28B82 100%);
 }

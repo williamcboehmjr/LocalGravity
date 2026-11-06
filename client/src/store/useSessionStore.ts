@@ -22,6 +22,7 @@ export interface ChatMessage {
   thoughtTokenCount?: number;
   outputTokens?: number;
   tier?: ModelTier;
+  thinkingBudget?: ThinkingBudget;
   modelName?: string;
   timestamp: number;
   images?: string[];
@@ -236,11 +237,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         status: t.status,
         messages: [],
       }));
-      const nextSessionId = activeThreadId || state.sessionId || threads[0]?.id || initialSessionId;
+      let candidateId = activeThreadId && activeThreadId !== initialSessionId
+        ? activeThreadId
+        : state.sessionId !== initialSessionId
+        ? state.sessionId
+        : threads[0]?.id || initialSessionId;
+      if (threads.length > 0 && !threads.some((t) => t.id === candidateId)) {
+        candidateId = threads[0].id;
+      }
       return {
         threads,
         sessions: mappedSessions.length > 0 ? mappedSessions : state.sessions,
-        sessionId: nextSessionId,
+        sessionId: candidateId,
       };
     }),
 

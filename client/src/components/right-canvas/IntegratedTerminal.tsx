@@ -20,8 +20,8 @@ export const IntegratedTerminal: React.FC = () => {
       fontSize: 12,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       theme: {
-        background: '#0B0D11',
-        foreground: '#E8EAED',
+        background: '#101012',
+        foreground: '#E3E3E3',
         cursor: '#8AB4F8',
         selectionBackground: 'rgba(138, 180, 248, 0.3)',
       },
@@ -84,10 +84,10 @@ export const IntegratedTerminal: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#0B0D11]">
+    <div className="flex-1 flex flex-col min-h-0 bg-[#101012]">
       {/* Terminal Toolbar */}
-      <div className="p-2 bg-[#111318] border-b border-[#262B36] flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs text-[#E8EAED] font-mono">
+      <div className="p-2 bg-[#101012] border-b border-[#222226] flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs text-[#E3E3E3] font-mono">
           <Terminal className="w-3.5 h-3.5 text-emerald-400" />
           <span>Shared PTY Shell (PowerShell / Zsh)</span>
         </div>
@@ -95,7 +95,7 @@ export const IntegratedTerminal: React.FC = () => {
         <button
           type="button"
           onClick={() => xtermRef.current?.clear()}
-          className="p-1 rounded hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]"
+          className="p-1 rounded hover:bg-[#242427] text-[#9A9A9E] hover:text-[#E3E3E3]"
           title="Clear Terminal"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -103,7 +103,7 @@ export const IntegratedTerminal: React.FC = () => {
       </div>
 
       {/* Quick Command Input Bar */}
-      <div className="p-2 bg-[#161920] border-b border-[#262B36] flex items-center gap-1.5">
+      <div className="p-2 bg-[#131314] border-b border-[#222226] flex items-center gap-1.5">
         <input
           type="text"
           value={quickCmd}
@@ -112,12 +112,12 @@ export const IntegratedTerminal: React.FC = () => {
             if (e.key === 'Enter') handleRunQuickCmd();
           }}
           placeholder="Run shared command (e.g. git status)..."
-          className="flex-1 bg-[#0B0D11] border border-[#262B36] focus:border-[#8AB4F8] rounded-lg px-2.5 py-1 text-xs font-mono text-[#E8EAED] outline-none"
+          className="flex-1 bg-[#18181B] border border-[#2C2C30] focus:border-[#8AB4F8] rounded-lg px-2.5 py-1 text-xs font-mono text-[#E3E3E3] outline-none"
         />
         <button
           type="button"
           onClick={handleRunQuickCmd}
-          className="px-2.5 py-1 rounded-lg bg-[#1A73E8] hover:bg-[#4285F4] text-white text-xs font-medium flex items-center gap-1"
+          className="px-2.5 py-1 rounded-lg bg-[#242427] hover:bg-[#2E2E32] border border-[#34343A] text-[#E3E3E3] text-xs font-medium flex items-center gap-1"
         >
           <Play className="w-3 h-3" />
           <span>Run</span>
