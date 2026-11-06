@@ -5,9 +5,11 @@ import os from 'node:os';
 
 /**
  * CRITICAL PORT CONSTRAINT:
- * Ports 5000 and 5001 are strictly forbidden and MUST NEVER be scanned, bound, or probed.
+ * Port 5000 is strictly reserved/forbidden and MUST NEVER be scanned or bound.
+ * Port 5001 is the host TabbyAPI instance (PID 18372); daemon must not bind to it,
+ * but TabbyEngine client communicates with it over http://127.0.0.1:5001.
  */
-export const FORBIDDEN_PORTS = new Set<number>([5000, 5001]);
+export const FORBIDDEN_PORTS = new Set<number>([5000]);
 
 export interface RuntimePortsConfig {
   daemonPort: number;
@@ -159,12 +161,11 @@ export async function allocateRuntimePorts(
   const reserved = new Set<number>([5000, 5001]);
 
   const startDaemon = Number(process.env.LOCALGRAVITY_DAEMON_PORT) || options?.preferredDaemonPort || 3390;
-  const startTabby = Number(process.env.LOCALGRAVITY_TABBY_PORT) || options?.preferredTabbyPort || 3450;
   const startVite = Number(process.env.LOCALGRAVITY_VITE_PORT) || options?.preferredVitePort || 5173;
 
   const daemonPort = await findFreePort(startDaemon, reserved);
-  const tabbyPort = await findFreePort(startTabby, reserved);
   const vitePort = await findFreePort(startVite, reserved);
+  const tabbyPort = 5001;
 
   const lanIp = detectLanIp();
 
@@ -177,9 +178,9 @@ export async function allocateRuntimePorts(
     localUrl: `http://localhost:${daemonPort}`,
     lanUrl: `http://${lanIp}:${daemonPort}`,
     wsSyncUrl: `ws://localhost:${daemonPort}/ws/sync`,
-    tabbyBaseUrl: `http://127.0.0.1:${tabbyPort}`,
+    tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001',
     allocatedAt: new Date().toISOString(),
-    forbiddenPorts: [5000, 5001],
+    forbiddenPorts: [5000],
   };
 
   writeRuntimePortsAtomically(repoRoot, config);

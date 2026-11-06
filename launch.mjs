@@ -122,8 +122,8 @@ async function main() {
   if (!portsCfg) {
     const reserved = new Set([5000, 5001]);
     const daemonPort = await findFreePort(3390, reserved);
-    const tabbyPort = await findFreePort(3450, reserved);
     const vitePort = await findFreePort(5173, reserved);
+    const tabbyPort = 5001;
     const lanIp = detectLanIp();
 
     portsCfg = {
@@ -135,9 +135,9 @@ async function main() {
       localUrl: `http://localhost:${daemonPort}`,
       lanUrl: `http://${lanIp}:${daemonPort}`,
       wsSyncUrl: `ws://localhost:${daemonPort}/ws/sync`,
-      tabbyBaseUrl: `http://127.0.0.1:${tabbyPort}`,
+      tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001',
       allocatedAt: new Date().toISOString(),
-      forbiddenPorts: [5000, 5001],
+      forbiddenPorts: [5000],
     };
 
     writePortsAtomically(portsCfg);

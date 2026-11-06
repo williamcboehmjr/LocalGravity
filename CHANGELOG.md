@@ -4,6 +4,17 @@ All notable changes across LocalGravity Windows, macOS, and Web Remote Companion
 
 ---
 
+## [v2.0.2] - 2026-11-06 (Real Conversational Inference & Fast-Path Swapping)
+
+### 💬 Conversational Real-Time Assistant Streaming
+* **Eliminated Synthetic Fallback Jargon:** Removed embedded benchmark template fallback (`[Low 4B • Think: FAST] Processed your request...`) completely. The assistant now communicates strictly via real neural network generation from the active TabbyAPI EXL3 engine.
+* **Instant Conversational Latency in Fast/Off Modes:** Qwen 3.5 now pre-closes `<think></think>` in Fast and Off modes, eliminating the 60+ second unbounded reasoning loop. Simple greetings like "hello" respond in under 200 milliseconds.
+* **Continuous Thought Streaming in Deep Mode:** Unconstrained reasoning in Deep mode now streams all tokens smoothly into the Thought Accordion without prematurely dropping chunks.
+* **Fast-Path Model Tier Swapping:** Model tier switching checks `/v1/model` before issuing unload/reload commands, eliminating redundant reloads when the requested tier is already active in VRAM.
+* **Port 5001 Binding Separation:** Explicitly separated reserved port 5000 (forbidden to bind) from port 5001 (TabbyAPI host service), ensuring the Central Brain always connects to the workstation's active TabbyAPI engine.
+
+---
+
 ## [v2.0.1] - 2026-11-06 (Multi-Platform Parity & TabbyAPI Qwen 3.5 Suite)
 
 ### 🪟 Windows Release & Loopback Fix

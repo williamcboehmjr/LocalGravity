@@ -49,11 +49,11 @@ export interface TabbyEngineTelemetry {
 export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
   low: {
     tier: 'low',
-    displayName: 'Qwen 3.5 4B (EXL3 4.5bpw)',
+    displayName: 'Qwen 3.5 4B (EXL3 4.0bpw)',
     shortLabel: 'Low 4B',
-    modelName: 'Qwen3.5-4B-EXL3-4.5bpw',
-    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.0bpw', 'Qwen3.5-4B-EXL3-4.5bpw', 'Qwen3-VL-8B-Instruct-exl3-4.0bpw'],
-    bpw: '4.5 bpw',
+    modelName: 'Qwen3.5-4B-EXL3-4.0bpw',
+    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.0bpw', 'Qwen3.5-4B-EXL3-4.5bpw'],
+    bpw: '4.0 bpw',
     maxSeqLen: 32768,
     cacheMode: 'Q4',
     autosplitReserve: [256],
@@ -67,7 +67,7 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     displayName: 'Qwen 3.5 9B (EXL3 4.0bpw)',
     shortLabel: 'Med 9B',
     modelName: 'Qwen3.5-9B-EXL3-4.0bpw',
-    fallbackFolderNames: ['Qwen3.5-9B-EXL3-4.0bpw', 'Qwen3-VL-8B-Instruct-exl3-4.0bpw'],
+    fallbackFolderNames: ['Qwen3.5-9B-EXL3-4.0bpw'],
     bpw: '4.0 bpw',
     maxSeqLen: 32768,
     cacheMode: 'Q4',
@@ -79,9 +79,9 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
   },
   high: {
     tier: 'high',
-    displayName: 'Qwen 3.8 27B VL (EXL3 3.5bpw)',
+    displayName: 'Qwen 3.8 27B (EXL3 11.5GB)',
     shortLabel: 'High 27B',
-    modelName: 'Qwen-3.8-27B-VL-EXL3-3.5bpw',
+    modelName: 'Qwen3.8-27B-EXL3-11.5GB',
     fallbackFolderNames: [
       'Qwen3.8-27B-EXL3-11.5GB',
       'Qwen-3.8-27B-VL-EXL3-4.0bpw',
@@ -112,21 +112,21 @@ export const THINKING_BUDGET_SPECS: Record<
     maxThinkingTokens: 0,
     prefillClosedThink: true,
     systemDirective:
-      'THINKING BUDGET: OFF (0 tokens). Emit closed <think></think> immediately with 0ms deliberation and respond or call tools directly.',
+      'THINKING BUDGET: OFF (0 tokens). Respond or execute requested actions directly without deliberation.',
   },
   fast: {
     budget: 'fast',
     maxThinkingTokens: 250,
-    prefillClosedThink: false,
+    prefillClosedThink: true,
     systemDirective:
-      'THINKING BUDGET: FAST (~250 tokens max). Perform a brief, high-signal 1-2 second verification inside <think>...</think> (strictly under 250 tokens) before emitting your response or tool call.',
+      'THINKING BUDGET: FAST. Deliver a concise, direct response or tool execution with sub-second latency.',
   },
   deep: {
     budget: 'deep',
     maxThinkingTokens: 8192,
     prefillClosedThink: false,
     systemDirective:
-      'THINKING BUDGET: DEEP (Unconstrained). Perform thorough, multi-step architectural reasoning and edge-case verification inside <think>...</think> before acting.',
+      'THINKING BUDGET: DEEP (Unconstrained). Perform thorough architectural reasoning inside <think>...</think> before acting.',
   },
 };
 
@@ -416,9 +416,29 @@ export class TabbyEngine {
     const spec = TIER_SPECS[newTier];
     const resolvedModelName = this.resolveDiskModelName(newTier);
 
-    const isLive = await this.checkConnection();
+        const isLive = await this.checkConnection();
     if (isLive) {
       try {
+        const curRes = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
+          headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
+          signal: AbortSignal.timeout(2000),
+        }).catch(() => null);
+        if (curRes && curRes.ok) {
+          const curData = await curRes.json().catch(() => null);
+          if (curData?.id === resolvedModelName) {
+            this.activeTier = newTier;
+            this.lastSwapDurationMs = Math.round(performance.now() - startMs);
+            this.swapStatus = 'ready';
+            return {
+              tier: newTier,
+              modelName: resolvedModelName,
+              swapDurationMs: this.lastSwapDurationMs,
+              spec,
+              sysramCache: this.sysramCache,
+            };
+          }
+        }
+
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
@@ -605,7 +625,7 @@ export class TabbyEngine {
           temperature: params.thinkingBudget === 'off' ? 0.2 : 0.6,
           max_tokens: 4096,
           chat_template_kwargs: {
-            enable_thinking: params.thinkingBudget !== 'off',
+            enable_thinking: params.thinkingBudget === 'deep',
           },
         };
 
@@ -628,7 +648,7 @@ export class TabbyEngine {
         if (response.ok && response.body) {
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
-          let inThinkTag = params.thinkingBudget !== 'off';
+          let inThinkTag = false;
           let rawBuffer = '';
 
           while (true) {
@@ -650,10 +670,7 @@ export class TabbyEngine {
                 if (!delta) continue;
 
                 if (delta.reasoning_content) {
-                  if (
-                    params.thinkingBudget !== 'off' &&
-                    thinkingTokens < budgetSpec.maxThinkingTokens
-                  ) {
+                  if (params.thinkingBudget !== 'off') {
                     thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
                     thinkingContent += delta.reasoning_content;
                     thinkingDurationMs = Math.round(performance.now() - startTime);
@@ -737,83 +754,19 @@ export class TabbyEngine {
       }
     }
 
-    // Embedded Local Synthesis Engine when TabbyAPI server is warming or offline:
-    // Executes real tools if requested and streams authentic 3x3 Tier × Thinking Budget output
-    const lastUserMsg =
-      [...params.messages].reverse().find((m) => m.role === 'user')?.content || '';
-    const promptStr = typeof lastUserMsg === 'string' ? lastUserMsg : JSON.stringify(lastUserMsg);
-
-    // 1. Handle Thinking Budget (Off = 0 tokens/0ms, Fast = ~60-180 tokens, Deep = detailed multi-step trace)
-    if (params.thinkingBudget !== 'off') {
-      const thoughtSteps =
-        params.thinkingBudget === 'fast'
-          ? [
-              `[Tier: ${tierSpec.displayName} | Budget: FAST ≤250t] `,
-              `Analyzing request: "${promptStr.slice(0, 80)}"... `,
-              `Checking workspace context, SQLite WAL state, and active MCP tools. `,
-              `Formulating direct execution response.`,
-            ]
-          : [
-              `[Tier: ${tierSpec.displayName} | Budget: DEEP Unconstrained]\n`,
-              `1. Deconstructing user prompt: "${promptStr.slice(0, 120)}"\n`,
-              `2. Evaluating TabbyAPI EXL3 engine parameters (cache_mode=${tierSpec.cacheMode}, autosplit_reserve=${tierSpec.autosplitReserve[0]}MB, draft_mode=${tierSpec.draftMode}x${tierSpec.hybridDraftTokens}).\n`,
-              `3. Checking workspace file tree, active git branch, and MCP tool bindings.\n`,
-              `4. Verifying safety constraints (ports 5000/5001 strictly excluded; pre-edit file checkpoints active).\n`,
-              `5. Synthesizing structured response and executing required workspace actions.`,
-            ];
-
-      for (const step of thoughtSteps) {
-        if (params.abortSignal?.aborted) break;
-        await new Promise((r) => setTimeout(r, 45));
-        const stepTokens = Math.max(1, Math.ceil(step.length / 4));
-        if (thinkingTokens + stepTokens > budgetSpec.maxThinkingTokens) {
-          break;
-        }
-        thinkingTokens += stepTokens;
-        thinkingContent += step;
-        thinkingDurationMs = Math.round(performance.now() - startTime);
-        params.onThoughtDelta(step, thinkingDurationMs, thinkingTokens);
-      }
-    }
-
-    // 2. Trigger built-in tool call if the prompt asks to run a command, list directory, or read/search files
-    if (params.onToolCallRequest && !params.abortSignal?.aborted) {
-      const lower = promptStr.toLowerCase();
-      if (lower.includes('list') && (lower.includes('dir') || lower.includes('files'))) {
-        await params.onToolCallRequest('list_directory', { path: '.' });
-      } else if (lower.includes('search') || lower.includes('grep')) {
-        await params.onToolCallRequest('search_codebase', { query: 'LocalGravity' });
-      } else if (lower.includes('screen') || lower.includes('capture')) {
-        await params.onToolCallRequest('capture_screen', {});
-      }
-    }
-
-    // 3. Stream response tokens
-    const responseChunks = [
-      `**[${tierSpec.shortLabel} • Think: ${params.thinkingBudget.toUpperCase()}]** `,
-      `Processed your request on **${tierSpec.displayName}** `,
-      `(\`cache_mode: ${tierSpec.cacheMode}\`, \`draft_mode: ${tierSpec.draftMode}\`).\n\n`,
-      `- **Active Model Tier:** \`${params.tier}\` (\`${this.resolveDiskModelName(params.tier)}\`)\n`,
-      `- **Thinking Budget:** \`${params.thinkingBudget}\` (${thinkingTokens} thinking tokens in ${thinkingDurationMs}ms)\n`,
-      `- **SysRAM Hot-Swap Cache:** Inactive tiers pre-warmed in DDR4 System RAM for ~1s PCIe promotion.\n`,
-    ];
-
-    for (const chunk of responseChunks) {
-      if (params.abortSignal?.aborted) break;
-      await new Promise((r) => setTimeout(r, 35));
-      const chunkTokens = Math.max(1, Math.ceil(chunk.length / 4));
-      outputTokens += chunkTokens;
-      content += chunk;
-      params.onTokenDelta(chunk, outputTokens);
-    }
+        // TabbyAPI Unreachable Fallback Handler:
+    const errorMsg = `⚠️ Unable to reach TabbyAPI at ${this.tabbyBaseUrl}. Please ensure TabbyAPI is running on port 5001.`;
+    outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
+    content = errorMsg;
+    params.onTokenDelta(errorMsg, outputTokens);
 
     this.swapStatus = 'ready';
     this.resetIdleTimer();
     return {
       content,
-      thinkingContent,
-      thinkingDurationMs,
-      thinkingTokens,
+      thinkingContent: '',
+      thinkingDurationMs: 0,
+      thinkingTokens: 0,
       outputTokens,
     };
   }
