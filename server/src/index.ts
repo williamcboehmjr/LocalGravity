@@ -723,7 +723,7 @@ export async function createDaemonServer(options?: {
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
         (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
 
-      const chatMessages = [
+      const chatMessages: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
         {
           role: 'system',
           content: systemDirective,
@@ -737,159 +737,232 @@ export async function createDaemonServer(options?: {
           })),
       ];
 
-      const result = await tabby.streamChatCompletion({
-        tier: params.tier,
-        thinkingBudget: params.thinkingBudget,
-        messages: chatMessages,
-        tools: BUILTIN_TOOLS_SCHEMA,
-        abortSignal: abortController.signal,
-        onThoughtDelta: (delta, elapsedMs, tokenCount) => {
-          db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, tokenCount);
-          broadcastSync({
-            type: 'THOUGHT_STREAM',
-            payload: {
-              session_id: thread!.id,
-              thread_id: thread!.id,
+      const MAX_TOOL_STEPS = 5;
+      let step = 0;
+      let cumulativeOutputTokens = 0;
+      let cumulativeThinkingTokens = 0;
+      let lastThinkingMs = 0;
+
+      while (step < MAX_TOOL_STEPS) {
+        step++;
+        const executedToolsThisStep: Array<{
+          id: string;
+          toolName: string;
+          arguments: any;
+          output: string;
+        }> = [];
+
+        const result = await tabby.streamChatCompletion({
+          tier: params.tier,
+          thinkingBudget: params.thinkingBudget,
+          messages: chatMessages,
+          tools: BUILTIN_TOOLS_SCHEMA,
+          abortSignal: abortController.signal,
+          onThoughtDelta: (delta, elapsedMs, tokenCount) => {
+            cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
+            lastThinkingMs = elapsedMs;
+            db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, cumulativeThinkingTokens);
+            broadcastSync({
+              type: 'THOUGHT_STREAM',
+              payload: {
+                session_id: thread!.id,
+                thread_id: thread!.id,
+                message_id: assistantMsg.id,
+                chunk: delta,
+                elapsed_ms: elapsedMs,
+                token_count: cumulativeThinkingTokens,
+                is_finished: false,
+              },
+            });
+          },
+          onTokenDelta: (delta, tokenCount) => {
+            cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
+            db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
+            broadcastSync({
+              type: 'TOKEN_STREAM',
+              payload: {
+                session_id: thread!.id,
+                thread_id: thread!.id,
+                message_id: assistantMsg.id,
+                chunk: delta,
+                output_tokens: cumulativeOutputTokens,
+                is_finished: false,
+              },
+            });
+          },
+          onToolCallRequest: async (toolName, toolArgs) => {
+            db.updateThread(thread!.id, { status: 'executing_tool' });
+            const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
+            const toolExec = db.createToolExecution({
               message_id: assistantMsg.id,
-              chunk: delta,
-              elapsed_ms: elapsedMs,
-              token_count: tokenCount,
-              is_finished: false,
-            },
+              thread_id: thread!.id,
+              tool_name: toolName,
+              mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
+              arguments_json: JSON.stringify(toolArgs),
+            });
+
+            broadcastSync({
+              type: 'TOOL_EVENT',
+              payload: {
+                session_id: thread!.id,
+                thread_id: thread!.id,
+                message_id: assistantMsg.id,
+                tool_execution_id: toolExec.id,
+                tool_name: toolName,
+                command: cmdFormatted,
+                arguments: toolArgs,
+                output: '',
+                status: 'running',
+              },
+            });
+
+            const execResult = await tools.executeTool(toolName, toolArgs, {
+              threadId: thread!.id,
+              messageId: assistantMsg.id,
+              workspaceRoot: project.root_path,
+              onStdoutChunk: (chunk) => {
+                broadcastSync({
+                  type: 'TOOL_STREAM',
+                  payload: {
+                    thread_id: thread!.id,
+                    message_id: assistantMsg.id,
+                    tool_execution_id: toolExec.id,
+                    stream: 'stdout',
+                    chunk,
+                  },
+                });
+              },
+              onStderrChunk: (chunk) => {
+                broadcastSync({
+                  type: 'TOOL_STREAM',
+                  payload: {
+                    thread_id: thread!.id,
+                    message_id: assistantMsg.id,
+                    tool_execution_id: toolExec.id,
+                    stream: 'stderr',
+                    chunk,
+                  },
+                });
+              },
+              onFileCheckpointCreated: (checkpoint) => {
+                broadcastSync({
+                  type: 'CHECKPOINT_CREATED',
+                  payload: { thread_id: thread!.id, checkpoint },
+                });
+              },
+              onScreenCaptured: (base64Image, windowTitle) => {
+                broadcastSync({
+                  type: 'VISION_CAPTURE',
+                  payload: {
+                    base64DataUrl: base64Image,
+                    activeWindowTitle: windowTitle,
+                  },
+                });
+              },
+            });
+
+            // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
+            const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
+              workspaceRoot: project.root_path,
+              toolName,
+              command: cmdFormatted,
+              exitCode: execResult.exitCode,
+              stdout: execResult.stdout,
+              stderr: execResult.stderr,
+            });
+
+            if (ppcCycle) {
+              broadcastSync({
+                type: 'HARNESS_PPC_COMPLETED',
+                payload: {
+                  cycle: ppcCycle,
+                  components: harness.listHarnessComponents(project.root_path),
+                },
+              });
+            }
+
+            const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
+            db.updateToolExecution(toolExec.id, {
+              stdout_stream: execResult.stdout,
+              stderr_stream: execResult.stderr,
+              exit_code: execResult.exitCode,
+              status: finalStatus,
+              duration_ms: execResult.durationMs,
+            });
+
+            broadcastSync({
+              type: 'TOOL_EVENT',
+              payload: {
+                session_id: thread!.id,
+                thread_id: thread!.id,
+                message_id: assistantMsg.id,
+                tool_execution_id: toolExec.id,
+                tool_name: toolName,
+                command: cmdFormatted,
+                arguments: toolArgs,
+                output: execResult.stdout || execResult.stderr,
+                exit_code: execResult.exitCode,
+                duration_ms: execResult.durationMs,
+                status: finalStatus,
+              },
+            });
+
+            executedToolsThisStep.push({
+              id: toolExec.id,
+              toolName,
+              arguments: toolArgs,
+              output: execResult.stdout || execResult.stderr || 'Success (no output)',
+            });
+          },
+        });
+
+        if (executedToolsThisStep.length === 0 || abortController.signal.aborted) {
+          // Model completed its thought and provided final response
+          break;
+        }
+
+        // Tools executed: feed tool outputs back to the model for next turn reasoning
+        db.updateThread(thread.id, { status: 'thinking' });
+
+        const toolCallsArray = executedToolsThisStep.map((t) => ({
+          id: t.id,
+          type: 'function',
+          function: {
+            name: t.toolName,
+            arguments: JSON.stringify(t.arguments),
+          },
+        }));
+
+        chatMessages.push({
+          role: 'assistant',
+          content: result.content || '',
+          tool_calls: toolCallsArray,
+        });
+
+        for (const t of executedToolsThisStep) {
+          chatMessages.push({
+            role: 'tool',
+            tool_call_id: t.id,
+            name: t.toolName,
+            content: t.output,
           });
-        },
-        onTokenDelta: (delta, tokenCount) => {
-          db.appendTokenDelta(assistantMsg.id, thread!.id, delta, tokenCount);
+        }
+
+        if (result.content && !result.content.endsWith('\n')) {
+          db.appendTokenDelta(assistantMsg.id, thread!.id, '\n\n', cumulativeOutputTokens);
           broadcastSync({
             type: 'TOKEN_STREAM',
             payload: {
               session_id: thread!.id,
               thread_id: thread!.id,
               message_id: assistantMsg.id,
-              chunk: delta,
-              output_tokens: tokenCount,
+              chunk: '\n\n',
+              output_tokens: cumulativeOutputTokens,
               is_finished: false,
             },
           });
-        },
-        onToolCallRequest: async (toolName, toolArgs) => {
-          db.updateThread(thread!.id, { status: 'executing_tool' });
-          const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
-          const toolExec = db.createToolExecution({
-            message_id: assistantMsg.id,
-            thread_id: thread!.id,
-            tool_name: toolName,
-            mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
-            arguments_json: JSON.stringify(toolArgs),
-          });
-
-          broadcastSync({
-            type: 'TOOL_EVENT',
-            payload: {
-              session_id: thread!.id,
-              thread_id: thread!.id,
-              message_id: assistantMsg.id,
-              tool_execution_id: toolExec.id,
-              tool_name: toolName,
-              command: cmdFormatted,
-              arguments: toolArgs,
-              output: '',
-              status: 'running',
-            },
-          });
-
-          const execResult = await tools.executeTool(toolName, toolArgs, {
-            threadId: thread!.id,
-            messageId: assistantMsg.id,
-            workspaceRoot: project.root_path,
-            onStdoutChunk: (chunk) => {
-              broadcastSync({
-                type: 'TOOL_STREAM',
-                payload: {
-                  thread_id: thread!.id,
-                  message_id: assistantMsg.id,
-                  tool_execution_id: toolExec.id,
-                  stream: 'stdout',
-                  chunk,
-                },
-              });
-            },
-            onStderrChunk: (chunk) => {
-              broadcastSync({
-                type: 'TOOL_STREAM',
-                payload: {
-                  thread_id: thread!.id,
-                  message_id: assistantMsg.id,
-                  tool_execution_id: toolExec.id,
-                  stream: 'stderr',
-                  chunk,
-                },
-              });
-            },
-            onFileCheckpointCreated: (checkpoint) => {
-              broadcastSync({
-                type: 'CHECKPOINT_CREATED',
-                payload: { thread_id: thread!.id, checkpoint },
-              });
-            },
-            onScreenCaptured: (base64Image, windowTitle) => {
-              broadcastSync({
-                type: 'VISION_CAPTURE',
-                payload: {
-                  base64DataUrl: base64Image,
-                  activeWindowTitle: windowTitle,
-                },
-              });
-            },
-          });
-
-          // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
-          const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
-            workspaceRoot: project.root_path,
-            toolName,
-            command: cmdFormatted,
-            exitCode: execResult.exitCode,
-            stdout: execResult.stdout,
-            stderr: execResult.stderr,
-          });
-
-          if (ppcCycle) {
-            broadcastSync({
-              type: 'HARNESS_PPC_COMPLETED',
-              payload: {
-                cycle: ppcCycle,
-                components: harness.listHarnessComponents(project.root_path),
-              },
-            });
-          }
-
-          const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
-          db.updateToolExecution(toolExec.id, {
-            stdout_stream: execResult.stdout,
-            stderr_stream: execResult.stderr,
-            exit_code: execResult.exitCode,
-            status: finalStatus,
-            duration_ms: execResult.durationMs,
-          });
-
-          broadcastSync({
-            type: 'TOOL_EVENT',
-            payload: {
-              session_id: thread!.id,
-              thread_id: thread!.id,
-              message_id: assistantMsg.id,
-              tool_execution_id: toolExec.id,
-              tool_name: toolName,
-              command: cmdFormatted,
-              arguments: toolArgs,
-              output: execResult.stdout || execResult.stderr,
-              exit_code: execResult.exitCode,
-              duration_ms: execResult.durationMs,
-              status: finalStatus,
-            },
-          });
-        },
-      });
+        }
+      }
 
       db.finalizeStreamingMessage(assistantMsg.id);
       const updatedThread = db.updateThread(thread.id, { status: 'idle' });
@@ -901,8 +974,8 @@ export async function createDaemonServer(options?: {
           thread_id: thread.id,
           message_id: assistantMsg.id,
           chunk: '',
-          elapsed_ms: result.thinkingDurationMs,
-          token_count: result.thinkingTokens,
+          elapsed_ms: lastThinkingMs,
+          token_count: cumulativeThinkingTokens,
           is_finished: true,
         },
       });
@@ -914,7 +987,7 @@ export async function createDaemonServer(options?: {
           thread_id: thread.id,
           message_id: assistantMsg.id,
           chunk: '',
-          output_tokens: result.outputTokens,
+          output_tokens: cumulativeOutputTokens,
           is_finished: true,
         },
       });
