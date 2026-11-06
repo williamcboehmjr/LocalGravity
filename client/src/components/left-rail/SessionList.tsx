@@ -190,20 +190,21 @@ export const SessionList: React.FC<SessionListProps> = ({
                 >
                   <Edit2 className="w-3 h-3" />
                 </button>
-                {sessions.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSession(s.id);
-                      onDeleteThread?.(s.id);
-                    }}
-                    className="p-0.5 rounded hover:bg-[#323236] text-[#8E8E93] hover:text-rose-400"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      await fetch(`${apiBaseUrl}/api/threads/${s.id}`, { method: 'DELETE' });
+                    } catch {}
+                    deleteSession(s.id);
+                    onDeleteThread?.(s.id);
+                  }}
+                  className="p-0.5 rounded hover:bg-[#323236] text-[#8E8E93] hover:text-rose-400"
+                  title="Delete Conversation"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
               </div>
             </div>
           </>

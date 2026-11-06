@@ -17,7 +17,7 @@ export interface FileCheckpointItem {
   created_at: string;
 }
 
-export type WorkbenchTab = 'editor' | 'terminal' | 'preview' | 'harness' | 'tasks' | 'plan' | 'evidence';
+export type WorkbenchTab = 'none' | 'editor' | 'terminal' | 'preview' | 'harness' | 'tasks' | 'plan' | 'evidence';
 
 interface ArtifactState {
   activeTab: WorkbenchTab;
@@ -91,13 +91,13 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
 const initialTaskMd = `# Antigravity 2.0 Hardening Checklist\n\n## Core Engine\n- [x] Dynamic Port Discovery (Never touch 5000/5001)\n- [x] TabbyAPI EXL2/EXL3 Integration (Q4 KV, N-gram x4)\n- [x] SysRAM Inactive Weight Pre-Warmer\n- [x] SQLite WAL Hierarchy (Projects -> Threads -> Messages -> Tools -> Checkpoints)\n- [x] 3-Pane Antigravity 2.0 Obsidian UI + Monaco Diff + xterm.js`;
 
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
-  activeTab: 'editor',
+  activeTab: 'none',
   taskMarkdown: initialTaskMd,
   parsedTasks: parseTasksFromMarkdown(initialTaskMd),
   planMarkdown: `# LocalGravity 2.0 Architecture\n\n- **Backend**: Fastify Headless Core + WebSocket Multiplexer (\`/ws/sync\`, \`/ws/terminal\`)\n- **Inference**: TabbyAPI EXL2/EXL3 3-Tier Suite (\`Low 4B\`, \`Med 9B\`, \`High 27B VL\`) + 3x3 Thinking Matrix (\`Off\`, \`Fast\`, \`Deep\`)\n- **Persistence**: SQLite WAL with 250ms in-flight stream rehydration`,
   evidenceItems: [],
   workspaceFiles: [],
-  activeFilePath: 'README.md',
+  activeFilePath: '',
   activeFileContent: '',
   diffOriginalContent: null,
   activeCheckpoint: null,

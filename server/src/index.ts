@@ -647,18 +647,19 @@ export async function createDaemonServer(options?: {
     thinkingBudget: ThinkingBudget;
     attachments?: any[];
   }) {
+    const promptStr = typeof params.prompt === 'string' ? params.prompt : '';
     let thread = db.getThread(params.threadId);
     if (!thread) {
       const defaultProj = db.ensureDefaultProject(REPO_ROOT);
       thread = db.createThread({
         id: params.threadId,
         project_id: defaultProj.id,
-        title: params.prompt.slice(0, 42) || 'New Thread',
+        title: promptStr.slice(0, 42) || 'New Thread',
         active_model_tier: params.tier,
         active_thinking_budget: params.thinkingBudget,
       });
     } else if (thread.title === 'New Thread' || thread.title === 'Initial Thread') {
-      const cleanTitle = params.prompt.replace(/\s+/g, ' ').trim().slice(0, 44);
+      const cleanTitle = promptStr.replace(/\s+/g, ' ').trim().slice(0, 44);
       if (cleanTitle) {
         thread = db.updateThread(thread.id, { title: cleanTitle }) || thread;
       }

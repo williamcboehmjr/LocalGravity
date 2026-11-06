@@ -446,12 +446,14 @@ export class TabbyEngine {
               sysramCache: this.sysramCache,
             };
           }
-          // Unload currently active model
-          await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
-            method: 'POST',
-            headers,
-            signal: AbortSignal.timeout(10000),
-          }).catch(() => null);
+          if (curData?.id) {
+            // Unload currently active model
+            await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
+              method: 'POST',
+              headers,
+              signal: AbortSignal.timeout(10000),
+            }).catch(() => null);
+          }
         }
 
         // Load requested model into VRAM
@@ -469,14 +471,32 @@ export class TabbyEngine {
               hybrid_draft_tokens: spec.hybridDraftTokens,
             },
           }),
-          signal: AbortSignal.timeout(45000),
+          signal: AbortSignal.timeout(60000),
         }).catch((err) => {
           console.error('[TabbyEngine] /v1/model/load request error:', err);
           return null;
         });
 
-        if (loadRes && !loadRes.ok) {
+        if (loadRes && loadRes.ok) {
+          // IMPORTANT: TabbyAPI /v1/model/load returns an SSE event stream.
+          // We MUST consume the entire stream so TabbyAPI finishes loading all modules!
+          await loadRes.text().catch(() => '');
+          console.log(`[TabbyEngine] Model ${resolvedModelName} load stream finished.`);
+        } else if (loadRes) {
           console.error('[TabbyEngine] Model load error:', await loadRes.text().catch(() => ''));
+        }
+
+        // Verify with GET /v1/model that the requested model is confirmed active
+        for (let i = 0; i < 20; i++) {
+          const verify = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
+            headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
+            signal: AbortSignal.timeout(1500),
+          }).catch(() => null);
+          if (verify && verify.ok) {
+            const data = await verify.json().catch(() => null);
+            if (data?.id === resolvedModelName) break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
         }
       } catch (err) {
         console.error('[TabbyEngine] Model tier swap exception:', err);
@@ -667,6 +687,11 @@ export class TabbyEngine {
           body: JSON.stringify(requestBody),
           signal: params.abortSignal,
         });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          console.error(`[TabbyEngine] TabbyAPI /v1/chat/completions returned HTTP ${response.status}: ${errText}`);
+        }
 
         if (response.ok && response.body) {
           const reader = response.body.getReader();

@@ -76,6 +76,7 @@ export const App: React.FC = () => {
     setThreads,
     hydrateMessagesFromServer,
     clearMessages,
+    deleteSession,
   } = useSessionStore();
 
   const {
@@ -461,6 +462,21 @@ export const App: React.FC = () => {
     } catch {}
   };
 
+  const handleDeleteThread = async (threadId: string) => {
+    try {
+      await fetch(`${apiBaseUrl}/api/threads/${threadId}`, { method: 'DELETE' });
+    } catch {}
+    deleteSession(threadId);
+    if (sessionId === threadId) {
+      const remaining = sessions.filter((s) => s.id !== threadId);
+      if (remaining.length > 0) {
+        handleSelectThread(remaining[0].id);
+      } else {
+        handleNewThread();
+      }
+    }
+  };
+
   const handleSelectThread = async (threadId: string) => {
     try {
       const res = await fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`);
@@ -630,6 +646,7 @@ export const App: React.FC = () => {
           <SessionList
             onNewThread={handleNewThread}
             onSelectThread={handleSelectThread}
+            onDeleteThread={handleDeleteThread}
             onSelectProject={handleSelectProject}
             onOpenAutomations={() => {
               setActiveTab('harness');
@@ -749,10 +766,21 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleClearContext}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[#E3E3E3] hover:bg-[#28282C] text-left"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-[#8E8E93]" />
+                    <span>Clear Conversation</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMoreMenu(false);
+                      handleDeleteThread(sessionId);
+                    }}
                     className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-rose-400 hover:bg-[#28282C] text-left"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>Clear Conversation</span>
+                    <span>Delete Conversation</span>
                   </button>
                 </div>
               )}
@@ -876,7 +904,7 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('preview')}
+                  onClick={() => setActiveTab(activeTab === 'preview' ? 'none' : 'preview')}
                   className={`p-1 rounded hover:bg-[#242428] transition-colors ${
                     activeTab === 'preview' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
                   }`}
@@ -886,7 +914,7 @@ export const App: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('harness')}
+                  onClick={() => setActiveTab(activeTab === 'harness' ? 'none' : 'harness')}
                   className={`p-1 rounded hover:bg-[#242428] transition-colors ${
                     activeTab === 'harness' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
                   }`}
@@ -904,7 +932,7 @@ export const App: React.FC = () => {
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setActiveTab(item.id)}
+                    onClick={() => setActiveTab(activeTab === item.id ? 'none' : item.id)}
                     className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
                       isActive
                         ? 'bg-[#26262A] text-[#E3E3E3] font-medium'
@@ -930,15 +958,17 @@ export const App: React.FC = () => {
           </div>
 
           {/* Active Workbench View Card */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
-            {activeTab === 'editor' && <WorkbenchEditor />}
-            {activeTab === 'terminal' && <IntegratedTerminal />}
-            {activeTab === 'preview' && <VisionPreviewTab />}
-            {activeTab === 'harness' && <HarnessWorkbenchTab />}
-            {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
-            {activeTab === 'plan' && <PlanViewer />}
-            {activeTab === 'evidence' && <EvidenceDrawer />}
-          </div>
+          {activeTab !== 'none' && (
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
+              {activeTab === 'editor' && <WorkbenchEditor />}
+              {activeTab === 'terminal' && <IntegratedTerminal />}
+              {activeTab === 'preview' && <VisionPreviewTab />}
+              {activeTab === 'harness' && <HarnessWorkbenchTab />}
+              {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
+              {activeTab === 'plan' && <PlanViewer />}
+              {activeTab === 'evidence' && <EvidenceDrawer />}
+            </div>
+          )}
         </aside>
       )}
 
