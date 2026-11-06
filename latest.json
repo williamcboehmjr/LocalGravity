@@ -1,14 +1,14 @@
 {
   "version": "v2.0.0",
   "notes": "LocalGravity v2.0.0 Release - Auto-Update enabled via GitHub Releases.\nIncludes anti-repetition sampling, collapsible agent activity, and instant model hot-swapping.",
-  "pub_date": "2026-11-06T20:36:20.365Z",
+  "pub_date": "2026-11-06T23:47:00.111Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelNaWVZOTTRQZWszU3dxU2Z1cU55SEY1czhHTUg4QUppZkRIc3N2bXpXVmxGNjR1eG9vNXNhajhVMVg1QmpXVmR5SGtOZEtVYkVmUW9ERnNIU3FrNWcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTk3MzU4CWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMApEdmtSTHp2V3RGYXVNaEpiZlFYSmljbTZ0ZnlMU005WXorYkxTOHVwMWdEQVJRWFVpalVSd2xoVjVkTS92RlBkSVpmdU05RS81SzhlK3dqWHpVTWlCQT09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemR1K01mS0o4UmNYK2NNY3FWZ2dHTjNwcSs5bFJLQTZEZEVNcW4vQUE3UTB2dFczWGtFcDZ5WEl3R0lsNGQrbVI5cFRBeU1ybUR6aXQwb2t6c21YZlF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDA4ODExCWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMAp0R1ZaSkhEcTFjK1ZlcGN2cHFqOEFYKytwTmYxQlJONHJBRDhobEgyekdKclZWeGpScDhMQmxEWlN1QmJOdFdRN2dSbk1la1hrSk1MRXc4c21ER0xEdz09Cg==",
       "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelNaWVZOTTRQZWszU3dxU2Z1cU55SEY1czhHTUg4QUppZkRIc3N2bXpXVmxGNjR1eG9vNXNhajhVMVg1QmpXVmR5SGtOZEtVYkVmUW9ERnNIU3FrNWcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTk3MzU4CWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMApEdmtSTHp2V3RGYXVNaEpiZlFYSmljbTZ0ZnlMU005WXorYkxTOHVwMWdEQVJRWFVpalVSd2xoVjVkTS92RlBkSVpmdU05RS81SzhlK3dqWHpVTWlCQT09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemR1K01mS0o4UmNYK2NNY3FWZ2dHTjNwcSs5bFJLQTZEZEVNcW4vQUE3UTB2dFczWGtFcDZ5WEl3R0lsNGQrbVI5cFRBeU1ybUR6aXQwb2t6c21YZlF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDA4ODExCWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMAp0R1ZaSkhEcTFjK1ZlcGN2cHFqOEFYKytwTmYxQlJONHJBRDhobEgyekdKclZWeGpScDhMQmxEWlN1QmJOdFdRN2dSbk1la1hrSk1MRXc4c21ER0xEdz09Cg==",
       "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_aarch64.dmg"
     }
   }

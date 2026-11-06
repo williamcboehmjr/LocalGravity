@@ -482,7 +482,7 @@ export const ChatFeed: React.FC = () => {
       ref={scrollRef}
       className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6 bg-[#131314]"
     >
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="max-w-4xl mx-auto space-y-3.5 px-2 sm:px-4">
         {messages.length === 0 && (
           <div className="min-h-[55vh] flex flex-col items-center justify-center text-center p-6 space-y-3 select-none">
             <div className="w-10 h-10 rounded-xl bg-[#1E1E20] border border-[#2C2C30] flex items-center justify-center text-[#9A9A9E]">
@@ -585,15 +585,55 @@ export const ChatFeed: React.FC = () => {
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
+                      p({ children }) {
+                        return <p className="my-1 leading-relaxed text-[13px] text-[#D8D8DC]">{children}</p>;
+                      },
+                      ul({ children }) {
+                        return <ul className="list-disc pl-5 my-1 space-y-0.5 text-[13px] text-[#D8D8DC] marker:text-[#8E8E93]">{children}</ul>;
+                      },
+                      ol({ children }) {
+                        return <ol className="list-decimal pl-5 my-1 space-y-0.5 text-[13px] text-[#D8D8DC] marker:text-[#8E8E93]">{children}</ol>;
+                      },
+                      li({ children }) {
+                        return <li className="leading-snug text-[#D8D8DC] pl-0.5">{children}</li>;
+                      },
+                      h1({ children }) {
+                        return <h1 className="text-sm font-semibold text-white mt-2.5 mb-1 pb-0.5 border-b border-[#262629]">{children}</h1>;
+                      },
+                      h2({ children }) {
+                        return <h2 className="text-[13px] font-semibold text-white mt-2 mb-0.5">{children}</h2>;
+                      },
+                      h3({ children }) {
+                        return <h3 className="text-xs font-medium text-[#A0A0A5] uppercase tracking-wider mt-1.5 mb-0.5">{children}</h3>;
+                      },
+                      hr() {
+                        return <hr className="my-2 border-[#262629]" />;
+                      },
+                      strong({ children }) {
+                        return <strong className="font-semibold text-white">{children}</strong>;
+                      },
+                      table({ children }) {
+                        return (
+                          <div className="my-2 overflow-x-auto rounded-lg border border-[#262629]">
+                            <table className="w-full text-left text-xs border-collapse">{children}</table>
+                          </div>
+                        );
+                      },
+                      th({ children }) {
+                        return <th className="bg-[#1A1A1D] px-3 py-1.5 font-semibold text-white border-b border-[#262629]">{children}</th>;
+                      },
+                      td({ children }) {
+                        return <td className="px-3 py-1.5 border-b border-[#222225] text-[#C4C4C8]">{children}</td>;
+                      },
                       code({ className, children, ...props }: any) {
                         const match = /language-(\w+)/.exec(className || '');
                         const isBlock = Boolean(match);
                         return isBlock ? (
-                          <div className="my-3 rounded-xl overflow-hidden border border-[#262629] bg-[#18181A]">
-                            <div className="px-3 py-1.5 bg-[#1E1E21] border-b border-[#262629] text-[11px] font-mono text-[#8E8E93] flex items-center justify-between select-none">
+                          <div className="my-2.5 rounded-lg overflow-hidden border border-[#262629] bg-[#161618]">
+                            <div className="px-3 py-1 bg-[#1C1C1F] border-b border-[#262629] text-[10px] font-mono text-[#8E8E93] flex items-center justify-between select-none">
                               <span>{match?.[1]}</span>
                             </div>
-                            <pre className="p-3.5 text-xs font-mono overflow-x-auto text-[#E3E3E3]">
+                            <pre className="p-3 text-xs font-mono overflow-x-auto text-[#E3E3E3]">
                               <code className={className} {...props}>
                                 {children}
                               </code>
