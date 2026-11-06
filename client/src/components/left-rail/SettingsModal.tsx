@@ -22,7 +22,7 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const { brainHost, brainPort, setBrainConnection } = useSessionStore();
 
-  const [inputHost, setInputHost] = useState(brainHost || 'localhost');
+  const [inputHost, setInputHost] = useState(brainHost || '127.0.0.1');
   const [inputPort, setInputPort] = useState(brainPort || '3390');
 
   const [testState, setTestState] = useState<{
@@ -98,7 +98,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <button
                   type="button"
                   onClick={() => {
-                    setInputHost('localhost');
+                    setInputHost('127.0.0.1');
                     setInputPort('3390');
                   }}
                   className="px-2 py-0.5 rounded text-[10px] font-mono bg-canvas border border-border-subtle text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
@@ -288,3 +288,5 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     </div>
   );
 };
+
+

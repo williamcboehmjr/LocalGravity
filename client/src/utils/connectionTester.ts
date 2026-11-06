@@ -17,8 +17,13 @@ export function cleanHostAndPort(rawHost: string, rawPort: string = '3390'): { h
     port = parts[1] || port;
   }
 
+  // Normalize localhost to 127.0.0.1 to prevent Windows WebView2 IPv6 [::1] connection drops
+  if (host.toLowerCase() === 'localhost' || !host) {
+    host = '127.0.0.1';
+  }
+
   return {
-    host: host || 'localhost',
+    host,
     port: port || '3390',
   };
 }

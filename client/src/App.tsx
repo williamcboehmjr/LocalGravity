@@ -124,7 +124,7 @@ export const App: React.FC = () => {
             window.location.hostname !== 'localhost' &&
             window.location.hostname !== '127.0.0.1' &&
             window.location.hostname !== 'tauri.localhost';
-          const host = isRemote ? window.location.hostname : 'localhost';
+          const host = isRemote ? window.location.hostname : '127.0.0.1';
           setBrainConnection(host, String(cfg.daemonPort));
         }
       })
@@ -143,7 +143,7 @@ export const App: React.FC = () => {
       if (isDisposed) return;
 
       try {
-        const cleanHost = effectiveHost.replace(/^http/, 'ws');
+        const cleanHost = effectiveHost.replace(/^http/, 'ws').replace('localhost', '127.0.0.1');
         const url = `${cleanHost}/ws/sync`;
         ws = new WebSocket(url);
         wsRef.current = ws;
@@ -950,3 +950,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+

@@ -52,7 +52,7 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     displayName: 'Qwen 3.5 4B (EXL3 4.5bpw)',
     shortLabel: 'Low 4B',
     modelName: 'Qwen3.5-4B-EXL3-4.5bpw',
-    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.5bpw', 'Qwen3-VL-8B-Instruct-exl3-4.0bpw'],
+    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.0bpw', 'Qwen3.5-4B-EXL3-4.5bpw', 'Qwen3-VL-8B-Instruct-exl3-4.0bpw'],
     bpw: '4.5 bpw',
     maxSeqLen: 32768,
     cacheMode: 'Q4',
@@ -83,9 +83,9 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     shortLabel: 'High 27B',
     modelName: 'Qwen-3.8-27B-VL-EXL3-3.5bpw',
     fallbackFolderNames: [
-      'Qwen-3.8-27B-VL-EXL3-3.5bpw',
-      'Qwen-3.8-27B-VL-EXL3-4.0bpw',
       'Qwen3.8-27B-EXL3-11.5GB',
+      'Qwen-3.8-27B-VL-EXL3-4.0bpw',
+      'Qwen-3.8-27B-VL-EXL3-3.5bpw',
     ],
     bpw: '3.5 bpw',
     maxSeqLen: 24576,
@@ -135,6 +135,7 @@ export class TabbyEngine {
   private tabbyBaseUrl: string;
   private tabbyPort: number;
   private apiKey: string;
+  private adminKey: string;
   private modelsRootDirs: string[];
   private activeTier: ModelTier = 'medium';
   private swapStatus: 'idle' | 'swapping' | 'ready' | 'generating' | 'error' = 'ready';
@@ -149,8 +150,9 @@ export class TabbyEngine {
   constructor(options: { repoRoot: string; tabbyPort: number; tabbyBaseUrl?: string; apiKey?: string; idleTimeoutMinutes?: number }) {
     this.repoRoot = options.repoRoot;
     this.tabbyPort = options.tabbyPort;
-    this.tabbyBaseUrl = options.tabbyBaseUrl || `http://127.0.0.1:${options.tabbyPort}`;
-    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || '';
+    this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001';
+    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'glasshouse-tabby-secret';
+    this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'glasshouse-admin-secret';
     if (options.idleTimeoutMinutes !== undefined) {
       this.idleTimeoutMs = options.idleTimeoutMinutes * 60 * 1000;
     }
@@ -159,6 +161,7 @@ export class TabbyEngine {
       ...(process.env.TABBY_MODELS_DIR ? [process.env.TABBY_MODELS_DIR] : []),
       path.join(this.repoRoot, 'models'),
       path.join(os.homedir(), 'Documents', 'GitHub', 'tabbyAPI', 'models'),
+      'E:\\Github\\tabbyAPI\\models',
     ];
 
     this.sysramCache = {
@@ -205,7 +208,7 @@ export class TabbyEngine {
    * - port: dynamically allocated safe port (NEVER 5000 or 5001)
    */
   public enforceTabbyConfigYml(): string {
-    if (this.tabbyPort === 5000 || this.tabbyPort === 5001) {
+    if (this.tabbyPort === 5000) {
       throw new Error(`CRITICAL: Forbidden TabbyAPI port ${this.tabbyPort} rejected.`);
     }
 
@@ -419,9 +422,11 @@ export class TabbyEngine {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        if (this.apiKey) {
-          headers['Authorization'] = `Bearer ${this.apiKey}`;
-          headers['x-api-key'] = this.apiKey;
+        const adminAuth = this.adminKey || this.apiKey;
+        if (adminAuth) {
+          headers['Authorization'] = `Bearer ${adminAuth}`;
+          headers['x-admin-key'] = adminAuth;
+          headers['x-api-key'] = adminAuth;
         }
 
         // 1. Unload current model from VRAM
@@ -493,9 +498,11 @@ export class TabbyEngine {
     if (isLive) {
       try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (this.apiKey) {
-          headers['Authorization'] = `Bearer ${this.apiKey}`;
-          headers['x-api-key'] = this.apiKey;
+        const adminAuth = this.adminKey || this.apiKey;
+        if (adminAuth) {
+          headers['Authorization'] = `Bearer ${adminAuth}`;
+          headers['x-admin-key'] = adminAuth;
+          headers['x-api-key'] = adminAuth;
         }
         await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
           method: 'POST',

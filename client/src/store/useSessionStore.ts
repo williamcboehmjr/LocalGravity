@@ -157,7 +157,7 @@ const getInitialBrainSettings = () => {
       return cleanHostAndPort(savedHost, savedPort || '3390');
     }
   }
-  return { host: 'localhost', port: '3390' };
+  return { host: '127.0.0.1', port: '3390' };
 };
 
 const initialConn = getInitialBrainSettings();
@@ -575,3 +575,4 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 }));
+
