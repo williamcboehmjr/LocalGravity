@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { LocalGravityDB, FileCheckpointRecord } from '../db/database.js';
 import { SharedTerminalManager } from '../terminal/terminalManager.js';
@@ -29,12 +30,12 @@ export const BUILTIN_TOOLS_SCHEMA = [
     function: {
       name: 'run_terminal',
       description:
-        'Execute a command in the shared interactive terminal (powershell.exe on Windows, /bin/zsh on macOS) and stream live stdout/stderr.',
+        'Execute any shell or system command in the interactive terminal (powershell.exe on Windows, /bin/zsh on macOS) with full workstation permissions and stream live stdout/stderr.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute' },
-          cwd: { type: 'string', description: 'Optional working directory' },
+          cwd: { type: 'string', description: 'Optional working directory anywhere on the system' },
         },
         required: ['command'],
       },
@@ -44,11 +45,12 @@ export const BUILTIN_TOOLS_SCHEMA = [
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read the contents of a file in the workspace.',
+      description:
+        'Read the contents of any file on the workstation (supports relative workspace paths and absolute system paths like C:/Users/Sue/Downloads/file.txt or ~/Downloads).',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative or absolute file path' },
+          path: { type: 'string', description: 'Relative path or absolute system file path' },
           start_line: { type: 'number', description: 'Optional 1-based start line' },
           end_line: { type: 'number', description: 'Optional 1-based end line' },
         },
@@ -61,11 +63,11 @@ export const BUILTIN_TOOLS_SCHEMA = [
     function: {
       name: 'write_file',
       description:
-        'Write content to a file with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
+        'Write content to any file on the system or workspace with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative or absolute file path' },
+          path: { type: 'string', description: 'Relative path or absolute system file path' },
           content: { type: 'string', description: 'Full file content to write' },
         },
         required: ['path', 'content'],
@@ -77,11 +79,11 @@ export const BUILTIN_TOOLS_SCHEMA = [
     function: {
       name: 'apply_diff',
       description:
-        'Apply a target/replacement edit to a file with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
+        'Apply a target/replacement edit to any file on the system or workspace with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative or absolute file path' },
+          path: { type: 'string', description: 'Relative path or absolute system file path' },
           target: { type: 'string', description: 'Exact string block to replace' },
           replacement: { type: 'string', description: 'Replacement string block' },
         },
@@ -93,12 +95,14 @@ export const BUILTIN_TOOLS_SCHEMA = [
     type: 'function',
     function: {
       name: 'search_codebase',
-      description: 'Fast ripgrep / regex search across workspace files.',
+      description:
+        'Fast ripgrep / regex search across files anywhere on the workstation (workspace, Downloads, Desktop, or specified directory).',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Regex or substring pattern to search for' },
-          file_pattern: { type: 'string', description: 'Optional file extension filter (e.g. .ts)' },
+          path: { type: 'string', description: 'Optional directory path to search (default: workspace root)' },
+          file_pattern: { type: 'string', description: 'Optional file extension filter (e.g. .ts, .txt, .json)' },
         },
         required: ['query'],
       },
@@ -108,11 +112,12 @@ export const BUILTIN_TOOLS_SCHEMA = [
     type: 'function',
     function: {
       name: 'list_directory',
-      description: 'List files and subdirectories in a workspace directory.',
+      description:
+        'List files and subdirectories in any directory on the computer (e.g. Downloads, Desktop, C:/Users/Sue/Downloads, C:/, or workspace root). Full system access is granted.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Directory path (default: workspace root)' },
+          path: { type: 'string', description: 'Directory path (e.g. "Downloads", "C:/Users/Sue/Downloads", "C:/", or "." for workspace root)' },
         },
       },
     },
@@ -173,6 +178,19 @@ export class BuiltinToolExecutor {
 
   private resolveSafePath(workspaceRoot: string, inputPath?: string): string {
     if (!inputPath || inputPath === '.') return workspaceRoot;
+    if (inputPath.startsWith('~')) {
+      return path.resolve(os.homedir(), inputPath.slice(1).replace(/^[/\\]/, ''));
+    }
+    const lower = inputPath.trim().toLowerCase();
+    if (lower === 'downloads' || lower === 'download') {
+      return path.join(os.homedir(), 'Downloads');
+    }
+    if (lower === 'desktop') {
+      return path.join(os.homedir(), 'Desktop');
+    }
+    if (lower === 'documents' || lower === 'docs') {
+      return path.join(os.homedir(), 'Documents');
+    }
     if (path.isAbsolute(inputPath)) return inputPath;
     return path.resolve(workspaceRoot, inputPath);
   }
@@ -363,7 +381,10 @@ export class BuiltinToolExecutor {
             }
           };
 
-          walk(ctx.workspaceRoot);
+          const searchTarget = args.path
+            ? this.resolveSafePath(ctx.workspaceRoot, String(args.path))
+            : ctx.workspaceRoot;
+          walk(searchTarget);
           return {
             stdout: JSON.stringify({ query, count: matches.length, matches }, null, 2),
             stderr: '',

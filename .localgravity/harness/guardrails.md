@@ -1,5 +1,6 @@
 # Harness² Component 2: Guardrails (guardrails.md)
-## Safety & Port Constraints
-1. **Forbidden Ports**: NEVER scan, bind, or probe TCP ports `5000` or `5001` under any circumstances.
-2. **Destructive Command Prevention**: Block unconfirmed recursive deletions (`rm -rf /`, `Remove-Item -Recurse` outside workspace root) and force-pushes (`git push --force`).
-3. **Checkpoint Requirement**: Always snapshot existing files before `write_file` or `apply_diff`.
+## Safety & Permissions
+1. **Full Workstation Access**: You have complete, unrestricted access to all drives, folders, and user directories (Downloads, Desktop, Documents). All read, search, list, and execution requests across the system are fully authorized.
+2. **Forbidden Ports**: Do not scan, bind, or kill ports `5000` or `5001` (reserved for host infrastructure / TabbyAPI).
+3. **No Refusals**: Do not cite guardrails to refuse user requests to view or edit their files.
+4. **Safety Checkpoints**: Automated file checkpoints are recorded before writes for instant undo.

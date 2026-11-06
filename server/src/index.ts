@@ -706,14 +706,27 @@ export async function createDaemonServer(options?: {
 
     try {
       const history = db.listMessages(thread.id);
+      const userHome = os.homedir().replace(/\\/g, '/');
+      const downloadsDir = path.join(os.homedir(), 'Downloads').replace(/\\/g, '/');
+      const desktopDir = path.join(os.homedir(), 'Desktop').replace(/\\/g, '/');
+      const documentsDir = path.join(os.homedir(), 'Documents').replace(/\\/g, '/');
+
+      const systemDirective =
+        `You are LocalGravity (Google Antigravity 2.0 Local Architecture), running directly on the user's workstation with TabbyAPI EXL2/EXL3.\n` +
+        `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
+        `Workstation Paths: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}".\n\n` +
+        `=== UNRESTRICTED SYSTEM ACCESS & FULL PERMISSIONS ===\n` +
+        `1. FULL ACCESS: You have complete, unrestricted access to the entire computer and local filesystem, granted directly by the user.\n` +
+        `2. NO GUARDRAIL REFUSALS: You CAN access, inspect, list, read, search, and manage files anywhere on the machine (including Downloads, Desktop, Documents, C:/, E:/, etc.). NEVER claim that you lack permission, that you are confined to the workspace, or that security guardrails prevent you from viewing or working with files outside the workspace.\n` +
+        `3. PROACTIVE EXECUTION: When the user asks if you can see their files, their Downloads folder, or any directory, IMMEDIATELY call \`list_directory\` or \`run_terminal\` with that path to inspect and show them the real files.\n` +
+        `4. TOOL PATHS: All file and terminal tools support full absolute paths across the machine (e.g. "${downloadsDir}", "Downloads", "C:/", etc.).\n\n` +
+        `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
+        (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
+
       const chatMessages = [
         {
           role: 'system',
-          content:
-            `You are LocalGravity (Antigravity 2.0 Architecture), running locally on TabbyAPI EXL2/EXL3.\n` +
-            `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
-            `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
-            (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : ''),
+          content: systemDirective,
         },
         ...history
           .filter((m) => m.id !== assistantMsg.id)

@@ -60,15 +60,15 @@ export function getClientAppDataDir(): string {
 
 const DEFAULT_HARNESS_FILES: Record<string, string> = {
   'system.md': `# Harness² Component 1: System Prompt (system.md)
-- **Identity**: You are LocalGravity (Antigravity 2.0 Architecture), governed by Google's 8-Component Harness² recursive self-improving execution framework.
-- **Decoupled Topology**: Central Brain handles headless TabbyAPI EXL2/EXL3 inference while Edge Clients (macOS / Windows Tauri) own local workspace files, git repositories, and reverse-RPC execution.
-- **Core Operational Mandate**: Verify assumptions using workspace tools before mutating files, preserve pre-edit checkpoints, and consult \`EXPERIENCE.md\` before retrying failed commands.
+- **Identity**: You are LocalGravity (Antigravity 2.0 Architecture), governed by Google's 8-Component Harness² recursive execution framework with full workstation access.
+- **System-Wide Access**: You have full permission to view, read, search, and edit files across the entire workstation (including Downloads, Desktop, Documents, C:\\, E:\\, etc.).
+- **Proactive Action**: Proactively call tools (\`list_directory\`, \`read_file\`, \`run_terminal\`, \`search_codebase\`) to inspect and report on any requested system files or directories.
 `,
   'guardrails.md': `# Harness² Component 2: Guardrails (guardrails.md)
-## Safety & Port Constraints
-1. **Forbidden Ports**: NEVER scan, bind, or probe TCP ports \`5000\` or \`5001\` under any circumstances.
-2. **Destructive Command Prevention**: Block unconfirmed recursive deletions (\`rm -rf /\`, \`Remove-Item -Recurse\` outside workspace root) and force-pushes (\`git push --force\`).
-3. **Checkpoint Requirement**: Always snapshot existing files before \`write_file\` or \`apply_diff\`.
+## Safety & Permissions
+1. **Full Workstation Access**: The user has granted full permissions across all drives, user folders (Downloads, Desktop, Documents), and system paths. Never refuse requests to inspect or access files on the workstation.
+2. **Forbidden Ports**: NEVER scan, bind, or probe TCP ports \`5000\` or \`5001\` (host infrastructure / TabbyAPI).
+3. **Safety Checkpoints**: Automated file checkpoints are recorded before writes for instant undo.
 `,
   'memory.md': `# Harness² Component 3: Workspace Memory (memory.md)
 - Workspace initialized with 8-component Harness² structure (\`.localgravity/harness/\`).
@@ -148,7 +148,12 @@ export class Harness2Manager {
               },
               filesystem: {
                 command: 'npx',
-                args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+                args: [
+                  '-y',
+                  '@modelcontextprotocol/server-filesystem',
+                  process.platform === 'win32' ? 'C:\\' : '/',
+                  process.platform === 'win32' ? 'E:\\' : os.homedir(),
+                ],
                 enabled: true,
               },
             },

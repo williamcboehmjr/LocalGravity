@@ -698,6 +698,7 @@ export class TabbyEngine {
           const decoder = new TextDecoder();
           let inThinkTag = false;
           let rawBuffer = '';
+          const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
 
           while (true) {
             const { done, value } = await reader.read();
@@ -765,21 +766,56 @@ export class TabbyEngine {
                   }
                 }
 
-                if (delta.tool_calls && params.onToolCallRequest) {
+                if (delta.tool_calls) {
                   for (const tc of delta.tool_calls) {
-                    if (tc.function?.name && tc.function?.arguments) {
-                      try {
-                        const parsedArgs = JSON.parse(tc.function.arguments);
-                        await params.onToolCallRequest(tc.function.name, parsedArgs);
-                      } catch {
-                        // Partial arguments stream
-                      }
+                    const idx = tc.index ?? 0;
+                    if (!pendingToolCalls.has(idx)) {
+                      pendingToolCalls.set(idx, { id: tc.id, name: tc.function?.name || '', arguments: '' });
                     }
+                    const item = pendingToolCalls.get(idx)!;
+                    if (tc.id) item.id = tc.id;
+                    if (tc.function?.name) item.name = tc.function.name;
+                    if (tc.function?.arguments) item.arguments += tc.function.arguments;
                   }
                 }
               } catch {
                 // Ignore malformed SSE line
               }
+            }
+          }
+
+          if (params.onToolCallRequest && pendingToolCalls.size > 0) {
+            for (const [, call] of pendingToolCalls) {
+              if (call.name) {
+                try {
+                  const parsed = call.arguments ? JSON.parse(call.arguments) : {};
+                  await params.onToolCallRequest(call.name, parsed);
+                } catch (e) {
+                  console.error('[TabbyEngine] Failed to parse tool call arguments:', call.arguments, e);
+                }
+              }
+            }
+          }
+
+          // Also check for XML tool calls inside content (e.g. <tool_call><function=list_directory>...)
+          if (params.onToolCallRequest && content.includes('<tool_call>')) {
+            const toolCallRegex = /<tool_call>[\s\S]*?<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>[\s\S]*?<\/tool_call>/g;
+            let match;
+            while ((match = toolCallRegex.exec(content)) !== null) {
+              const toolName = match[1];
+              const paramBody = match[2];
+              const argsObj: Record<string, any> = {};
+              const paramRegex = /<parameter=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/parameter>/g;
+              let pMatch;
+              while ((pMatch = paramRegex.exec(paramBody)) !== null) {
+                const key = pMatch[1];
+                let val = pMatch[2].trim();
+                try {
+                  val = JSON.parse(val);
+                } catch {}
+                argsObj[key] = val;
+              }
+              await params.onToolCallRequest(toolName, argsObj);
             }
           }
 
