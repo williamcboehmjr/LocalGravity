@@ -511,6 +511,15 @@ export async function createDaemonServer(options?: {
     };
   });
 
+  app.get('/api/system/summary', async () => {
+    const heapUsedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    return {
+      nodeVersion: process.version,
+      platform: process.platform,
+      memoryUsageMb: heapUsedMb,
+    };
+  });
+
   app.get('/api/runtime/ports', async () => ports);
 
   app.get('/api/client/appdata', async () => {
