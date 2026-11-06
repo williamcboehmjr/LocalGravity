@@ -7,18 +7,58 @@ export interface TaskItem {
   category?: string;
 }
 
+export interface FileCheckpointItem {
+  id: string;
+  thread_id: string;
+  message_id: string;
+  file_path: string;
+  previous_content_blob: string | null;
+  new_content_blob: string;
+  created_at: string;
+}
+
+export type WorkbenchTab = 'editor' | 'terminal' | 'preview' | 'harness' | 'tasks' | 'plan' | 'evidence';
+
 interface ArtifactState {
-  activeTab: 'tasks' | 'plan' | 'evidence';
+  activeTab: WorkbenchTab;
   taskMarkdown: string;
   parsedTasks: TaskItem[];
   planMarkdown: string;
-  evidenceItems: Array<{ id: string; type: 'screenshot' | 'log' | 'diff'; title: string; data: string; timestamp: number }>;
+  evidenceItems: Array<{
+    id: string;
+    type: 'screenshot' | 'log' | 'diff';
+    title: string;
+    data: string;
+    timestamp: number;
+  }>;
+  workspaceFiles: Array<{ path: string; name: string; type: 'file' | 'directory' }>;
+  activeFilePath: string;
+  activeFileContent: string;
+  diffOriginalContent: string | null;
+  activeCheckpoint: FileCheckpointItem | null;
+  checkpoints: FileCheckpointItem[];
+  latestVisionCapture: {
+    base64DataUrl: string;
+    activeWindowTitle: string;
+    resolution?: string;
+  } | null;
+  previewUrl: string;
 
-  setActiveTab: (tab: 'tasks' | 'plan' | 'evidence') => void;
+  setActiveTab: (tab: WorkbenchTab) => void;
   setTaskMarkdown: (md: string) => void;
-  toggleTask: (taskId: string) => string; // Returns updated markdown for two-way sync
+  toggleTask: (taskId: string) => string;
   setPlanMarkdown: (md: string) => void;
   addEvidence: (item: { type: 'screenshot' | 'log' | 'diff'; title: string; data: string }) => void;
+  setWorkspaceFiles: (files: Array<{ path: string; name: string; type: 'file' | 'directory' }>) => void;
+  setActiveFile: (path: string, content: string, diffOriginal?: string | null) => void;
+  setCheckpoints: (checkpoints: FileCheckpointItem[]) => void;
+  setActiveCheckpoint: (cp: FileCheckpointItem | null) => void;
+  setLatestVisionCapture: (capture: {
+    base64DataUrl: string;
+    activeWindowTitle: string;
+    resolution?: string;
+  }) => void;
+  setPreviewUrl: (url: string) => void;
 }
 
 function parseTasksFromMarkdown(md: string): TaskItem[] {
@@ -48,23 +88,35 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
   return items;
 }
 
+const initialTaskMd = `# Antigravity 2.0 Hardening Checklist\n\n## Core Engine\n- [x] Dynamic Port Discovery (Never touch 5000/5001)\n- [x] TabbyAPI EXL2/EXL3 Integration (Q4 KV, N-gram x4)\n- [x] SysRAM Inactive Weight Pre-Warmer\n- [x] SQLite WAL Hierarchy (Projects -> Threads -> Messages -> Tools -> Checkpoints)\n- [x] 3-Pane Antigravity 2.0 Obsidian UI + Monaco Diff + xterm.js`;
+
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
-  activeTab: 'tasks',
-  taskMarkdown: `# LocalGravity Tasks\n\n- [/] Initialize monorepo directory layout\n- [ ] Brain Scaffolding: Setup uv virtualenv and FastAPI\n- [ ] Client Scaffolding: Setup React 19 and Tailwind\n- [ ] Edge Reverse-RPC Runner implementation\n- [ ] 3-Pane Antigravity UI parity`,
-  parsedTasks: [],
-  planMarkdown: `# Implementation Plan\n\n*Reviewing plan blueprint...*`,
+  activeTab: 'editor',
+  taskMarkdown: initialTaskMd,
+  parsedTasks: parseTasksFromMarkdown(initialTaskMd),
+  planMarkdown: `# LocalGravity 2.0 Architecture\n\n- **Backend**: Fastify Headless Core + WebSocket Multiplexer (\`/ws/sync\`, \`/ws/terminal\`)\n- **Inference**: TabbyAPI EXL2/EXL3 3-Tier Suite (\`Low 4B\`, \`Med 9B\`, \`High 27B VL\`) + 3x3 Thinking Matrix (\`Off\`, \`Fast\`, \`Deep\`)\n- **Persistence**: SQLite WAL with 250ms in-flight stream rehydration`,
   evidenceItems: [],
+  workspaceFiles: [],
+  activeFilePath: 'README.md',
+  activeFileContent: '',
+  diffOriginalContent: null,
+  activeCheckpoint: null,
+  checkpoints: [],
+  latestVisionCapture: null,
+  previewUrl: '',
 
   setActiveTab: (tab) => set({ activeTab: tab }),
-  setTaskMarkdown: (md) => set({
-    taskMarkdown: md,
-    parsedTasks: parseTasksFromMarkdown(md),
-  }),
+  setTaskMarkdown: (md) =>
+    set({
+      taskMarkdown: md,
+      parsedTasks: parseTasksFromMarkdown(md),
+    }),
   toggleTask: (taskId) => {
     const { parsedTasks } = get();
-    const updated = parsedTasks.map((t) => t.id === taskId ? { ...t, completed: !t.completed } : t);
+    const updated = parsedTasks.map((t) =>
+      t.id === taskId ? { ...t, completed: !t.completed } : t
+    );
 
-    // Reconstruct markdown
     let newMd = '';
     let lastCat = '';
     updated.forEach((t) => {
@@ -79,10 +131,33 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     return newMd;
   },
   setPlanMarkdown: (md) => set({ planMarkdown: md }),
-  addEvidence: (item) => set((state) => ({
-    evidenceItems: [
-      ...state.evidenceItems,
-      { ...item, id: Math.random().toString(36).substring(2, 9), timestamp: Date.now() },
-    ],
-  })),
+  addEvidence: (item) =>
+    set((state) => ({
+      evidenceItems: [
+        ...state.evidenceItems,
+        { ...item, id: Math.random().toString(36).substring(2, 9), timestamp: Date.now() },
+      ],
+    })),
+  setWorkspaceFiles: (files) => set({ workspaceFiles: files }),
+  setActiveFile: (path, content, diffOriginal = null) =>
+    set({
+      activeFilePath: path,
+      activeFileContent: content,
+      diffOriginalContent: diffOriginal,
+    }),
+  setCheckpoints: (checkpoints) => set({ checkpoints }),
+  setActiveCheckpoint: (cp) =>
+    set({
+      activeCheckpoint: cp,
+      ...(cp
+        ? {
+            activeFilePath: cp.file_path,
+            activeFileContent: cp.new_content_blob,
+            diffOriginalContent: cp.previous_content_blob ?? '',
+            activeTab: 'editor',
+          }
+        : {}),
+    }),
+  setLatestVisionCapture: (capture) => set({ latestVisionCapture: capture }),
+  setPreviewUrl: (url) => set({ previewUrl: url }),
 }));

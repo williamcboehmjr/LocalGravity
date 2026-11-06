@@ -1,25 +1,42 @@
 server:
   host: "0.0.0.0"
   port: 3390
+  forbidden_ports: [5000, 5001]
   cors_origins: ["*"]
 
-ollama:
-  base_url: "http://localhost:11434"
+tabby_api:
+  base_url: "http://127.0.0.1:3450"
   timeout_seconds: 180.0
-  keep_alive_lease: "10m"
-  ramdisk_path: null  # Set to "R:\\models" if using dedicated RAMDisk
+  cache_mode: "Q4"
+  autosplit_reserve: [256]
+  draft_mode: "ngram"
+  hybrid_draft_tokens: 4
+  sysram_prewarm: true
 
 models:
   tiers:
-    low: "qwen3.5:4b"
-    medium: "qwen3.5:9b"
-    high: "qwen3.8-27b-vl:latest"
+    low: "Qwen3.5-4B-EXL3-4.5bpw"
+    medium: "Qwen3.5-9B-EXL3-4.0bpw"
+    high: "Qwen-3.8-27B-VL-EXL3-3.5bpw"
 
 thinking:
   budgets:
     "off": 0
-    "fast": 256
-    "deep": 2048
+    "fast": 250
+    "deep": 8192
+
+harness2:
+  workspace_dir: ".localgravity/harness"
+  components:
+    - "system.md"
+    - "guardrails.md"
+    - "memory.md"
+    - "EXPERIENCE.md"
+    - "tools.md"
+    - "subagents.md"
+    - "skills/"
+    - "scripts/"
+    - "plugins/"
 
 skills:
   directory: "../skills"

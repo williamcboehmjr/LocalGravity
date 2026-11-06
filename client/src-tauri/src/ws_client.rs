@@ -1,5 +1,6 @@
 //! Reverse-RPC WebSocket Client for LocalGravity Edge Executor.
-//! Connects to Central Brain, listens for EXEC_REQUEST, and executes locally.
+//! Connects to Central Brain, listens for EXEC_REQUEST, executes locally on the client OS,
+//! and triggers the Harness² Propose-Probe-Compose loop on double tool failure.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -9,6 +10,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::file_ops::FileOps;
+use crate::harness::HarnessEngine;
 use crate::policy::PolicyGatekeeper;
 use crate::runner::{CommandRunner, StreamChunk};
 
@@ -17,15 +19,19 @@ pub struct EdgeWsClient {
     pub session_id: String,
     pub workspace_path: String,
     pub policy: Arc<Mutex<PolicyGatekeeper>>,
+    pub harness: Arc<Mutex<HarnessEngine>>,
 }
 
 impl EdgeWsClient {
     pub fn new(brain_url: String, session_id: String, workspace_path: String) -> Self {
+        let _ = HarnessEngine::ensure_client_app_data();
+        let _ = HarnessEngine::ensure_workspace_harness(&workspace_path);
         Self {
             brain_url,
             session_id,
             workspace_path,
             policy: Arc::new(Mutex::new(PolicyGatekeeper::default())),
+            harness: Arc::new(Mutex::new(HarnessEngine::default())),
         }
     }
 
@@ -34,7 +40,6 @@ impl EdgeWsClient {
         let (ws_stream, _) = connect_async(&ws_url).await?;
         let (mut write, mut read) = ws_stream.split();
 
-        // 1. Send SESSION_INIT
         #[cfg(target_os = "windows")]
         let platform = "windows";
         #[cfg(target_os = "macos")]
@@ -42,19 +47,21 @@ impl EdgeWsClient {
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let platform = "linux";
 
+        let appdata = HarnessEngine::ensure_client_app_data().ok();
+
         let init_msg = serde_json::json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "type": "SESSION_INIT",
             "payload": {
                 "workspace_path": self.workspace_path,
                 "platform": platform,
-                "client_version": "0.1.0",
-                "hostname": "edge-client"
+                "client_version": "2.0.0",
+                "hostname": "edge-client",
+                "appdata": appdata
             }
         });
         write.send(Message::Text(init_msg.to_string())).await?;
 
-        // Shared writer channel for concurrent async tasks
         let (tx, mut rx) = mpsc::channel::<String>(100);
         tokio::spawn(async move {
             while let Some(msg_text) = rx.recv().await {
@@ -64,7 +71,6 @@ impl EdgeWsClient {
             }
         });
 
-        // 2. Read incoming commands from Central Brain
         while let Some(msg_result) = read.next().await {
             let msg = match msg_result {
                 Ok(Message::Text(text)) => text,
@@ -84,6 +90,7 @@ impl EdgeWsClient {
                 let action = payload["action"].as_str().unwrap_or("");
                 let tx_clone = tx.clone();
                 let workspace = self.workspace_path.clone();
+                let harness_ref = self.harness.clone();
 
                 match action {
                     "shell" => {
@@ -95,7 +102,6 @@ impl EdgeWsClient {
                             let req_id_stream = req_id.clone();
                             let tx_stream = tx_clone.clone();
 
-                            // Forward live stdout/stderr chunks
                             let stream_task = tokio::spawn(async move {
                                 while let Some(chunk) = chunk_rx.recv().await {
                                     let (stream_name, text) = match chunk {
@@ -115,8 +121,30 @@ impl EdgeWsClient {
                                 }
                             });
 
-                            let result = CommandRunner::execute_stream(&cmd, Some(&cwd), chunk_tx).await;
+                            let mut result =
+                                CommandRunner::execute_stream(&cmd, Some(&cwd), chunk_tx).await;
                             let _ = stream_task.await;
+
+                            // Harness² Recursive Propose-Probe-Compose Check on Failure
+                            if result.exit_code != 0 {
+                                let mut h = harness_ref.lock().await;
+                                let count = h.failure_counts.entry(cmd.clone()).or_insert(0);
+                                *count += 1;
+                                if *count >= 2 {
+                                    let (probe_tx, _probe_rx) = mpsc::channel::<StreamChunk>(10);
+                                    let probe_res =
+                                        CommandRunner::execute_stream(&cmd, Some(&cwd), probe_tx)
+                                            .await;
+                                    let _ = h.propose_and_compose_fix(
+                                        &cwd,
+                                        &cmd,
+                                        result.error.as_deref().unwrap_or("shell failure"),
+                                        probe_res.exit_code,
+                                    );
+                                    *count = 0;
+                                    result = probe_res;
+                                }
+                            }
 
                             let result_msg = serde_json::json!({
                                 "id": uuid::Uuid::new_v4().to_string(),

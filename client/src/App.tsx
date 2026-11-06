@@ -1,10 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, PanelLeftClose, PanelRightClose, Sparkles, Smartphone, MessageSquare, ListTodo, Camera } from 'lucide-react';
+import {
+  Settings,
+  PanelLeftClose,
+  PanelRightClose,
+  Sparkles,
+  Smartphone,
+  MessageSquare,
+  ListTodo,
+  FileCode2,
+  Terminal,
+  Eye,
+  ShieldCheck,
+  Download,
+  RotateCcw,
+  Trash2,
+  ChevronRight,
+} from 'lucide-react';
 import { useSessionStore, QueuedMessage } from './store/useSessionStore';
-import { useArtifactStore } from './store/useArtifactStore';
+import { useArtifactStore, WorkbenchTab } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
 import { Splitter } from './components/common/Splitter';
-import { Badge } from './components/common/Badge';
 import { WorkspacePicker } from './components/left-rail/WorkspacePicker';
 import { SessionList } from './components/left-rail/SessionList';
 import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
@@ -17,17 +32,29 @@ import { PolicyToggle } from './components/center-canvas/PolicyToggle';
 import { TaskChecklist } from './components/right-canvas/TaskChecklist';
 import { PlanViewer } from './components/right-canvas/PlanViewer';
 import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
+import { WorkbenchEditor } from './components/right-canvas/WorkbenchEditor';
+import { IntegratedTerminal } from './components/right-canvas/IntegratedTerminal';
+import { VisionPreviewTab } from './components/right-canvas/VisionPreviewTab';
+import { HarnessWorkbenchTab } from './components/right-canvas/HarnessWorkbenchTab';
 import { ModelTier, ThinkingBudget } from './types/protocol';
 
 export const App: React.FC = () => {
   const {
+    projects,
+    activeProjectId,
     sessionId,
+    sessions,
     workspacePath,
     hostUrl,
+    apiBaseUrl,
+    setHostUrl,
+    setApiBaseUrl,
     setIsConnected,
     selectedTier,
+    setSelectedTier,
     thinkingBudget,
     activeModelName,
+    messages,
     addMessage,
     updateLastAssistantMessage,
     updateLastAssistantTool,
@@ -41,35 +68,61 @@ export const App: React.FC = () => {
     enqueueMessage,
     dequeueMessage,
     removeQueuedMessage,
+    setProjects,
+    setThreads,
+    hydrateMessagesFromServer,
+    clearMessages,
   } = useSessionStore();
 
-  const { activeTab, setActiveTab, setTaskMarkdown, setPlanMarkdown, parsedTasks } = useArtifactStore();
-  const { setTelemetry } = useTelemetryStore();
+  const {
+    activeTab,
+    setActiveTab,
+    setTaskMarkdown,
+    setPlanMarkdown,
+    parsedTasks,
+    checkpoints,
+    setCheckpoints,
+    setActiveCheckpoint,
+    setLatestVisionCapture,
+  } = useArtifactStore();
 
-  // Pane width state (resizable)
-  const [leftRailWidth, setLeftRailWidth] = useState(260);
-  const [rightDrawerWidth, setRightDrawerWidth] = useState(360);
+  const { setTelemetry, setMcpServers } = useTelemetryStore();
+
+  const [leftRailWidth, setLeftRailWidth] = useState(275);
+  const [rightDrawerWidth, setRightDrawerWidth] = useState(460);
   const [showLeftRail, setShowLeftRail] = useState(window.innerWidth > 900);
   const [showRightDrawer, setShowRightDrawer] = useState(window.innerWidth > 1100);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteOpen, setIsRemoteOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState<'chat' | 'tasks' | 'evidence'>('chat');
+  const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Initialize and maintain WebSocket connection to Central Brain
+  // Auto-discover runtime ports from `/runtime-ports.json` if running via Vite dev or Tauri
+  useEffect(() => {
+    fetch('/runtime-ports.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        if (cfg && cfg.daemonPort && cfg.daemonPort !== 5000 && cfg.daemonPort !== 5001) {
+          const isRemote =
+            window.location.hostname &&
+            window.location.hostname !== 'localhost' &&
+            window.location.hostname !== '127.0.0.1';
+          const host = isRemote ? window.location.hostname : 'localhost';
+          setHostUrl(`ws://${host}:${cfg.daemonPort}`);
+          setApiBaseUrl(`http://${host}:${cfg.daemonPort}`);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Connect and multiplex state over `/ws/sync`
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
 
-    // Detect shared session ID from query string if connecting from mobile
-    const params = new URLSearchParams(window.location.search);
-    const querySession = params.get('session') || params.get('session_id');
-    const effectiveSessionId = querySession || sessionId;
-
-    // Determine host dynamically if accessed remotely
     let effectiveHost = hostUrl;
-    if (window.location.host && !window.location.host.includes('localhost:5173')) {
+    if (window.location.host && !window.location.host.includes(':5173')) {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       effectiveHost = `${proto}//${window.location.host}`;
     }
@@ -77,7 +130,7 @@ export const App: React.FC = () => {
     const connect = () => {
       try {
         const cleanHost = effectiveHost.replace(/^http/, 'ws');
-        const url = `${cleanHost}/ws/agent/${effectiveSessionId}`;
+        const url = `${cleanHost}/ws/sync`;
         ws = new WebSocket(url);
         wsRef.current = ws;
 
@@ -88,9 +141,11 @@ export const App: React.FC = () => {
               id: 'init-' + Date.now(),
               type: 'SESSION_INIT',
               payload: {
+                thread_id: sessionId,
+                project_id: activeProjectId,
                 workspace_path: workspacePath,
-                platform: 'windows',
-                client_version: '0.1.0',
+                platform: navigator.userAgent.toLowerCase().includes('mac') ? 'macos' : 'windows',
+                client_version: '2.0.0',
               },
             })
           );
@@ -98,7 +153,7 @@ export const App: React.FC = () => {
 
         ws.onclose = () => {
           setIsConnected(false);
-          reconnectTimeout = setTimeout(connect, 3000);
+          reconnectTimeout = setTimeout(connect, 2500);
         };
 
         ws.onerror = () => {
@@ -110,8 +165,52 @@ export const App: React.FC = () => {
             const data = JSON.parse(event.data);
             const { type, payload } = data;
 
-            if (type === 'MODEL_STATE') {
+            if (type === 'SYNC_STATE') {
+              if (payload.projects?.length > 0) {
+                setProjects(payload.projects, payload.activeProject?.id);
+              }
+              if (payload.threads) {
+                setThreads(payload.threads, payload.activeThreadId);
+              }
+              if (payload.messages) {
+                hydrateMessagesFromServer(payload.messages, payload.activeStreams || []);
+              }
+              if (payload.checkpoints) {
+                setCheckpoints(payload.checkpoints);
+              }
+              if (payload.mcpServers) {
+                setMcpServers(payload.mcpServers);
+              }
+              if (payload.tabby || payload.telemetry) {
+                setTelemetry({
+                  vramUsedGb: payload.telemetry?.vramUsedGb ?? 6.8,
+                  vramTotalGb: payload.telemetry?.vramTotalGb ?? 16.0,
+                  vramPercent: payload.telemetry?.vramPercent ?? 42,
+                  hostRamUsedGb: payload.telemetry?.hostRamUsedGb ?? 24.0,
+                  hostRamTotalGb: payload.telemetry?.hostRamTotalGb ?? 128.0,
+                  hostRamPercent: payload.telemetry?.hostRamPercent ?? 19,
+                  gpuUtilization: payload.telemetry?.gpuUtilization ?? 12,
+                  cpuUtilization: payload.telemetry?.cpuUtilization ?? 8,
+                  activeTier: payload.tabby?.activeTier || 'medium',
+                  activeModel: payload.tabby?.activeModel || 'Qwen3.5-9B-EXL3-4.0bpw',
+                  tokensPerSec: payload.tabby?.tokensPerSec ?? 74.2,
+                  lastSwapDurationMs: payload.tabby?.lastSwapDurationMs ?? 840,
+                  sysramCache: payload.tabby?.sysramCache,
+                  daemonPort: payload.ports?.daemonPort ?? 3390,
+                  tabbyPort: payload.ports?.tabbyPort ?? 3450,
+                  lanUrl: payload.ports?.lanUrl ?? window.location.origin,
+                });
+              }
+            } else if (type === 'MODEL_STATE') {
               setModelState(payload.status, payload.active_model, payload.status_text);
+              if (payload.active_tier) setSelectedTier(payload.active_tier);
+              setTelemetry({
+                activeTier: payload.active_tier,
+                activeModel: payload.active_model,
+                ...(payload.tokens_per_sec ? { tokensPerSec: payload.tokens_per_sec } : {}),
+                ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
+                ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
+              });
             } else if (type === 'THOUGHT_STREAM') {
               appendStreamingThought(
                 payload.chunk,
@@ -124,10 +223,23 @@ export const App: React.FC = () => {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
               } else {
-                updateLastAssistantMessage(payload.chunk);
+                updateLastAssistantMessage(payload.chunk, payload.output_tokens);
               }
             } else if (type === 'TOOL_EVENT') {
-              updateLastAssistantTool(payload.command, payload.output, payload.status);
+              updateLastAssistantTool(payload.command, payload.output, payload.status, {
+                id: payload.tool_execution_id,
+                toolName: payload.tool_name,
+                durationMs: payload.duration_ms,
+                exitCode: payload.exit_code,
+              });
+            } else if (type === 'CHECKPOINT_CREATED') {
+              if (payload.checkpoint) {
+                setCheckpoints([payload.checkpoint, ...checkpoints]);
+              }
+            } else if (type === 'VISION_CAPTURE') {
+              if (payload?.base64DataUrl) {
+                setLatestVisionCapture(payload);
+              }
             } else if (type === 'ARTIFACT_SYNC') {
               if (payload.artifact_name === 'task.md') {
                 setTaskMarkdown(payload.content);
@@ -143,15 +255,17 @@ export const App: React.FC = () => {
                 hostRamTotalGb: payload.host_ram_total_gb,
                 gpuUtilization: payload.gpu_utilization_percent,
                 cpuUtilization: payload.cpu_utilization_percent,
+                ...(payload.tokens_per_sec ? { tokensPerSec: payload.tokens_per_sec } : {}),
+                ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
+                ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
               });
             }
           } catch (e) {
             console.error('Failed to parse incoming WebSocket message', e);
           }
         };
-      } catch (err) {
-        console.error('WebSocket connection error:', err);
-        reconnectTimeout = setTimeout(connect, 3000);
+      } catch {
+        reconnectTimeout = setTimeout(connect, 2500);
       }
     };
 
@@ -161,9 +275,8 @@ export const App: React.FC = () => {
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, [hostUrl, sessionId, workspacePath]);
+  }, [hostUrl, sessionId, activeProjectId]);
 
-  // Submit prompt to Brain
   const handleSendPrompt = (
     text: string,
     images?: string[],
@@ -185,14 +298,12 @@ export const App: React.FC = () => {
       id: 'msg-' + (Date.now() + 1),
       role: 'assistant',
       content: '',
-      tier: tier,
+      tier,
       modelName: activeModelName,
       timestamp: Date.now(),
     });
 
-    // Auto-name project based on first message
     autoNameSessionFromPrompt(sessionId, text);
-
     setIsGenerating(true);
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -202,8 +313,9 @@ export const App: React.FC = () => {
           type: 'PROMPT_SUBMIT',
           payload: {
             session_id: sessionId,
+            thread_id: sessionId,
             prompt: text,
-            tier: tier,
+            tier,
             thinking_budget: budget,
             images,
           },
@@ -217,22 +329,18 @@ export const App: React.FC = () => {
       text,
       images,
       tier: selectedTier,
-      thinkingBudget: thinkingBudget,
+      thinkingBudget,
     });
   };
 
   const handleInterruptAndSend = (item: QueuedMessage) => {
-    // 1. Remove from queue
     removeQueuedMessage(item.id);
-    // 2. Stop active generation immediately
     handleStopGeneration();
-    // 3. Immediately send prompt with its assigned tier & thinking budget
     setTimeout(() => {
       handleSendPrompt(item.text, item.images, item.tier, item.thinkingBudget);
     }, 60);
   };
 
-  // Auto-dequeue next queued message when current turn finishes
   const isDequeuingRef = useRef(false);
   useEffect(() => {
     if (!isGenerating && messageQueue.length > 0 && !isDequeuingRef.current) {
@@ -260,6 +368,7 @@ export const App: React.FC = () => {
           type: 'TIER_SWITCH',
           payload: {
             session_id: sessionId,
+            thread_id: sessionId,
             new_tier: newTier,
           },
         })
@@ -277,10 +386,69 @@ export const App: React.FC = () => {
           type: 'STOP_GENERATION',
           payload: {
             session_id: sessionId,
+            thread_id: sessionId,
           },
         })
       );
     }
+  };
+
+  const handleNewThread = async () => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/threads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: activeProjectId,
+          title: 'New Thread',
+          active_model_tier: selectedTier,
+          active_thinking_budget: thinkingBudget,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.thread) {
+          const listRes = await fetch(
+            `${apiBaseUrl}/api/threads?project_id=${encodeURIComponent(activeProjectId)}`
+          );
+          if (listRes.ok) {
+            const listData = await listRes.json();
+            setThreads(listData.threads || [data.thread], data.thread.id);
+            clearMessages();
+          }
+        }
+      }
+    } catch {}
+  };
+
+  const handleSelectThread = async (threadId: string) => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`);
+      if (res.ok) {
+        const data = await res.json();
+        hydrateMessagesFromServer(data.messages || [], data.activeStreams || []);
+        if (data.checkpoints) setCheckpoints(data.checkpoints);
+      }
+    } catch {}
+  };
+
+  const handleClearContext = async () => {
+    clearMessages();
+    try {
+      await fetch(`${apiBaseUrl}/api/threads/${sessionId}/clear`, { method: 'POST' });
+    } catch {}
+  };
+
+  const handleExportThread = () => {
+    const blob = new Blob([JSON.stringify({ sessionId, messages }, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `localgravity-${sessionId}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleArtifactSync = (newMarkdown: string) => {
@@ -300,107 +468,175 @@ export const App: React.FC = () => {
     }
   };
 
+  const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0];
+  const activeSession = sessions.find((s) => s.id === sessionId);
   const totalTasks = parsedTasks.length;
   const completedTasks = parsedTasks.filter((t) => t.completed).length;
 
+  const workbenchTabs: Array<{ id: WorkbenchTab; label: string; icon: React.ReactNode }> = [
+    { id: 'editor', label: 'Code & Diff', icon: <FileCode2 className="w-3.5 h-3.5" /> },
+    { id: 'terminal', label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> },
+    { id: 'preview', label: 'Vision / App', icon: <Eye className="w-3.5 h-3.5" /> },
+    { id: 'harness', label: 'Harness²', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+    { id: 'tasks', label: 'Tasks', icon: <ListTodo className="w-3.5 h-3.5" /> },
+  ];
+
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] w-screen bg-canvas overflow-hidden font-sans">
-      {/* 1. Left Navigation Rail (Desktop) */}
+    <div className="flex h-[100dvh] max-h-[100dvh] w-screen bg-[#0B0D11] text-[#E8EAED] overflow-hidden font-sans">
+      {/* 1. LEFT PANE (Project & Thread Navigator - #111318) */}
       {showLeftRail && (
         <aside
           style={{ width: `${leftRailWidth}px` }}
-          className="shrink-0 h-full bg-surface border-r border-border-subtle hidden md:flex flex-col p-3 space-y-3 select-none"
+          className="shrink-0 h-full bg-[#111318] border-r border-[#262B36] hidden md:flex flex-col p-3 space-y-3 select-none"
         >
-          {/* Header */}
-          <div className="flex items-center justify-between pb-2 border-b border-border-subtle">
+          {/* Brand Header */}
+          <div className="flex items-center justify-between pb-2 border-b border-[#262B36]">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-accent-blue/20 border border-accent-blue/40 flex items-center justify-center text-accent-blue">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-[#8AB4F8]/25 via-[#C58AF9]/25 to-[#F28B82]/25 border border-[#8AB4F8]/50 flex items-center justify-center text-[#8AB4F8]">
                 <Sparkles className="w-3.5 h-3.5" />
               </div>
-              <span className="font-semibold text-sm tracking-tight text-text-primary">LocalGravity</span>
+              <span className="font-semibold text-sm tracking-tight text-[#E8EAED]">
+                Antigravity 2.0
+              </span>
             </div>
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={() => setIsSettingsOpen(true)}
-                className="p-1 hover:bg-surface-muted rounded text-text-muted hover:text-text-primary"
+                className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED]"
                 title="Settings"
               >
                 <Settings className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={() => setShowLeftRail(false)}
-                className="p-1 hover:bg-surface-muted rounded text-text-muted hover:text-text-primary"
-                title="Collapse Rail"
+                className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED]"
+                title="Collapse Left Pane"
               >
                 <PanelLeftClose className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          <WorkspacePicker />
-          <NodeStatusBadge />
-          <SessionList />
+          {/* Top Project / Workspace Switcher Dropdown */}
+          <WorkspacePicker
+            onSelectProject={async (projId) => {
+              try {
+                const res = await fetch(
+                  `${apiBaseUrl}/api/threads?project_id=${encodeURIComponent(projId)}`
+                );
+                if (res.ok) {
+                  const data = await res.json();
+                  setThreads(data.threads || []);
+                }
+              } catch {}
+            }}
+          />
+
+          {/* Chronological & Pinned Threads List + New Thread (Ctrl+N) */}
+          <SessionList
+            onNewThread={handleNewThread}
+            onSelectThread={handleSelectThread}
+          />
+
+          {/* Skills Drawer */}
           <SkillsDrawer />
+
+          {/* Bottom Hardware & MCP Telemetry Footer */}
+          <NodeStatusBadge />
         </aside>
       )}
 
       {showLeftRail && (
-        <Splitter onResize={(delta) => setLeftRailWidth((prev) => Math.max(200, Math.min(450, prev + delta)))} className="hidden md:flex" />
+        <Splitter
+          onResize={(delta) =>
+            setLeftRailWidth((prev) => Math.max(220, Math.min(420, prev + delta)))
+          }
+          className="hidden md:flex"
+        />
       )}
 
-      {/* 2. Center Canvas */}
-      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-canvas relative">
-        {/* Center Canvas Top Bar */}
-        <header className="h-12 sm:h-13 shrink-0 border-b border-border-subtle px-3 sm:px-4 flex items-center justify-between bg-surface/60 z-10">
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            {/* Desktop Left Rail Toggle */}
+      {/* 2. CENTER PANE (Agent Stream & Prompt Cockpit - #161920) */}
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-[#161920] relative">
+        {/* Center Breadcrumb Header: Project Name / Thread Title */}
+        <header className="h-12 shrink-0 border-b border-[#262B36] px-3 sm:px-4 flex items-center justify-between bg-[#111318]/90 z-10">
+          <div className="flex items-center gap-2 min-w-0">
             {!showLeftRail && (
               <button
+                type="button"
                 onClick={() => setShowLeftRail(true)}
-                className="p-1.5 hover:bg-surface rounded text-text-muted hover:text-text-primary mr-1 hidden md:block"
-                title="Open Left Rail"
+                className="p-1.5 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] mr-1 hidden md:block"
+                title="Expand Left Navigator"
               >
-                <Sparkles className="w-4 h-4 text-accent-blue" />
+                <Sparkles className="w-4 h-4 text-[#8AB4F8]" />
               </button>
             )}
 
-            {/* Mobile Settings Trigger */}
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              className="p-2 hover:bg-surface rounded-lg text-text-muted hover:text-text-primary md:hidden"
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-
-            <span className="text-sm sm:text-base font-semibold tracking-tight text-text-primary truncate">
-              LocalGravity
-            </span>
-
-            <Badge variant="blue" size="sm" className="hidden xs:inline-flex">
-              ⚡ {selectedTier.toUpperCase()}
-            </Badge>
+            <div className="flex items-center gap-1.5 text-xs sm:text-sm min-w-0 truncate">
+              <span className="font-semibold text-[#9AA0A6] truncate">
+                {activeProject?.name || 'LocalGravity'}
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 text-[#5F6368] shrink-0" />
+              <span className="font-semibold text-[#E8EAED] truncate">
+                {activeSession?.title || 'Active Thread'}
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Phone Remote Button */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {checkpoints.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveCheckpoint(checkpoints[0]);
+                  setActiveTab('editor');
+                  setShowRightDrawer(true);
+                }}
+                className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#1C2029] border border-[#262B36] hover:border-[#8AB4F8] text-xs text-[#8AB4F8] transition-colors"
+                title="Inspect or Rollback Latest File Checkpoint"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Checkpoints ({checkpoints.length})</span>
+              </button>
+            )}
+
             <button
-              onClick={() => setIsRemoteOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface border border-border-subtle hover:bg-surface-muted text-xs sm:text-sm text-text-secondary hover:text-text-primary transition-colors"
-              title="Open Mobile Remote QR Code"
+              type="button"
+              onClick={handleExportThread}
+              className="p-1.5 rounded-lg bg-[#1C2029] border border-[#262B36] hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#E8EAED]"
+              title="Export Thread JSON"
             >
-              <Smartphone className="w-4 h-4 text-accent-blue" />
-              <span className="hidden sm:inline">Phone Remote</span>
+              <Download className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleClearContext}
+              className="p-1.5 rounded-lg bg-[#1C2029] border border-[#262B36] hover:bg-[#262B36] text-[#9AA0A6] hover:text-[#F28B82]"
+              title="Clear Thread Context"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsRemoteOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C2029] border border-[#262B36] hover:border-[#8AB4F8] text-xs text-[#9AA0A6] hover:text-[#E8EAED] transition-colors"
+              title="Open Remote Web / LAN Control QR"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-[#8AB4F8]" />
+              <span className="hidden lg:inline">LAN Web</span>
             </button>
 
             <PolicyToggle />
 
-            {/* Desktop Right Drawer Toggle */}
             {!showRightDrawer && (
               <button
+                type="button"
                 onClick={() => setShowRightDrawer(true)}
-                className="p-1.5 hover:bg-surface rounded text-text-muted hover:text-text-primary hidden md:block"
-                title="Open Right Drawer"
+                className="p-1.5 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] hidden md:block"
+                title="Open Right Workbench"
               >
                 <PanelRightClose className="w-4 h-4 rotate-180" />
               </button>
@@ -408,12 +644,15 @@ export const App: React.FC = () => {
           </div>
         </header>
 
-        {/* View Content (Desktop: ChatFeed, Mobile: Chat / Tasks / Evidence) */}
+        {/* Center Body */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          {/* Chat Tab (Default on Desktop) */}
-          <div className={`flex-1 min-h-0 flex flex-col ${mobileTab === 'chat' ? 'flex' : 'hidden md:flex'}`}>
+          <div
+            className={`flex-1 min-h-0 flex flex-col ${
+              mobileTab === 'chat' ? 'flex' : 'hidden md:flex'
+            }`}
+          >
             <ChatFeed />
-            <div className="shrink-0 p-2 sm:p-4 pt-1 bg-gradient-to-t from-canvas via-canvas to-transparent z-10">
+            <div className="shrink-0 p-3 sm:p-4 pt-1 bg-gradient-to-t from-[#0B0D11] via-[#161920] to-transparent z-10">
               <PromptBar
                 onSend={handleSendPrompt}
                 onTierChange={handleTierSwitch}
@@ -424,110 +663,110 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Mobile Tasks Tab */}
-          {mobileTab === 'tasks' && (
-            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-surface overflow-hidden">
-              <TaskChecklist onSync={handleArtifactSync} />
+          {mobileTab === 'workbench' && (
+            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#161920] overflow-hidden">
+              <WorkbenchEditor />
             </div>
           )}
 
-          {/* Mobile Evidence Tab */}
-          {mobileTab === 'evidence' && (
-            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-surface overflow-hidden">
-              <EvidenceDrawer />
+          {mobileTab === 'tasks' && (
+            <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#161920] overflow-hidden">
+              <TaskChecklist onSync={handleArtifactSync} />
             </div>
           )}
         </div>
 
-        {/* Mobile Navigation Tabs (visible only on mobile screens < 768px) */}
-        <nav className="h-15 shrink-0 border-t border-border-subtle flex md:hidden bg-surface pb-[env(safe-area-inset-bottom,0px)] z-20">
+        {/* Mobile Bottom Bar */}
+        <nav className="h-14 shrink-0 border-t border-[#262B36] flex md:hidden bg-[#111318] z-20">
           <button
+            type="button"
             onClick={() => setMobileTab('chat')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs transition-colors ${
-              mobileTab === 'chat' ? 'text-accent-blue font-semibold' : 'text-text-muted hover:text-text-secondary'
+            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
+              mobileTab === 'chat' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
             }`}
           >
-            <MessageSquare className="w-5 h-5" />
-            <span>Chat</span>
+            <MessageSquare className="w-4 h-4" />
+            <span>Stream</span>
           </button>
           <button
+            type="button"
+            onClick={() => setMobileTab('workbench')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
+              mobileTab === 'workbench' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
+            }`}
+          >
+            <FileCode2 className="w-4 h-4" />
+            <span>Workbench</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setMobileTab('tasks')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs relative transition-colors ${
-              mobileTab === 'tasks' ? 'text-accent-blue font-semibold' : 'text-text-muted hover:text-text-secondary'
+            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs ${
+              mobileTab === 'tasks' ? 'text-[#8AB4F8] font-semibold' : 'text-[#9AA0A6]'
             }`}
           >
-            <div className="relative">
-              <ListTodo className="w-5 h-5" />
-              {totalTasks > 0 && (
-                <span className="absolute -top-1.5 -right-2.5 text-[10px] px-1.5 py-0.2 rounded-full bg-accent-blue text-white font-mono font-bold leading-tight">
-                  {completedTasks}/{totalTasks}
-                </span>
-              )}
-            </div>
-            <span>Tasks</span>
-          </button>
-          <button
-            onClick={() => setMobileTab('evidence')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 text-xs transition-colors ${
-              mobileTab === 'evidence' ? 'text-accent-blue font-semibold' : 'text-text-muted hover:text-text-secondary'
-            }`}
-          >
-            <Camera className="w-5 h-5" />
-            <span>Evidence</span>
+            <ListTodo className="w-4 h-4" />
+            <span>
+              Tasks ({completedTasks}/{totalTasks})
+            </span>
           </button>
         </nav>
       </main>
 
       {showRightDrawer && (
-        <Splitter onResize={(delta) => setRightDrawerWidth((prev) => Math.max(280, Math.min(600, prev - delta)))} className="hidden md:flex" />
+        <Splitter
+          onResize={(delta) =>
+            setRightDrawerWidth((prev) => Math.max(320, Math.min(760, prev - delta)))
+          }
+          className="hidden md:flex"
+        />
       )}
 
-      {/* 3. Right Canvas (Artifacts & Evidence Drawer - Desktop) */}
+      {/* 3. RIGHT PANE (Multi-Tab Workbench & Live Environment - #161920) */}
       {showRightDrawer && (
         <aside
           style={{ width: `${rightDrawerWidth}px` }}
-          className="shrink-0 h-full bg-surface border-l border-border-subtle flex flex-col min-w-0 hidden md:flex"
+          className="shrink-0 h-full bg-[#161920] border-l border-[#262B36] flex flex-col min-w-0 hidden md:flex"
         >
-          {/* Tab Switcher Header */}
-          <div className="h-12 border-b border-border-subtle px-3 flex items-center justify-between bg-surface-muted/40">
-            <div className="flex items-center gap-1 bg-canvas p-0.5 rounded-lg border border-border-subtle text-xs">
-              <button
-                onClick={() => setActiveTab('tasks')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  activeTab === 'tasks' ? 'bg-surface-highlight text-text-primary font-medium' : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                Tasks
-              </button>
-              <button
-                onClick={() => setActiveTab('plan')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  activeTab === 'plan' ? 'bg-surface-highlight text-text-primary font-medium' : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                Plan
-              </button>
-              <button
-                onClick={() => setActiveTab('evidence')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
-                  activeTab === 'evidence' ? 'bg-surface-highlight text-text-primary font-medium' : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                Evidence
-              </button>
+          {/* Multi-Tab Workbench Header */}
+          <div className="h-12 border-b border-[#262B36] px-2.5 flex items-center justify-between bg-[#111318] gap-1">
+            <div className="flex items-center gap-1 overflow-x-auto py-1">
+              {workbenchTabs.map((t) => {
+                const isActive = activeTab === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setActiveTab(t.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0 transition-all cursor-pointer border ${
+                      isActive
+                        ? 'bg-[#1C2029] text-[#8AB4F8] border-[#8AB4F8]/50 shadow-sm'
+                        : 'bg-transparent text-[#9AA0A6] border-transparent hover:bg-[#1C2029]/60 hover:text-[#E8EAED]'
+                    }`}
+                  >
+                    {t.icon}
+                    <span>{t.label}</span>
+                  </button>
+                );
+              })}
             </div>
 
             <button
+              type="button"
               onClick={() => setShowRightDrawer(false)}
-              className="p-1 hover:bg-surface rounded text-text-muted hover:text-text-primary"
-              title="Collapse Drawer"
+              className="p-1 hover:bg-[#1C2029] rounded text-[#9AA0A6] hover:text-[#E8EAED] shrink-0"
+              title="Collapse Right Workbench"
             >
               <PanelRightClose className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Drawer Body */}
+          {/* Workbench Body */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {activeTab === 'editor' && <WorkbenchEditor />}
+            {activeTab === 'terminal' && <IntegratedTerminal />}
+            {activeTab === 'preview' && <VisionPreviewTab />}
+            {activeTab === 'harness' && <HarnessWorkbenchTab />}
             {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
             {activeTab === 'plan' && <PlanViewer />}
             {activeTab === 'evidence' && <EvidenceDrawer />}
@@ -535,10 +774,8 @@ export const App: React.FC = () => {
         </aside>
       )}
 
-      {/* Settings Modal */}
+      {/* Modals */}
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-
-      {/* Mobile Remote Modal */}
       <MobileRemoteModal isOpen={isRemoteOpen} onClose={() => setIsRemoteOpen(false)} />
     </div>
   );

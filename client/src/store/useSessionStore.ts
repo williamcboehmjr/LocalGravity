@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { ModelTier, ThinkingBudget, ModelStateStatus } from '../types/protocol';
 
+export interface ToolCallItemData {
+  id: string;
+  toolName?: string;
+  command: string;
+  argumentsJson?: string;
+  output?: string;
+  exitCode?: number | null;
+  durationMs?: number;
+  status: 'running' | 'success' | 'error';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -8,6 +19,7 @@ export interface ChatMessage {
   thought?: string;
   thoughtElapsedMs?: number;
   thoughtTokenCount?: number;
+  outputTokens?: number;
   tier?: ModelTier;
   modelName?: string;
   timestamp: number;
@@ -16,13 +28,6 @@ export interface ChatMessage {
   toolOutput?: string;
   toolStatus?: 'running' | 'success' | 'error';
   toolCalls?: ToolCallItemData[];
-}
-
-export interface ToolCallItemData {
-  id: string;
-  command: string;
-  output?: string;
-  status: 'running' | 'success' | 'error';
 }
 
 export interface QueuedMessage {
@@ -34,19 +39,52 @@ export interface QueuedMessage {
   timestamp: number;
 }
 
+export interface ProjectItem {
+  id: string;
+  name: string;
+  root_path: string;
+  git_branch: string;
+  default_model_tier: ModelTier;
+  default_thinking_budget: ThinkingBudget;
+  custom_instructions: string;
+  enabled_mcp_servers: string;
+  pinned_files: string;
+  last_opened_at: string;
+  created_at: string;
+}
+
+export interface ThreadItem {
+  id: string;
+  project_id: string;
+  title: string;
+  status: 'idle' | 'thinking' | 'executing_tool' | 'awaiting_approval' | 'error';
+  active_model_tier: ModelTier;
+  active_thinking_budget: ThinkingBudget;
+  kv_prefix_hash: string;
+  updated_at: string;
+  created_at: string;
+  pinned?: boolean;
+}
+
 export interface SessionItem {
   id: string;
   title: string;
   updated: string;
+  status?: 'idle' | 'thinking' | 'executing_tool' | 'awaiting_approval' | 'error';
   messages: ChatMessage[];
   messageQueue?: QueuedMessage[];
 }
 
 interface SessionState {
+  projects: ProjectItem[];
+  activeProjectId: string;
+  threads: ThreadItem[];
   sessionId: string;
   sessions: SessionItem[];
   workspacePath: string;
+  gitBranch: string;
   hostUrl: string;
+  apiBaseUrl: string;
   isConnected: boolean;
   selectedTier: ModelTier;
   thinkingBudget: ThinkingBudget;
@@ -62,18 +100,34 @@ interface SessionState {
   isThinkingFinished: boolean;
   isGenerating: boolean;
 
+  setProjects: (projects: ProjectItem[], activeId?: string) => void;
+  setActiveProjectId: (projectId: string) => void;
+  setThreads: (threads: ThreadItem[], activeThreadId?: string) => void;
+  hydrateMessagesFromServer: (serverMsgs: any[], activeStreams?: any[]) => void;
   setWorkspacePath: (path: string) => void;
+  setGitBranch: (branch: string) => void;
   setHostUrl: (url: string) => void;
+  setApiBaseUrl: (url: string) => void;
   setIsConnected: (connected: boolean) => void;
   setSelectedTier: (tier: ModelTier) => void;
   setThinkingBudget: (budget: ThinkingBudget) => void;
   setExecutionPolicy: (policy: 'always_proceed' | 'request_review') => void;
   setModelState: (status: ModelStateStatus, modelName: string, text?: string) => void;
   addMessage: (msg: ChatMessage) => void;
-  updateLastAssistantMessage: (contentDelta: string) => void;
-  updateLastAssistantTool: (command: string, output?: string, status?: 'running' | 'success' | 'error') => void;
+  updateLastAssistantMessage: (contentDelta: string, outputTokens?: number) => void;
+  updateLastAssistantTool: (
+    command: string,
+    output?: string,
+    status?: 'running' | 'success' | 'error',
+    meta?: { id?: string; toolName?: string; durationMs?: number; exitCode?: number | null }
+  ) => void;
   finalizeAssistantMessage: () => void;
-  appendStreamingThought: (chunk: string, elapsedMs: number, tokenCount: number, finished: boolean) => void;
+  appendStreamingThought: (
+    chunk: string,
+    elapsedMs: number,
+    tokenCount: number,
+    finished: boolean
+  ) => void;
   setIsGenerating: (generating: boolean) => void;
   clearMessages: () => void;
   enqueueMessage: (msg: Omit<QueuedMessage, 'id' | 'timestamp'>) => string;
@@ -88,22 +142,49 @@ interface SessionState {
   autoNameSessionFromPrompt: (sessionId: string, promptText: string) => void;
 }
 
-const initialSessionId = 'session-' + Math.random().toString(36).substring(2, 9);
+const initialSessionId = 'thread-default';
 
 export const useSessionStore = create<SessionState>((set, get) => ({
-  sessionId: initialSessionId,
-  sessions: [
-    { id: initialSessionId, title: 'New Project', updated: 'Just now', messages: [] },
+  projects: [
+    {
+      id: 'proj-default',
+      name: 'LocalGravity',
+      root_path: '.',
+      git_branch: 'main',
+      default_model_tier: 'medium',
+      default_thinking_budget: 'fast',
+      custom_instructions: '',
+      enabled_mcp_servers: '["local-fetch","filesystem"]',
+      pinned_files: '["README.md","launch.py"]',
+      last_opened_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    },
   ],
-  workspacePath: 'C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity',
-  hostUrl: 'ws://localhost:3390',
+  activeProjectId: 'proj-default',
+  threads: [],
+  sessionId: initialSessionId,
+  sessions: [{ id: initialSessionId, title: 'New Thread', updated: 'Just now', messages: [] }],
+  workspacePath: '.',
+  gitBranch: 'main',
+  hostUrl:
+    typeof window !== 'undefined' &&
+    window.location.host &&
+    !window.location.host.includes(':5173')
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      : 'ws://localhost:3390',
+  apiBaseUrl:
+    typeof window !== 'undefined' &&
+    window.location.host &&
+    !window.location.host.includes(':5173')
+      ? `${window.location.protocol}//${window.location.host}`
+      : 'http://localhost:3390',
   isConnected: false,
-  selectedTier: 'low',
+  selectedTier: 'medium',
   thinkingBudget: 'fast',
   executionPolicy: 'always_proceed',
-  modelStatus: 'idle',
-  modelStatusText: 'Connecting to Brain...',
-  activeModelName: 'qwen3.5:4b',
+  modelStatus: 'ready',
+  modelStatusText: 'TabbyAPI Ready (Q4 KV • SysRAM Warm)',
+  activeModelName: 'Qwen3.5-9B-EXL3-4.0bpw',
   messages: [],
   messageQueue: [],
   currentStreamingThought: '',
@@ -112,113 +193,214 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isThinkingFinished: false,
   isGenerating: false,
 
+  setProjects: (projects, activeId) =>
+    set((state) => {
+      const targetId = activeId || state.activeProjectId || projects[0]?.id || '';
+      const activeProj = projects.find((p) => p.id === targetId) || projects[0];
+      return {
+        projects,
+        activeProjectId: activeProj ? activeProj.id : targetId,
+        workspacePath: activeProj ? activeProj.root_path : state.workspacePath,
+        gitBranch: activeProj ? activeProj.git_branch : state.gitBranch,
+      };
+    }),
+
+  setActiveProjectId: (projectId) =>
+    set((state) => {
+      const proj = state.projects.find((p) => p.id === projectId);
+      return {
+        activeProjectId: projectId,
+        workspacePath: proj ? proj.root_path : state.workspacePath,
+        gitBranch: proj ? proj.git_branch : state.gitBranch,
+      };
+    }),
+
+  setThreads: (threads, activeThreadId) =>
+    set((state) => {
+      const mappedSessions: SessionItem[] = threads.map((t) => ({
+        id: t.id,
+        title: t.title,
+        updated: new Date(t.updated_at).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        status: t.status,
+        messages: [],
+      }));
+      const nextSessionId = activeThreadId || state.sessionId || threads[0]?.id || initialSessionId;
+      return {
+        threads,
+        sessions: mappedSessions.length > 0 ? mappedSessions : state.sessions,
+        sessionId: nextSessionId,
+      };
+    }),
+
+  hydrateMessagesFromServer: (serverMsgs, activeStreams = []) =>
+    set(() => {
+      const converted: ChatMessage[] = serverMsgs.map((m: any) => {
+        let attachments: string[] = [];
+        try {
+          attachments =
+            typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments || [];
+        } catch {}
+        const toolCalls: ToolCallItemData[] = (m.tool_executions || []).map((te: any) => ({
+          id: te.id,
+          toolName: te.tool_name,
+          command: `${te.tool_name}(${te.arguments_json || '{}'})`,
+          argumentsJson: te.arguments_json,
+          output: te.stdout_stream || te.stderr_stream || '',
+          exitCode: te.exit_code,
+          durationMs: te.duration_ms,
+          status: te.status || 'success',
+        }));
+
+        return {
+          id: m.id,
+          role: m.role,
+          content: m.content || '',
+          thought: m.thinking_content || undefined,
+          thoughtElapsedMs: m.thinking_duration_ms || 0,
+          thoughtTokenCount: m.thinking_tokens || 0,
+          outputTokens: m.output_tokens || 0,
+          timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+          images: attachments.length > 0 ? attachments : undefined,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        };
+      });
+
+      const activeStream = activeStreams[0];
+      return {
+        messages: converted,
+        ...(activeStream
+          ? {
+              isGenerating: true,
+              currentStreamingThought: activeStream.thinkingContent || '',
+              currentThoughtElapsedMs: activeStream.thinkingDurationMs || 0,
+              currentThoughtTokens: activeStream.thinkingTokens || 0,
+              isThinkingFinished: false,
+            }
+          : {}),
+      };
+    }),
+
   setWorkspacePath: (path) => set({ workspacePath: path }),
+  setGitBranch: (branch) => set({ gitBranch: branch }),
   setHostUrl: (url) => set({ hostUrl: url }),
+  setApiBaseUrl: (url) => set({ apiBaseUrl: url }),
   setIsConnected: (connected) => set({ isConnected: connected }),
   setSelectedTier: (tier) => set({ selectedTier: tier }),
   setThinkingBudget: (budget) => set({ thinkingBudget: budget }),
   setExecutionPolicy: (policy) => set({ executionPolicy: policy }),
-  setModelState: (status, modelName, text) => set({
-    modelStatus: status,
-    activeModelName: modelName,
-    modelStatusText: text || status,
-  }),
-  addMessage: (msg) => set((state) => {
-    const newMessages = [...state.messages, msg];
-    const updatedSessions = state.sessions.map((s) =>
-      s.id === state.sessionId ? { ...s, messages: newMessages, updated: 'Just now' } : s
-    );
-    return {
-      messages: newMessages,
-      sessions: updatedSessions,
-      ...(msg.role === 'user'
-        ? {
-            currentStreamingThought: '',
-            currentThoughtElapsedMs: 0,
-            currentThoughtTokens: 0,
-            isThinkingFinished: false,
-          }
-        : {}),
-    };
-  }),
-  updateLastAssistantMessage: (delta) => set((state) => {
-    const list = [...state.messages];
-    if (list.length > 0 && list[list.length - 1].role === 'assistant') {
-      const last = { ...list[list.length - 1] };
-      last.content += delta;
-      list[list.length - 1] = last;
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messages: list } : s
-      );
-      return { messages: list, sessions: updatedSessions };
-    }
-    return state;
-  }),
-  updateLastAssistantTool: (command, output, status = 'success') => set((state) => {
-    const list = [...state.messages];
-    if (list.length > 0 && list[list.length - 1].role === 'assistant') {
-      const last = { ...list[list.length - 1] };
-      last.toolCommand = command;
-      if (output !== undefined) last.toolOutput = output;
-      last.toolStatus = status;
+  setModelState: (status, modelName, text) =>
+    set({
+      modelStatus: status,
+      activeModelName: modelName,
+      modelStatusText: text || status,
+    }),
 
-      const existingCalls = last.toolCalls ? [...last.toolCalls] : [];
-      const matchIdx = existingCalls.findIndex((c) => c.command === command);
-      if (matchIdx !== -1) {
-        existingCalls[matchIdx] = {
-          ...existingCalls[matchIdx],
-          output: output !== undefined ? output : existingCalls[matchIdx].output,
-          status,
-        };
-      } else {
-        existingCalls.push({
-          id: 'tc-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-          command,
-          output,
-          status,
-        });
-      }
-      last.toolCalls = existingCalls;
-
-      list[list.length - 1] = last;
+  addMessage: (msg) =>
+    set((state) => {
+      const newMessages = [...state.messages, msg];
       const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messages: list } : s
-      );
-      return { messages: list, sessions: updatedSessions };
-    }
-    return state;
-  }),
-  finalizeAssistantMessage: () => set((state) => {
-    const list = [...state.messages];
-    if (list.length > 0 && list[list.length - 1].role === 'assistant') {
-      const last = { ...list[list.length - 1] };
-      if (state.currentStreamingThought) {
-        last.thought = state.currentStreamingThought;
-        last.thoughtElapsedMs = state.currentThoughtElapsedMs;
-        last.thoughtTokenCount = state.currentThoughtTokens;
-      }
-      list[list.length - 1] = last;
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messages: list } : s
+        s.id === state.sessionId ? { ...s, messages: newMessages, updated: 'Just now' } : s
       );
       return {
-        messages: list,
+        messages: newMessages,
         sessions: updatedSessions,
+        ...(msg.role === 'user'
+          ? {
+              currentStreamingThought: '',
+              currentThoughtElapsedMs: 0,
+              currentThoughtTokens: 0,
+              isThinkingFinished: false,
+            }
+          : {}),
+      };
+    }),
+
+  updateLastAssistantMessage: (delta, outputTokens) =>
+    set((state) => {
+      const list = [...state.messages];
+      if (list.length > 0 && list[list.length - 1].role === 'assistant') {
+        const last = { ...list[list.length - 1] };
+        last.content += delta;
+        if (outputTokens !== undefined) last.outputTokens = outputTokens;
+        list[list.length - 1] = last;
+        return { messages: list };
+      }
+      return state;
+    }),
+
+  updateLastAssistantTool: (command, output, status = 'success', meta) =>
+    set((state) => {
+      const list = [...state.messages];
+      if (list.length > 0 && list[list.length - 1].role === 'assistant') {
+        const last = { ...list[list.length - 1] };
+        last.toolCommand = command;
+        if (output !== undefined) last.toolOutput = output;
+        last.toolStatus = status;
+
+        const existingCalls = last.toolCalls ? [...last.toolCalls] : [];
+        const matchIdx = existingCalls.findIndex(
+          (c) => (meta?.id && c.id === meta.id) || c.command === command
+        );
+        if (matchIdx !== -1) {
+          existingCalls[matchIdx] = {
+            ...existingCalls[matchIdx],
+            output: output !== undefined ? output : existingCalls[matchIdx].output,
+            status,
+            durationMs: meta?.durationMs ?? existingCalls[matchIdx].durationMs,
+            exitCode: meta?.exitCode !== undefined ? meta.exitCode : existingCalls[matchIdx].exitCode,
+          };
+        } else {
+          existingCalls.push({
+            id: meta?.id || 'tc-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+            toolName: meta?.toolName,
+            command,
+            output,
+            status,
+            durationMs: meta?.durationMs,
+            exitCode: meta?.exitCode,
+          });
+        }
+        last.toolCalls = existingCalls;
+        list[list.length - 1] = last;
+        return { messages: list };
+      }
+      return state;
+    }),
+
+  finalizeAssistantMessage: () =>
+    set((state) => {
+      const list = [...state.messages];
+      if (list.length > 0 && list[list.length - 1].role === 'assistant') {
+        const last = { ...list[list.length - 1] };
+        if (state.currentStreamingThought) {
+          last.thought = state.currentStreamingThought;
+          last.thoughtElapsedMs = state.currentThoughtElapsedMs;
+          last.thoughtTokenCount = state.currentThoughtTokens;
+        }
+        list[list.length - 1] = last;
+        return {
+          messages: list,
+          currentStreamingThought: '',
+          isThinkingFinished: true,
+        };
+      }
+      return {
         currentStreamingThought: '',
         isThinkingFinished: true,
       };
-    }
-    return {
-      currentStreamingThought: '',
-      isThinkingFinished: true,
-    };
-  }),
-  appendStreamingThought: (chunk, elapsedMs, tokenCount, finished) => set((state) => ({
-    currentStreamingThought: state.currentStreamingThought + chunk,
-    currentThoughtElapsedMs: elapsedMs,
-    currentThoughtTokens: tokenCount,
-    isThinkingFinished: finished,
-  })),
+    }),
+
+  appendStreamingThought: (chunk, elapsedMs, tokenCount, finished) =>
+    set((state) => ({
+      currentStreamingThought: state.currentStreamingThought + chunk,
+      currentThoughtElapsedMs: elapsedMs,
+      currentThoughtTokens: tokenCount,
+      isThinkingFinished: finished,
+    })),
+
   setIsGenerating: (generating) => set({ isGenerating: generating }),
   clearMessages: () => set({ messages: [] }),
 
@@ -229,13 +411,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       id,
       timestamp: Date.now(),
     };
-    set((state) => {
-      const newQueue = [...state.messageQueue, queuedItem];
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messageQueue: newQueue } : s
-      );
-      return { messageQueue: newQueue, sessions: updatedSessions };
-    });
+    set((state) => ({
+      messageQueue: [...state.messageQueue, queuedItem],
+    }));
     return id;
   },
 
@@ -243,50 +421,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const state = get();
     if (state.messageQueue.length === 0) return undefined;
     const [first, ...rest] = state.messageQueue;
-    const updatedSessions = state.sessions.map((s) =>
-      s.id === state.sessionId ? { ...s, messageQueue: rest } : s
-    );
-    set({ messageQueue: rest, sessions: updatedSessions });
+    set({ messageQueue: rest });
     return first;
   },
 
   removeQueuedMessage: (id) => {
-    set((state) => {
-      const newQueue = state.messageQueue.filter((m) => m.id !== id);
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messageQueue: newQueue } : s
-      );
-      return { messageQueue: newQueue, sessions: updatedSessions };
-    });
+    set((state) => ({
+      messageQueue: state.messageQueue.filter((m) => m.id !== id),
+    }));
   },
 
   updateQueuedMessage: (id, newText) => {
-    set((state) => {
-      const newQueue = state.messageQueue.map((m) =>
-        m.id === id ? { ...m, text: newText } : m
-      );
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messageQueue: newQueue } : s
-      );
-      return { messageQueue: newQueue, sessions: updatedSessions };
-    });
+    set((state) => ({
+      messageQueue: state.messageQueue.map((m) => (m.id === id ? { ...m, text: newText } : m)),
+    }));
   },
 
-  clearQueue: () => {
-    set((state) => {
-      const updatedSessions = state.sessions.map((s) =>
-        s.id === state.sessionId ? { ...s, messageQueue: [] } : s
-      );
-      return { messageQueue: [], sessions: updatedSessions };
-    });
-  },
+  clearQueue: () => set({ messageQueue: [] }),
 
   createNewProject: () => {
-    const newId = 'session-' + Math.random().toString(36).substring(2, 9);
-    const newProject: SessionItem = {
+    const newId = 'thread-' + Math.random().toString(36).substring(2, 9);
+    const newSession: SessionItem = {
       id: newId,
-      title: 'New Project',
+      title: 'New Thread',
       updated: 'Just now',
+      status: 'idle',
       messages: [],
       messageQueue: [],
     };
@@ -294,7 +453,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionId: newId,
       messages: [],
       messageQueue: [],
-      sessions: [newProject, ...state.sessions],
+      sessions: [newSession, ...state.sessions],
       currentStreamingThought: '',
       isGenerating: false,
     }));
@@ -304,44 +463,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   switchSession: (targetSessionId: string) => {
     const state = get();
     if (state.sessionId === targetSessionId) return;
-    const target = state.sessions.find((s) => s.id === targetSessionId);
-    if (target) {
-      set({
-        sessionId: target.id,
-        messages: target.messages || [],
-        messageQueue: target.messageQueue || [],
-        currentStreamingThought: '',
-        isGenerating: false,
-      });
-    }
+    set({
+      sessionId: targetSessionId,
+      messages: [],
+      currentStreamingThought: '',
+      isGenerating: false,
+    });
   },
 
   deleteSession: (targetSessionId: string) => {
     set((state) => {
       const remaining = state.sessions.filter((s) => s.id !== targetSessionId);
+      const remainingThreads = state.threads.filter((t) => t.id !== targetSessionId);
       if (remaining.length === 0) {
-        const fallbackId = 'session-' + Math.random().toString(36).substring(2, 9);
-        const fallbackProject: SessionItem = {
-          id: fallbackId,
-          title: 'New Project',
-          updated: 'Just now',
-          messages: [],
-        };
+        const fallbackId = 'thread-' + Math.random().toString(36).substring(2, 9);
         return {
           sessionId: fallbackId,
           messages: [],
-          sessions: [fallbackProject],
+          sessions: [{ id: fallbackId, title: 'New Thread', updated: 'Just now', messages: [] }],
+          threads: remainingThreads,
         };
       }
       if (state.sessionId === targetSessionId) {
-        const nextActive = remaining[0];
         return {
-          sessionId: nextActive.id,
-          messages: nextActive.messages || [],
+          sessionId: remaining[0].id,
+          messages: [],
           sessions: remaining,
+          threads: remainingThreads,
         };
       }
-      return { sessions: remaining };
+      return { sessions: remaining, threads: remainingThreads };
     });
   },
 
@@ -350,27 +501,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: state.sessions.map((s) =>
         s.id === targetSessionId ? { ...s, title: newTitle } : s
       ),
+      threads: state.threads.map((t) =>
+        t.id === targetSessionId ? { ...t, title: newTitle } : t
+      ),
     }));
   },
 
   autoNameSessionFromPrompt: (targetSessionId: string, promptText: string) => {
     const state = get();
     const currentSession = state.sessions.find((s) => s.id === targetSessionId);
-    if (!currentSession || (currentSession.title !== 'New Project' && currentSession.title !== 'New Task')) {
+    if (
+      !currentSession ||
+      (currentSession.title !== 'New Thread' &&
+        currentSession.title !== 'New Project' &&
+        currentSession.title !== 'Initial Thread')
+    ) {
       return;
     }
-    // Generate clean concise 3-5 word name from first sentence
     const clean = promptText.replace(/\n+/g, ' ').trim();
     const words = clean.split(/\s+/).filter(Boolean);
-    let title = words.slice(0, 5).join(' ');
-    if (words.length > 5) title += '...';
-    if (title.length > 35) title = title.substring(0, 35) + '...';
-    if (!title) title = 'New Project';
-    
+    let title = words.slice(0, 6).join(' ');
+    if (words.length > 6) title += '...';
+    if (title.length > 38) title = title.substring(0, 38) + '...';
+    if (!title) title = 'New Thread';
+
     set({
-      sessions: state.sessions.map((s) =>
-        s.id === targetSessionId ? { ...s, title } : s
-      ),
+      sessions: state.sessions.map((s) => (s.id === targetSessionId ? { ...s, title } : s)),
+      threads: state.threads.map((t) => (t.id === targetSessionId ? { ...t, title } : t)),
     });
   },
 }));

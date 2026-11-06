@@ -1,0 +1,9 @@
+{
+  "name": "pre_tool_guard",
+  "enabled": true,
+  "blockedPorts": [
+    5000,
+    5001
+  ],
+  "requireCheckpointBeforeWrite": true
+}
