@@ -102,10 +102,28 @@ function queryHostHardwareTelemetry(activeTier: ModelTier): {
 }
 
 function pruneChatMessages(messages: Array<{ role: string; content: string; [k: string]: any }>, maxTotalChars = 65000) {
-  let total = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
-  if (total <= maxTotalChars) return messages;
-
   const pruned = messages.map(m => ({ ...m }));
+
+  // Strict Jinja / ChatML normalization:
+  // Ensure that ONLY index 0 can be role === 'system'. If any other message has role: 'system', merge it into pruned[0]
+  if (pruned.length > 0 && pruned[0].role !== 'system') {
+    for (let i = 1; i < pruned.length; i++) {
+      if (pruned[i].role === 'system') {
+        pruned[i].role = 'user';
+      }
+    }
+  } else if (pruned.length > 0) {
+    for (let i = 1; i < pruned.length; i++) {
+      if (pruned[i].role === 'system') {
+        pruned[0].content += '\n\n' + pruned[i].content;
+        pruned.splice(i, 1);
+        i--;
+      }
+    }
+  }
+
+  let total = pruned.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+  if (total <= maxTotalChars) return pruned;
 
   // Stage 1: Truncate large tool results
   for (let i = 0; i < pruned.length; i++) {
@@ -806,11 +824,11 @@ export async function createDaemonServer(options?: {
 
         // On the final step, omit tools so the model must provide its final text synthesis
         const activeTools = isFinalStep ? undefined : BUILTIN_TOOLS_SCHEMA;
-        if (isFinalStep && hasExecutedTools) {
-          chatMessages.push({
-            role: 'system',
-            content: 'You have gathered all needed information from tools. Now synthesize your complete analysis, refactoring plan, or answer for the user.',
-          });
+        if (isFinalStep && hasExecutedTools && chatMessages.length > 0) {
+          chatMessages[0] = {
+            ...chatMessages[0],
+            content: chatMessages[0].content + '\n\n[NOTICE]: Maximum tool execution steps reached. You have gathered all needed information from tools. Now synthesize your complete analysis, refactoring plan, or answer for the user.',
+          };
         }
 
         const result = await tabby.streamChatCompletion({

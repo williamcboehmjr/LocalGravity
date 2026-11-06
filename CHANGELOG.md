@@ -9,6 +9,7 @@ All notable changes across LocalGravity Windows, macOS, and Web Remote Companion
 ### 🛡️ Unbounded Tool Output Truncation & Sliding Context Window Pruning
 * **Head/Tail Truncation (`truncateSafeOutput`):** Enforced strict boundaries on tool outputs (`run_terminal` capped at 16k chars, `read_file` at 24k chars, `list_directory` at 150 items). Preserves 70% prefix and 30% suffix with an explicit omission notice, preventing recursive shell sweeps (`Get-ChildItem -Recurse`) from flooding memory.
 * **Strict Context Window Budgeting (`pruneChatMessages`):** Implemented multi-stage context pruning respecting model context limits (55,000 char budget for 27B High tier, 75,000 for Low/Med tiers). Preserves OpenAI-compatible `assistant.tool_calls` and `tool` message pairing while preventing TabbyAPI HTTP 400 `context_length_exceeded` errors.
+* **Jinja ChatML Template Normalization:** Eliminated Jinja `TemplateError: System message must be at the beginning.` by enforcing in `pruneChatMessages` that only index 0 carries `role: 'system'`, merging any late-arriving system directives into the root system message, and directly updating the initial prompt on step exhaustion.
 * **Transparent Upstream Error Reporting:** When TabbyAPI returns an HTTP error code, `tabbyEngine.ts` parses the exact JSON error payload (`errJson.error?.message`) and streams it to the user instead of displaying a false "unable to reach TabbyAPI" notice.
 
 ### 🔓 Loosened Guardrails & Comprehensive Workstation Access
