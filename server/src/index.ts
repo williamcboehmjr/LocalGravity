@@ -101,6 +101,56 @@ function queryHostHardwareTelemetry(activeTier: ModelTier): {
   };
 }
 
+function pruneChatMessages(messages: Array<{ role: string; content: string; [k: string]: any }>, maxTotalChars = 65000) {
+  let total = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+  if (total <= maxTotalChars) return messages;
+
+  const pruned = messages.map(m => ({ ...m }));
+
+  // Stage 1: Truncate large tool results
+  for (let i = 0; i < pruned.length; i++) {
+    if (pruned[i].role === 'tool' && pruned[i].content && pruned[i].content.length > 2500) {
+      const reduction = pruned[i].content.length - 2000;
+      pruned[i].content = pruned[i].content.slice(0, 1500) + '\n... [Tool output trimmed for context window] ...\n' + pruned[i].content.slice(-500);
+      total -= reduction;
+    }
+  }
+
+  if (total <= maxTotalChars) return pruned;
+
+  // Stage 2: Aggressive trimming on older tool results (not the very last ones)
+  for (let i = 0; i < pruned.length - 2; i++) {
+    if (pruned[i].role === 'tool' && pruned[i].content && pruned[i].content.length > 800) {
+      const reduction = pruned[i].content.length - 800;
+      pruned[i].content = pruned[i].content.slice(0, 500) + '\n... [Earlier tool output trimmed] ...\n' + pruned[i].content.slice(-300);
+      total -= reduction;
+    }
+  }
+
+  if (total <= maxTotalChars) return pruned;
+
+  // Stage 3: Drop entire historical turns from the beginning (index 1), keeping system prompt (0) and current active turn
+  while (pruned.length > 3 && total > maxTotalChars) {
+    const item = pruned[1];
+    if (item.role === 'user' || (item.role === 'assistant' && !item.tool_calls)) {
+      const dropped = pruned.splice(1, 1)[0];
+      total -= (dropped.content?.length || 0);
+    } else if (item.role === 'assistant' && item.tool_calls) {
+      const dropped = pruned.splice(1, 1)[0];
+      total -= (dropped.content?.length || 0);
+      while (pruned.length > 1 && (pruned[1] as any).role === 'tool') {
+        const droppedTool = pruned.splice(1, 1)[0];
+        total -= (droppedTool.content?.length || 0);
+      }
+    } else {
+      const dropped = pruned.splice(1, 1)[0];
+      total -= (dropped.content?.length || 0);
+    }
+  }
+
+  return pruned;
+}
+
 export async function createDaemonServer(options?: {
   dbPath?: string;
   preferredDaemonPort?: number;
@@ -766,7 +816,7 @@ export async function createDaemonServer(options?: {
         const result = await tabby.streamChatCompletion({
           tier: params.tier,
           thinkingBudget: params.thinkingBudget,
-          messages: chatMessages,
+          messages: pruneChatMessages(chatMessages, params.tier === 'high' ? 55000 : 75000),
           tools: activeTools,
           abortSignal: abortController.signal,
           onThoughtDelta: (delta, elapsedMs, tokenCount) => {

@@ -4,6 +4,24 @@ All notable changes across LocalGravity Windows, macOS, and Web Remote Companion
 
 ---
 
+## [v2.0.3] - 2026-11-06 (Context Window Protection & Full Local Filesystem Access)
+
+### 🛡️ Unbounded Tool Output Truncation & Sliding Context Window Pruning
+* **Head/Tail Truncation (`truncateSafeOutput`):** Enforced strict boundaries on tool outputs (`run_terminal` capped at 16k chars, `read_file` at 24k chars, `list_directory` at 150 items). Preserves 70% prefix and 30% suffix with an explicit omission notice, preventing recursive shell sweeps (`Get-ChildItem -Recurse`) from flooding memory.
+* **Strict Context Window Budgeting (`pruneChatMessages`):** Implemented multi-stage context pruning respecting model context limits (55,000 char budget for 27B High tier, 75,000 for Low/Med tiers). Preserves OpenAI-compatible `assistant.tool_calls` and `tool` message pairing while preventing TabbyAPI HTTP 400 `context_length_exceeded` errors.
+* **Transparent Upstream Error Reporting:** When TabbyAPI returns an HTTP error code, `tabbyEngine.ts` parses the exact JSON error payload (`errJson.error?.message`) and streams it to the user instead of displaying a false "unable to reach TabbyAPI" notice.
+
+### 🔓 Loosened Guardrails & Comprehensive Workstation Access
+* **Full Filesystem Permissions Directive:** Replaced restrictive workspace boundaries with complete system access instructions. Central Brain can inspect, read, search, and manage files anywhere on the machine (`Downloads`, `Desktop`, `Documents`, root drives).
+* **Multi-Step Agentic Completion:** Mandated that after gathering tool outputs, the model continues through synthesis to provide complete analyses, refactoring suggestions, and file changes directly to the user.
+
+### 🪟 Windows Desktop Installer & Overview UX
+* **New Windows MSI Package:** Rebuilt and published `LocalGravity_2.0.0_x64.msi` directly to Desktop, packaging the latest Tauri edge client with updated frontend assets.
+* **Default Overview Drawer:** `README.md` is now collapsed into the Overview tab by default rather than expanding automatically across the right drawer.
+* **Session Lifecycle Operations:** Fixed conversation deletion and thread clearing over WebSocket sync.
+
+---
+
 ## [v2.0.2] - 2026-11-06 (Real Conversational Inference & Autonomous MCP Suite)
 
 ### 💬 Conversational Real-Time Assistant Streaming & Remote Client Fix

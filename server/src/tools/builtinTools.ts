@@ -167,6 +167,14 @@ export const BUILTIN_TOOLS_SCHEMA = [
   },
 ];
 
+export function truncateSafeOutput(output: string, maxChars = 16000): string {
+  if (!output || output.length <= maxChars) return output;
+  const headChars = Math.floor(maxChars * 0.7);
+  const tailChars = maxChars - headChars;
+  const omitted = output.length - (headChars + tailChars);
+  return `${output.slice(0, headChars)}\n\n... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context window] ...\n\n${output.slice(-tailChars)}`;
+}
+
 export class BuiltinToolExecutor {
   private db: LocalGravityDB;
   private terminal: SharedTerminalManager;
@@ -211,7 +219,11 @@ export class BuiltinToolExecutor {
             if (stream === 'stdout') ctx.onStdoutChunk?.(chunk);
             else ctx.onStderrChunk?.(chunk);
           });
-          return res;
+          return {
+            ...res,
+            stdout: truncateSafeOutput(res.stdout, 16000),
+            stderr: truncateSafeOutput(res.stderr, 8000),
+          };
         }
 
         case 'read_file': {
@@ -230,7 +242,7 @@ export class BuiltinToolExecutor {
           const eLine = args.end_line ? Math.min(lines.length, Number(args.end_line)) : lines.length;
           const slice = lines.slice(sLine - 1, eLine).join('\n');
           return {
-            stdout: slice,
+            stdout: truncateSafeOutput(slice, 24000),
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
@@ -323,8 +335,13 @@ export class BuiltinToolExecutor {
             name: d.name,
             type: d.isDirectory() ? 'directory' : 'file',
           }));
+          const cappedEntries = entries.slice(0, 150);
+          let jsonResult = JSON.stringify(cappedEntries, null, 2);
+          if (entries.length > 150) {
+            jsonResult += `\n... [Showing 150 of ${entries.length} items to preserve context]`;
+          }
           return {
-            stdout: JSON.stringify(entries, null, 2),
+            stdout: jsonResult,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),

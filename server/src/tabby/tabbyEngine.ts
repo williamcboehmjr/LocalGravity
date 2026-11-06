@@ -691,6 +691,18 @@ export class TabbyEngine {
         if (!response.ok) {
           const errText = await response.text().catch(() => '');
           console.error(`[TabbyEngine] TabbyAPI /v1/chat/completions returned HTTP ${response.status}: ${errText}`);
+          let parsedMsg = '';
+          try {
+            const errJson = JSON.parse(errText);
+            parsedMsg = errJson.error?.message || errJson.detail || '';
+          } catch {}
+          const errorMsg = `⚠️ TabbyAPI Error (HTTP ${response.status}): ${parsedMsg || errText}`;
+          outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
+          content = errorMsg;
+          params.onTokenDelta(errorMsg, outputTokens);
+          this.swapStatus = 'ready';
+          this.resetIdleTimer();
+          return { content, thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens };
         }
 
         if (response.ok && response.body) {
