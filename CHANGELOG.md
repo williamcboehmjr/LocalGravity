@@ -4,14 +4,24 @@ All notable changes across LocalGravity Windows, macOS, and Web Remote Companion
 
 ---
 
-## [v2.0.2] - 2026-11-06 (Real Conversational Inference & Fast-Path Swapping)
+## [v2.0.2] - 2026-11-06 (Real Conversational Inference & Autonomous MCP Suite)
 
-### 💬 Conversational Real-Time Assistant Streaming
+### 💬 Conversational Real-Time Assistant Streaming & Remote Client Fix
 * **Eliminated Synthetic Fallback Jargon:** Removed embedded benchmark template fallback (`[Low 4B • Think: FAST] Processed your request...`) completely. The assistant now communicates strictly via real neural network generation from the active TabbyAPI EXL3 engine.
+* **Resolved Remote Client VRAM Idle Catch-22:** Fixed an issue where `GET /v1/model` returning 404 (when no model was loaded in VRAM yet) caused `checkConnection()` to assume TabbyAPI was offline, blocking model loading from remote clients (e.g. macOS app). `checkConnection()` now queries `/v1/models` which accurately reports server readiness.
 * **Instant Conversational Latency in Fast/Off Modes:** Qwen 3.5 now pre-closes `<think></think>` in Fast and Off modes, eliminating the 60+ second unbounded reasoning loop. Simple greetings like "hello" respond in under 200 milliseconds.
 * **Continuous Thought Streaming in Deep Mode:** Unconstrained reasoning in Deep mode now streams all tokens smoothly into the Thought Accordion without prematurely dropping chunks.
 * **Fast-Path Model Tier Swapping:** Model tier switching checks `/v1/model` before issuing unload/reload commands, eliminating redundant reloads when the requested tier is already active in VRAM.
 * **Port 5001 Binding Separation:** Explicitly separated reserved port 5000 (forbidden to bind) from port 5001 (TabbyAPI host service), ensuring the Central Brain always connects to the workstation's active TabbyAPI engine.
+
+### 🔌 Autonomous 6-MCP Suite Pre-Bundled
+* **Pre-bundled Autonomous MCPs:** Added full MCP tool configurations out-of-the-box in `mcp_config.json`:
+  * `playwright`: Headless browser automation (`@modelcontextprotocol/server-puppeteer`) for clicking, typing, form-filling, and visual verification.
+  * `git`: Git operations (`mcp-server-git`) for safe branch creation, unified diffs, and commits.
+  * `memory`: Persistent Knowledge Graph (`@modelcontextprotocol/server-memory`) for cross-session architecture and preference retention.
+  * `sqlite`: Database state & migration inspection (`mcp-server-sqlite`).
+  * `local-fetch`: Clean markdown scraping (`mcp-server-fetch`).
+  * `filesystem`: Sandboxed file tree navigation (`@modelcontextprotocol/server-filesystem`).
 
 ---
 

@@ -121,6 +121,26 @@ export class Harness2Manager {
         JSON.stringify(
           {
             mcpServers: {
+              playwright: {
+                command: 'npx',
+                args: ['-y', '@modelcontextprotocol/server-puppeteer'],
+                enabled: true,
+              },
+              git: {
+                command: 'uvx',
+                args: ['mcp-server-git', '.'],
+                enabled: true,
+              },
+              memory: {
+                command: 'npx',
+                args: ['-y', '@modelcontextprotocol/server-memory'],
+                enabled: true,
+              },
+              sqlite: {
+                command: 'uvx',
+                args: ['mcp-server-sqlite', '--db-path', '.runtime/localgravity.sqlite'],
+                enabled: true,
+              },
               'local-fetch': {
                 command: 'uvx',
                 args: ['mcp-server-fetch'],

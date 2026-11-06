@@ -387,8 +387,7 @@ export class TabbyEngine {
         headers['Authorization'] = `Bearer ${this.apiKey}`;
         headers['x-api-key'] = this.apiKey;
       }
-      const res = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
-        method: 'GET',
+      const res = await fetch(`${this.tabbyBaseUrl}/v1/models`, { method: 'GET',
         headers,
         signal: AbortSignal.timeout(1500),
       });
@@ -416,13 +415,23 @@ export class TabbyEngine {
     const spec = TIER_SPECS[newTier];
     const resolvedModelName = this.resolveDiskModelName(newTier);
 
-        const isLive = await this.checkConnection();
+            const isLive = await this.checkConnection();
     if (isLive) {
       try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        const adminAuth = this.adminKey || 'glasshouse-admin-secret';
+        headers['Authorization'] = `Bearer ${adminAuth}`;
+        headers['x-admin-key'] = adminAuth;
+        headers['x-api-key'] = adminAuth;
+
+        // Check if target model is already loaded in TabbyAPI
         const curRes = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
           headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
           signal: AbortSignal.timeout(2000),
         }).catch(() => null);
+
         if (curRes && curRes.ok) {
           const curData = await curRes.json().catch(() => null);
           if (curData?.id === resolvedModelName) {
@@ -437,27 +446,16 @@ export class TabbyEngine {
               sysramCache: this.sysramCache,
             };
           }
+          // Unload currently active model
+          await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
+            method: 'POST',
+            headers,
+            signal: AbortSignal.timeout(10000),
+          }).catch(() => null);
         }
 
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        const adminAuth = this.adminKey || this.apiKey;
-        if (adminAuth) {
-          headers['Authorization'] = `Bearer ${adminAuth}`;
-          headers['x-admin-key'] = adminAuth;
-          headers['x-api-key'] = adminAuth;
-        }
-
-        // 1. Unload current model from VRAM
-        await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
-          method: 'POST',
-          headers,
-          signal: AbortSignal.timeout(10000),
-        }).catch(() => null);
-
-        // 2. Load SysRAM-warmed model into VRAM with exact optimization parameters
-        await fetch(`${this.tabbyBaseUrl}/v1/model/load`, {
+        // Load requested model into VRAM
+        const loadRes = await fetch(`${this.tabbyBaseUrl}/v1/model/load`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -471,12 +469,20 @@ export class TabbyEngine {
               hybrid_draft_tokens: spec.hybridDraftTokens,
             },
           }),
-          signal: AbortSignal.timeout(30000),
-        }).catch(() => null);
-      } catch {
-        // Fallback to local state transition if TabbyAPI endpoint is busy
+          signal: AbortSignal.timeout(45000),
+        }).catch((err) => {
+          console.error('[TabbyEngine] /v1/model/load request error:', err);
+          return null;
+        });
+
+        if (loadRes && !loadRes.ok) {
+          console.error('[TabbyEngine] Model load error:', await loadRes.text().catch(() => ''));
+        }
+      } catch (err) {
+        console.error('[TabbyEngine] Model tier swap exception:', err);
       }
     }
+
 
     this.activeTier = newTier;
     this.lastSwapDurationMs = Math.max(120, Math.round(performance.now() - startMs));
@@ -577,9 +583,26 @@ export class TabbyEngine {
       this.idleTimeoutTimer = null;
     }
 
-    if (params.tier !== this.activeTier || this.swapStatus === 'idle') {
+        // Ensure target model is loaded in TabbyAPI VRAM
+    const desiredModel = this.resolveDiskModelName(params.tier);
+    let isCurrentlyLoaded = false;
+    try {
+      const cur = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
+        headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
+        signal: AbortSignal.timeout(1500),
+      }).catch(() => null);
+      if (cur && cur.ok) {
+        const d = await cur.json().catch(() => null);
+        if (d?.id === desiredModel) {
+          isCurrentlyLoaded = true;
+        }
+      }
+    } catch {}
+
+    if (!isCurrentlyLoaded || params.tier !== this.activeTier || this.swapStatus === 'idle') {
       await this.switchModelTier(params.tier);
     }
+
 
     const budgetSpec = THINKING_BUDGET_SPECS[params.thinkingBudget];
     const tierSpec = TIER_SPECS[params.tier];
@@ -755,7 +778,7 @@ export class TabbyEngine {
     }
 
         // TabbyAPI Unreachable Fallback Handler:
-    const errorMsg = `⚠️ Unable to reach TabbyAPI at ${this.tabbyBaseUrl}. Please ensure TabbyAPI is running on port 5001.`;
+    const errorMsg = `⚠️ Central Brain is unable to reach TabbyAPI at ${this.tabbyBaseUrl}. Please ensure TabbyAPI is running on port 5001 on the workstation.`;
     outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
     content = errorMsg;
     params.onTokenDelta(errorMsg, outputTokens);

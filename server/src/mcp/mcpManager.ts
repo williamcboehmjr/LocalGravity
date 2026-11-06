@@ -74,6 +74,109 @@ export class McpClientManager {
   }
 
   private getDefaultToolsForServer(serverName: string): McpToolDefinition[] {
+    if (serverName.includes('playwright') || serverName.includes('puppeteer')) {
+      return [
+        {
+          name: 'mcp_browser_navigate',
+          serverName,
+          description: 'Navigate headless browser to a URL.',
+          inputSchema: {
+            type: 'object',
+            properties: { url: { type: 'string', description: 'Target URL' } },
+            required: ['url'],
+          },
+        },
+        {
+          name: 'mcp_browser_screenshot',
+          serverName,
+          description: 'Capture screenshot of current browser viewport.',
+          inputSchema: {
+            type: 'object',
+            properties: { name: { type: 'string' }, selector: { type: 'string' } },
+          },
+        },
+        {
+          name: 'mcp_browser_click',
+          serverName,
+          description: 'Click an element matching selector.',
+          inputSchema: {
+            type: 'object',
+            properties: { selector: { type: 'string' } },
+            required: ['selector'],
+          },
+        },
+        {
+          name: 'mcp_browser_fill',
+          serverName,
+          description: 'Fill an input element.',
+          inputSchema: {
+            type: 'object',
+            properties: { selector: { type: 'string' }, value: { type: 'string' } },
+            required: ['selector', 'value'],
+          },
+        },
+      ];
+    }
+    if (serverName.includes('git')) {
+      return [
+        {
+          name: 'mcp_git_status',
+          serverName,
+          description: 'Get working tree status.',
+          inputSchema: { type: 'object', properties: { repo_path: { type: 'string' } } },
+        },
+        {
+          name: 'mcp_git_diff',
+          serverName,
+          description: 'Show changes between commits or working tree.',
+          inputSchema: { type: 'object', properties: { repo_path: { type: 'string' } } },
+        },
+        {
+          name: 'mcp_git_commit',
+          serverName,
+          description: 'Commit staged changes.',
+          inputSchema: {
+            type: 'object',
+            properties: { message: { type: 'string' }, repo_path: { type: 'string' } },
+            required: ['message'],
+          },
+        },
+      ];
+    }
+    if (serverName.includes('memory')) {
+      return [
+        {
+          name: 'mcp_memory_create_entities',
+          serverName,
+          description: 'Create entities in knowledge graph.',
+          inputSchema: {
+            type: 'object',
+            properties: { entities: { type: 'array', items: { type: 'object' } } },
+            required: ['entities'],
+          },
+        },
+        {
+          name: 'mcp_memory_read_graph',
+          serverName,
+          description: 'Read complete knowledge graph.',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ];
+    }
+    if (serverName.includes('sqlite')) {
+      return [
+        {
+          name: 'mcp_sqlite_read_query',
+          serverName,
+          description: 'Execute a SELECT SQL query against SQLite database.',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+      ];
+    }
     if (serverName.includes('fetch')) {
       return [
         {
