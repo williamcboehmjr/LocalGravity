@@ -143,12 +143,17 @@ export class TabbyEngine {
   private connected = false;
   private sysramCache: Record<ModelTier, SysRamWarmStatus>;
   private pinnedBuffers = new Map<string, Buffer>();
+  private idleTimeoutTimer: NodeJS.Timeout | null = null;
+  private idleTimeoutMs: number = Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 10) * 60 * 1000;
 
-  constructor(options: { repoRoot: string; tabbyPort: number; tabbyBaseUrl?: string; apiKey?: string }) {
+  constructor(options: { repoRoot: string; tabbyPort: number; tabbyBaseUrl?: string; apiKey?: string; idleTimeoutMinutes?: number }) {
     this.repoRoot = options.repoRoot;
     this.tabbyPort = options.tabbyPort;
     this.tabbyBaseUrl = options.tabbyBaseUrl || `http://127.0.0.1:${options.tabbyPort}`;
     this.apiKey = options.apiKey || process.env.TABBY_API_KEY || '';
+    if (options.idleTimeoutMinutes !== undefined) {
+      this.idleTimeoutMs = options.idleTimeoutMinutes * 60 * 1000;
+    }
 
     this.modelsRootDirs = [
       ...(process.env.TABBY_MODELS_DIR ? [process.env.TABBY_MODELS_DIR] : []),
@@ -456,6 +461,7 @@ export class TabbyEngine {
     this.enforceTabbyConfigYml();
     // Trigger background SysRAM re-warm for the two inactive tiers
     void this.prewarmInactiveTiersInSysRam();
+    this.resetIdleTimer();
 
     return {
       tier: newTier,
@@ -464,6 +470,41 @@ export class TabbyEngine {
       spec,
       sysramCache: this.sysramCache,
     };
+  }
+
+  public resetIdleTimer(): void {
+    if (this.idleTimeoutTimer) {
+      clearTimeout(this.idleTimeoutTimer);
+      this.idleTimeoutTimer = null;
+    }
+    if (this.idleTimeoutMs > 0) {
+      this.idleTimeoutTimer = setTimeout(() => {
+        void this.unloadModelDueToIdle();
+      }, this.idleTimeoutMs);
+      this.idleTimeoutTimer.unref();
+    }
+  }
+
+  public async unloadModelDueToIdle(): Promise<void> {
+    console.log(
+      `[TabbyEngine] Idle timeout reached (${Math.round(this.idleTimeoutMs / 60000)}m) - unloading model from VRAM to preserve GPU memory.`
+    );
+    const isLive = await this.checkConnection();
+    if (isLive) {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.apiKey) {
+          headers['Authorization'] = `Bearer ${this.apiKey}`;
+          headers['x-api-key'] = this.apiKey;
+        }
+        await fetch(`${this.tabbyBaseUrl}/v1/model/unload`, {
+          method: 'POST',
+          headers,
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => null);
+      } catch {}
+    }
+    this.swapStatus = 'idle';
   }
 
   public getTelemetry(): TabbyEngineTelemetry {
@@ -504,7 +545,12 @@ export class TabbyEngine {
     thinkingTokens: number;
     outputTokens: number;
   }> {
-    if (params.tier !== this.activeTier) {
+    if (this.idleTimeoutTimer) {
+      clearTimeout(this.idleTimeoutTimer);
+      this.idleTimeoutTimer = null;
+    }
+
+    if (params.tier !== this.activeTier || this.swapStatus === 'idle') {
       await this.switchModelTier(params.tier);
     }
 
@@ -666,6 +712,7 @@ export class TabbyEngine {
           }
 
           this.swapStatus = 'ready';
+          this.resetIdleTimer();
           return {
             content,
             thinkingContent,
@@ -677,6 +724,7 @@ export class TabbyEngine {
       } catch (err: any) {
         if (err?.name === 'AbortError') {
           this.swapStatus = 'ready';
+          this.resetIdleTimer();
           return { content, thinkingContent, thinkingDurationMs, thinkingTokens, outputTokens };
         }
       }
@@ -753,6 +801,7 @@ export class TabbyEngine {
     }
 
     this.swapStatus = 'ready';
+    this.resetIdleTimer();
     return {
       content,
       thinkingContent,

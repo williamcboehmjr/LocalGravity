@@ -4,7 +4,8 @@
  * - Strictly forbids ports 5000 and 5001 under all circumstances.
  * - Dynamically allocates free TCP ports starting at 3390 (Fastify Core) and 3450 (TabbyAPI).
  * - Atomically writes `.runtime/ports.json` and `client/public/runtime-ports.json`.
- * - Starts the Fastify Headless Daemon, triggers SysRAM pre-warming, and prints Local & LAN URLs.
+ * - In foreground mode (default for runlocalgravitybrain.bat), keeps the process attached
+ *   so closing the console window shuts down the brain immediately.
  */
 
 import net from 'node:net';
@@ -84,11 +85,28 @@ async function isDaemonHealthy(port) {
   }
 }
 
+async function openBrowser(url) {
+  if (os.platform() === 'win32') {
+    const child = spawn('cmd.exe', ['/c', 'start', '', url], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+  } else if (os.platform() === 'darwin') {
+    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+  } else {
+    spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+  }
+}
+
 async function main() {
   const isHeadless = process.argv.includes('--headless');
+  const isDaemon = process.argv.includes('--daemon');
+  const isForeground = process.argv.includes('--foreground') || !isDaemon;
 
   let portsCfg = null;
-  if (fs.existsSync(PORTS_FILE)) {
+  if (!isForeground && fs.existsSync(PORTS_FILE)) {
     try {
       const existing = JSON.parse(fs.readFileSync(PORTS_FILE, 'utf-8'));
       if (
@@ -125,33 +143,78 @@ async function main() {
     writePortsAtomically(portsCfg);
 
     const distEntry = path.join(SERVER_DIR, 'dist', 'index.js');
-    const child = spawn(process.execPath, [distEntry], {
-      cwd: SERVER_DIR,
-      env: {
-        ...process.env,
-        LOCALGRAVITY_DAEMON_PORT: String(daemonPort),
-        LOCALGRAVITY_TABBY_PORT: String(tabbyPort),
-        LOCALGRAVITY_VITE_PORT: String(vitePort),
-        LOCALGRAVITY_REUSE_PORTS: '1',
-      },
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
 
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      if (await isDaemonHealthy(daemonPort)) {
-        ready = true;
-        break;
+    if (isForeground) {
+      // Attached Foreground Execution:
+      // Opening the browser in 1 second, while keeping server logs in this console
+      if (!isHeadless) {
+        setTimeout(() => {
+          openBrowser(portsCfg.localUrl);
+        }, 800);
       }
-    }
 
-    if (!ready) {
-      console.error('ERROR: Fastify Headless Core Daemon failed to start.');
-      process.exit(1);
+      console.log('==================================================================');
+      console.log('  LocalGravity 2.0 (Google Antigravity 2.0 + Harness² Engine)');
+      console.log('==================================================================');
+      console.log(`  Local Desktop URL       : ${portsCfg.localUrl}`);
+      console.log(`  LAN / Remote Web URL    : ${portsCfg.lanUrl}`);
+      console.log(`  WebSocket Multiplexer   : ${portsCfg.wsSyncUrl}`);
+      console.log(`  TabbyAPI EXL3 Endpoint  : ${portsCfg.tabbyBaseUrl} (Q4 KV, N-gram x4)`);
+      console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
+      console.log('------------------------------------------------------------------');
+      console.log('  [RUNNING IN FOREGROUND]');
+      console.log('  Closing this console window immediately shuts down the Brain.');
+      console.log('==================================================================\n');
+
+      // Import and start server directly in this process
+      const serverModule = await import('./server/dist/index.js');
+      const ctx = await serverModule.createDaemonServer();
+      await ctx.app.listen({ port: portsCfg.daemonPort, host: portsCfg.daemonHost });
+
+      // Clean shutdown handler on Ctrl+C or kill
+      const cleanup = async () => {
+        console.log('\nStopping LocalGravity Central Brain...');
+        try {
+          await ctx.app.close();
+          ctx.terminal?.dispose();
+          ctx.db?.close();
+        } catch {}
+        process.exit(0);
+      };
+
+      process.on('SIGINT', cleanup);
+      process.on('SIGTERM', cleanup);
+      return;
+    } else {
+      // Detached Daemon Execution
+      const child = spawn(process.execPath, [distEntry], {
+        cwd: SERVER_DIR,
+        env: {
+          ...process.env,
+          LOCALGRAVITY_DAEMON_PORT: String(daemonPort),
+          LOCALGRAVITY_TABBY_PORT: String(tabbyPort),
+          LOCALGRAVITY_VITE_PORT: String(vitePort),
+          LOCALGRAVITY_REUSE_PORTS: '1',
+        },
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+
+      let ready = false;
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        if (await isDaemonHealthy(daemonPort)) {
+          ready = true;
+          break;
+        }
+      }
+
+      if (!ready) {
+        console.error('ERROR: Fastify Headless Core Daemon failed to start.');
+        process.exit(1);
+      }
     }
   }
 
@@ -173,13 +236,8 @@ async function main() {
   console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
   console.log('==================================================================');
 
-  if (!isHeadless && os.platform() === 'win32') {
-    const child = spawn('cmd.exe', ['/c', 'start', '', portsCfg.localUrl], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
+  if (!isHeadless) {
+    await openBrowser(portsCfg.localUrl);
   }
 }
 
