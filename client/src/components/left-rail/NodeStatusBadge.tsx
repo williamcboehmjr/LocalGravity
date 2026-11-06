@@ -18,7 +18,7 @@ export const NodeStatusBadge: React.FC = () => {
     setMcpServers,
   } = useTelemetryStore();
 
-  const { isConnected, activeModelName, selectedTier, apiBaseUrl } = useSessionStore();
+  const { isConnected, activeModelName, selectedTier, apiBaseUrl, brainHost, brainPort } = useSessionStore();
 
   const handleToggleMcp = async (serverName: string) => {
     try {
@@ -48,7 +48,7 @@ export const NodeStatusBadge: React.FC = () => {
 
   return (
     <div className="p-2.5 rounded-xl bg-[#1C2029] border border-[#262B36] space-y-2.5 text-xs shrink-0">
-      {/* Header: TabbyAPI Connection & Active VRAM Model */}
+      {/* Header: Brain Connection & Telemetry */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
           <span
@@ -56,11 +56,16 @@ export const NodeStatusBadge: React.FC = () => {
               isConnected ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-amber-400 animate-pulse'
             }`}
           />
-          <span className="font-semibold text-[#E8EAED] truncate text-[11px]">
-            TabbyAPI EXL3 • Q4 KV
-          </span>
+          <div className="min-w-0">
+            <span className="font-semibold text-[#E8EAED] truncate text-[11px] block">
+              {isConnected ? 'Brain Connected' : 'Brain Disconnected'}
+            </span>
+            <span className="text-[10px] text-[#9AA0A6] font-mono truncate block">
+              {brainHost}:{brainPort}
+            </span>
+          </div>
         </div>
-        <span className="font-mono text-[10px] text-[#8AB4F8] bg-[#8AB4F8]/10 px-1.5 py-0.5 rounded border border-[#8AB4F8]/30">
+        <span className="font-mono text-[10px] text-[#8AB4F8] bg-[#8AB4F8]/10 px-1.5 py-0.5 rounded border border-[#8AB4F8]/30 shrink-0">
           {tokensPerSec.toFixed(1)} tok/s
         </span>
       </div>

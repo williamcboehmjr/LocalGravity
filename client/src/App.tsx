@@ -47,8 +47,10 @@ export const App: React.FC = () => {
     workspacePath,
     hostUrl,
     apiBaseUrl,
-    setHostUrl,
-    setApiBaseUrl,
+    brainHost,
+    brainPort,
+    isConnected,
+    setBrainConnection,
     setIsConnected,
     selectedTier,
     setSelectedTier,
@@ -100,6 +102,9 @@ export const App: React.FC = () => {
 
   // Auto-discover runtime ports from `/runtime-ports.json` if running via Vite dev or Tauri
   useEffect(() => {
+    if (typeof window !== 'undefined' && localStorage.getItem('localgravity_brain_host')) {
+      return;
+    }
     fetch('/runtime-ports.json')
       .then((r) => (r.ok ? r.json() : null))
       .then((cfg) => {
@@ -107,10 +112,10 @@ export const App: React.FC = () => {
           const isRemote =
             window.location.hostname &&
             window.location.hostname !== 'localhost' &&
-            window.location.hostname !== '127.0.0.1';
+            window.location.hostname !== '127.0.0.1' &&
+            window.location.hostname !== 'tauri.localhost';
           const host = isRemote ? window.location.hostname : 'localhost';
-          setHostUrl(`ws://${host}:${cfg.daemonPort}`);
-          setApiBaseUrl(`http://${host}:${cfg.daemonPort}`);
+          setBrainConnection(host, String(cfg.daemonPort));
         }
       })
       .catch(() => {});
@@ -121,11 +126,7 @@ export const App: React.FC = () => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
 
-    let effectiveHost = hostUrl;
-    if (window.location.host && !window.location.host.includes(':5173')) {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      effectiveHost = `${proto}//${window.location.host}`;
-    }
+    const effectiveHost = hostUrl;
 
     const connect = () => {
       try {
@@ -621,6 +622,26 @@ export const App: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition-colors ${
+                isConnected
+                  ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300 hover:bg-emerald-900/40'
+                  : 'bg-amber-950/30 border-amber-800/40 text-amber-300 hover:bg-amber-900/40'
+              }`}
+              title={isConnected ? `Connected to Brain (${brainHost}:${brainPort})` : `Disconnected - Click to test connection`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isConnected ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-amber-400 animate-pulse'
+                }`}
+              />
+              <span className="hidden sm:inline font-mono text-[11px]">
+                {isConnected ? `${brainHost}:${brainPort}` : 'Disconnected'}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setIsRemoteOpen(true)}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C2029] border border-[#262B36] hover:border-[#8AB4F8] text-xs text-[#9AA0A6] hover:text-[#E8EAED] transition-colors"
               title="Open Remote Web / LAN Control QR"
@@ -643,6 +664,24 @@ export const App: React.FC = () => {
             )}
           </div>
         </header>
+
+        {!isConnected && (
+          <div className="bg-amber-950/40 border-b border-amber-800/40 px-3 sm:px-4 py-2 flex items-center justify-between text-xs text-amber-200 shrink-0 z-10">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+              <span className="truncate">
+                Disconnected from Brain at <code className="px-1.5 py-0.5 rounded bg-black/40 font-mono text-amber-300">{brainHost}:{brainPort}</code>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+              className="shrink-0 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-100 font-medium transition-colors text-[11px]"
+            >
+              Configure IP & Test
+            </button>
+          </div>
+        )}
 
         {/* Center Body */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ModelTier, ThinkingBudget, ModelStateStatus } from '../types/protocol';
+import { cleanHostAndPort } from '../utils/connectionTester';
 
 export interface ToolCallItemData {
   id: string;
@@ -85,6 +86,8 @@ interface SessionState {
   gitBranch: string;
   hostUrl: string;
   apiBaseUrl: string;
+  brainHost: string;
+  brainPort: string;
   isConnected: boolean;
   selectedTier: ModelTier;
   thinkingBudget: ThinkingBudget;
@@ -108,6 +111,7 @@ interface SessionState {
   setGitBranch: (branch: string) => void;
   setHostUrl: (url: string) => void;
   setApiBaseUrl: (url: string) => void;
+  setBrainConnection: (host: string, port?: string) => void;
   setIsConnected: (connected: boolean) => void;
   setSelectedTier: (tier: ModelTier) => void;
   setThinkingBudget: (budget: ThinkingBudget) => void;
@@ -144,6 +148,19 @@ interface SessionState {
 
 const initialSessionId = 'thread-default';
 
+const getInitialBrainSettings = () => {
+  if (typeof window !== 'undefined') {
+    const savedHost = localStorage.getItem('localgravity_brain_host');
+    const savedPort = localStorage.getItem('localgravity_brain_port');
+    if (savedHost) {
+      return cleanHostAndPort(savedHost, savedPort || '3390');
+    }
+  }
+  return { host: 'localhost', port: '3390' };
+};
+
+const initialConn = getInitialBrainSettings();
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [
     {
@@ -166,18 +183,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [{ id: initialSessionId, title: 'New Thread', updated: 'Just now', messages: [] }],
   workspacePath: '.',
   gitBranch: 'main',
-  hostUrl:
-    typeof window !== 'undefined' &&
-    window.location.host &&
-    !window.location.host.includes(':5173')
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-      : 'ws://localhost:3390',
-  apiBaseUrl:
-    typeof window !== 'undefined' &&
-    window.location.host &&
-    !window.location.host.includes(':5173')
-      ? `${window.location.protocol}//${window.location.host}`
-      : 'http://localhost:3390',
+  brainHost: initialConn.host,
+  brainPort: initialConn.port,
+  hostUrl: `ws://${initialConn.host}:${initialConn.port}`,
+  apiBaseUrl: `http://${initialConn.host}:${initialConn.port}`,
   isConnected: false,
   selectedTier: 'medium',
   thinkingBudget: 'fast',
@@ -285,7 +294,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setWorkspacePath: (path) => set({ workspacePath: path }),
   setGitBranch: (branch) => set({ gitBranch: branch }),
-  setHostUrl: (url) => set({ hostUrl: url }),
+  setBrainConnection: (host: string, port: string = '3390') => {
+    const clean = cleanHostAndPort(host, port);
+    const hostUrl = `ws://${clean.host}:${clean.port}`;
+    const apiBaseUrl = `http://${clean.host}:${clean.port}`;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('localgravity_brain_host', clean.host);
+      localStorage.setItem('localgravity_brain_port', clean.port);
+    }
+    set({
+      brainHost: clean.host,
+      brainPort: clean.port,
+      hostUrl,
+      apiBaseUrl,
+    });
+  },
+  setHostUrl: (url) => {
+    const clean = cleanHostAndPort(url);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('localgravity_brain_host', clean.host);
+      localStorage.setItem('localgravity_brain_port', clean.port);
+    }
+    set({
+      brainHost: clean.host,
+      brainPort: clean.port,
+      hostUrl: `ws://${clean.host}:${clean.port}`,
+      apiBaseUrl: `http://${clean.host}:${clean.port}`,
+    });
+  },
   setApiBaseUrl: (url) => set({ apiBaseUrl: url }),
   setIsConnected: (connected) => set({ isConnected: connected }),
   setSelectedTier: (tier) => set({ selectedTier: tier }),
