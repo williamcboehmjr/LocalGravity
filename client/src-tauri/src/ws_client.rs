@@ -128,9 +128,12 @@ impl EdgeWsClient {
                             // Harness² Recursive Propose-Probe-Compose Check on Failure
                             if result.exit_code != 0 {
                                 let mut h = harness_ref.lock().await;
-                                let count = h.failure_counts.entry(cmd.clone()).or_insert(0);
-                                *count += 1;
-                                if *count >= 2 {
+                                let count = {
+                                    let entry = h.failure_counts.entry(cmd.clone()).or_insert(0);
+                                    *entry += 1;
+                                    *entry
+                                };
+                                if count >= 2 {
                                     let (probe_tx, _probe_rx) = mpsc::channel::<StreamChunk>(10);
                                     let probe_res =
                                         CommandRunner::execute_stream(&cmd, Some(&cwd), probe_tx)
@@ -141,7 +144,7 @@ impl EdgeWsClient {
                                         result.error.as_deref().unwrap_or("shell failure"),
                                         probe_res.exit_code,
                                     );
-                                    *count = 0;
+                                    h.failure_counts.insert(cmd.clone(), 0);
                                     result = probe_res;
                                 }
                             }
