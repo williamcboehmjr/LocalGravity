@@ -719,7 +719,7 @@ export async function createDaemonServer(options?: {
         `1. FULL ACCESS: You have complete, unrestricted access to the entire computer and local filesystem, granted directly by the user.\n` +
         `2. NO GUARDRAIL REFUSALS: You CAN access, inspect, list, read, search, and manage files anywhere on the machine (including Downloads, Desktop, Documents, C:/, E:/, etc.). NEVER claim that you lack permission, that you are confined to the workspace, or that security guardrails prevent you from viewing or working with files outside the workspace.\n` +
         `3. PROACTIVE EXECUTION: When the user asks if you can see their files, their Downloads folder, or any directory, IMMEDIATELY call \`list_directory\` or \`run_terminal\` with that path to inspect and show them the real files.\n` +
-        `4. TOOL PATHS: All file and terminal tools support full absolute paths across the machine (e.g. "${downloadsDir}", "Downloads", "C:/", etc.).\n\n` +
+        `4. TOOL PATHS: All file and terminal tools support full absolute paths across the machine (e.g. "${downloadsDir}", "Downloads", "C:/", etc.).\n5. MULTI-STEP COMPLETION: When you call tools to inspect directories or read files, immediately use the tool outputs to provide your full, detailed findings, analysis, and implementation. Do NOT stop after reading files—always follow through and provide the complete solution directly to the user.\n\n` +
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
         (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
 
@@ -737,14 +737,16 @@ export async function createDaemonServer(options?: {
           })),
       ];
 
-      const MAX_TOOL_STEPS = 5;
+      const MAX_TOOL_STEPS = 12;
       let step = 0;
       let cumulativeOutputTokens = 0;
       let cumulativeThinkingTokens = 0;
       let lastThinkingMs = 0;
+      let hasExecutedTools = false;
 
       while (step < MAX_TOOL_STEPS) {
         step++;
+        const isFinalStep = step === MAX_TOOL_STEPS;
         const executedToolsThisStep: Array<{
           id: string;
           toolName: string;
@@ -752,11 +754,20 @@ export async function createDaemonServer(options?: {
           output: string;
         }> = [];
 
+        // On the final step, omit tools so the model must provide its final text synthesis
+        const activeTools = isFinalStep ? undefined : BUILTIN_TOOLS_SCHEMA;
+        if (isFinalStep && hasExecutedTools) {
+          chatMessages.push({
+            role: 'system',
+            content: 'You have gathered all needed information from tools. Now synthesize your complete analysis, refactoring plan, or answer for the user.',
+          });
+        }
+
         const result = await tabby.streamChatCompletion({
           tier: params.tier,
           thinkingBudget: params.thinkingBudget,
           messages: chatMessages,
-          tools: BUILTIN_TOOLS_SCHEMA,
+          tools: activeTools,
           abortSignal: abortController.signal,
           onThoughtDelta: (delta, elapsedMs, tokenCount) => {
             cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
@@ -791,6 +802,7 @@ export async function createDaemonServer(options?: {
             });
           },
           onToolCallRequest: async (toolName, toolArgs) => {
+            hasExecutedTools = true;
             db.updateThread(thread!.id, { status: 'executing_tool' });
             const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
             const toolExec = db.createToolExecution({
