@@ -63,6 +63,9 @@ export const App: React.FC = () => {
     updateLastAssistantMessage,
     updateLastAssistantTool,
     finalizeAssistantMessage,
+    commitAssistantStepNote,
+    upsertSubagentTask,
+    subagentTasks,
     appendStreamingThought,
     isGenerating,
     setIsGenerating,
@@ -102,6 +105,7 @@ export const App: React.FC = () => {
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
+  const [showSubagentDrawer, setShowSubagentDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -238,6 +242,10 @@ export const App: React.FC = () => {
               } else {
                 updateLastAssistantMessage(payload.chunk, payload.output_tokens);
               }
+            } else if (type === 'STEP_NOTE_COMMITTED') {
+              commitAssistantStepNote(payload.note, payload.committed_content);
+            } else if (type === 'SUBAGENT_EVENT') {
+              upsertSubagentTask(payload);
             } else if (type === 'TOOL_EVENT') {
               updateLastAssistantTool(payload.command, payload.output, payload.status, {
                 id: payload.tool_execution_id,
@@ -256,8 +264,13 @@ export const App: React.FC = () => {
             } else if (type === 'ARTIFACT_SYNC') {
               if (payload.artifact_name === 'task.md') {
                 setTaskMarkdown(payload.content);
-              } else if (payload.artifact_name === 'implementation_plan.md') {
+              } else if (
+                payload.artifact_name === 'implementation_plan.md' ||
+                payload.artifact_name === 'plan.md'
+              ) {
                 setPlanMarkdown(payload.content);
+                setActiveTab('plan');
+                setShowRightDrawer(true);
               }
             } else if (type === 'TELEMETRY') {
               setTelemetry({
@@ -827,6 +840,7 @@ export const App: React.FC = () => {
                 onTierChange={handleTierSwitch}
                 onStop={handleStopGeneration}
                 onQueue={handleQueuePrompt}
+                onClearContext={handleClearContext}
                 onInterruptAndSend={handleInterruptAndSend}
               />
             </div>
@@ -949,11 +963,66 @@ export const App: React.FC = () => {
               })}
             </div>
 
-            <div className="mt-2 pt-2 border-t border-[#242428] flex items-center justify-between px-1.5 text-[11px] text-[#8E8E93]">
-              <span>Background Tasks</span>
-              <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
-                {mcpServers.filter((s) => s.enabled).length} • {tokensPerSec.toFixed(0)} tok/s
-              </span>
+            <div className="mt-2 pt-2 border-t border-[#242428]">
+              <button
+                type="button"
+                onClick={() => setShowSubagentDrawer(!showSubagentDrawer)}
+                className="w-full flex items-center justify-between px-1.5 py-1 rounded-lg hover:bg-[#202024] text-[11px] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>Task Subagents & Logs</span>
+                  {isGenerating && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#60A5FA] animate-ping" />
+                  )}
+                </div>
+                <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
+                  {subagentTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec.toFixed(0)} tok/s
+                </span>
+              </button>
+
+              {(showSubagentDrawer || isGenerating) && subagentTasks.length > 0 && (
+                <div className="mt-1.5 space-y-1.5 max-h-48 overflow-y-auto px-1 pt-1">
+                  {subagentTasks.slice(0, 4).map((task) => (
+                    <div
+                      key={task.id}
+                      className="p-2 rounded-lg bg-[#131316] border border-[#242429] text-[11px] space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              task.status === 'running'
+                                ? 'bg-[#60A5FA] animate-pulse'
+                                : 'bg-emerald-400'
+                            }`}
+                          />
+                          <span className="font-medium text-[#E3E3E3] truncate">
+                            {task.role}
+                          </span>
+                        </div>
+                        <span className="font-mono text-[9.5px] text-[#6E6E73] shrink-0">
+                          Step {task.step}/{task.maxSteps}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-[#8E8E93] truncate">
+                        {task.summary}
+                      </div>
+                      {task.status === 'running' && task.logs.length > 1 && (
+                        <div className="pl-2 border-l border-[#26262C] space-y-0.5 pt-0.5">
+                          {task.logs.slice(-3, -1).map((lg, i) => (
+                            <div
+                              key={i}
+                              className="font-mono text-[9.5px] text-[#5E5E66] truncate"
+                            >
+                              {lg}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

@@ -602,6 +602,15 @@ export class LocalGravityDB {
     return buf;
   }
 
+  public resetStreamingMessageContent(messageId: string, newContent = ''): void {
+    const buf = this.streamBuffers.get(messageId);
+    if (buf) {
+      buf.content = newContent;
+      buf.dirty = true;
+    }
+    this.db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(newContent, messageId);
+  }
+
   public finalizeStreamingMessage(messageId: string): void {
     const buf = this.streamBuffers.get(messageId);
     if (buf) {

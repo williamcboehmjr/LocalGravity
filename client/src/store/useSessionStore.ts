@@ -30,6 +30,21 @@ export interface ChatMessage {
   toolOutput?: string;
   toolStatus?: 'running' | 'success' | 'error';
   toolCalls?: ToolCallItemData[];
+  stepNotes?: string[];
+}
+
+export interface SubagentTaskItem {
+  id: string;
+  thread_id: string;
+  message_id: string;
+  role: string;
+  command: string;
+  status: 'running' | 'completed' | 'error';
+  step: number;
+  maxSteps: number;
+  summary: string;
+  logs: string[];
+  timestamp: number;
 }
 
 export interface QueuedMessage {
@@ -103,6 +118,7 @@ interface SessionState {
   currentThoughtTokens: number;
   isThinkingFinished: boolean;
   isGenerating: boolean;
+  subagentTasks: SubagentTaskItem[];
 
   setProjects: (projects: ProjectItem[], activeId?: string) => void;
   setActiveProjectId: (projectId: string) => void;
@@ -127,6 +143,8 @@ interface SessionState {
     meta?: { id?: string; toolName?: string; durationMs?: number; exitCode?: number | null }
   ) => void;
   finalizeAssistantMessage: () => void;
+  commitAssistantStepNote: (note: string, committedContent?: string) => void;
+  upsertSubagentTask: (payload: any) => void;
   appendStreamingThought: (
     chunk: string,
     elapsedMs: number,
@@ -202,6 +220,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   currentThoughtTokens: 0,
   isThinkingFinished: false,
   isGenerating: false,
+  subagentTasks: [],
 
   setProjects: (projects, activeId) =>
     set((state) => {
@@ -412,6 +431,63 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { messages: list };
       }
       return state;
+    }),
+
+  commitAssistantStepNote: (note, committedContent) =>
+    set((state) => {
+      const list = [...state.messages];
+      if (list.length > 0 && list[list.length - 1].role === 'assistant') {
+        const last = { ...list[list.length - 1] };
+        const notes = last.stepNotes ? [...last.stepNotes] : [];
+        if (note && note.trim() && notes[notes.length - 1] !== note.trim()) {
+          notes.push(note.trim());
+        }
+        last.stepNotes = notes;
+        if (committedContent !== undefined) {
+          last.content = committedContent;
+        }
+        list[list.length - 1] = last;
+        return { messages: list };
+      }
+      return state;
+    }),
+
+  upsertSubagentTask: (payload) =>
+    set((state) => {
+      if (!payload || !payload.id) return state;
+      const list = [...state.subagentTasks];
+      const idx = list.findIndex((t) => t.id === payload.id);
+      if (idx !== -1) {
+        const existing = list[idx];
+        const newLogs = [...existing.logs];
+        if (payload.summary && newLogs[newLogs.length - 1] !== payload.summary) {
+          newLogs.push(payload.summary);
+        }
+        list[idx] = {
+          ...existing,
+          status: payload.status || existing.status,
+          step: payload.step ?? existing.step,
+          maxSteps: payload.maxSteps ?? existing.maxSteps,
+          summary: payload.summary || existing.summary,
+          logs: newLogs.slice(-20),
+          timestamp: payload.timestamp || Date.now(),
+        };
+      } else {
+        list.unshift({
+          id: payload.id,
+          thread_id: payload.thread_id || state.sessionId,
+          message_id: payload.message_id || '',
+          role: payload.role || 'Autonomous Engineer',
+          command: payload.command || 'autonomous',
+          status: payload.status || 'running',
+          step: payload.step || 1,
+          maxSteps: payload.maxSteps || 32,
+          summary: payload.summary || 'Starting task...',
+          logs: payload.summary ? [payload.summary] : [],
+          timestamp: payload.timestamp || Date.now(),
+        });
+      }
+      return { subagentTasks: list.slice(0, 15) };
     }),
 
   finalizeAssistantMessage: () =>

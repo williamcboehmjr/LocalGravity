@@ -4,6 +4,27 @@ All notable changes across LocalGravity Windows, macOS, and Web Remote Companion
 
 ---
 
+## [v2.0.4] - 2026-11-06 (Self-Catching Continuation, Collapsible Activity Window & Slash Commands)
+
+### 🔄 Self-Catching Autonomous Continuation & Protected Current-Step Tool Reads
+* **Self-Catching Premature Stop Detector (`detectPrematureStop`):** Automatically catches when any model (4B, 9B, or 27B) pauses after stating an intention to act (e.g., *"Let me read..."*, *"I'll inspect..."*, trailing colons, or empty post-think output) without emitting a tool call, injecting a continuation directive and keeping the execution loop going automatically.
+* **Protected Current-Step Tool Outputs in `pruneChatMessages`:** Current-step tool outputs (up to 18k–24k chars / ~650 lines per `read_file`) are now strictly protected from context-pruning. Only older historical steps (2+ turns ago) are compacted first when approaching context limits, eliminating the chunk-size testing loop.
+* **Raised Step Ceilings:** Increased default `MAX_TOOL_STEPS` from 12 to 32 (and up to 50 in `/goal` mode, 45 in `/teamwork` mode).
+
+### 🧠 Goal-Directed Deep Thinking Across All 3 Models (4B, 9B, 27B)
+* **Goal-Oriented `<think>` Calibration:** Tuned `deep` thinking budget (`1,200` tokens on Step 1 strategy & architecture; rapid tactical execution on follow-up tool steps) so 27B Deep Think reasons deeply with a clear goal in mind without ruminating for 5,000+ tokens on routine file reads.
+* **Dual XML & JSON `<tool_call>` Parser:** Added fallback parsing and tag stripping for both XML `<function=...>` and JSON `<tool_call>{"name":...}</tool_call>` formats inside `tabbyEngine.ts`.
+
+### 📦 Antigravity Collapsible Running Activity Box & Overview Subagents
+* **Auto-Collapsing `AgentActivityBox` in Main Thread:** Groups tool calls (with clean shortened paths like `Analyzed server/src/index.ts (L1–200)`) and intermediate step notes into a compact scrolling window while working, then **automatically collapses** into a single summary bar (`✓ Completed N actions (X files analyzed...)`) once finished.
+* **Clean Final Response Separation (`STEP_NOTE_COMMITTED`):** Intermediate tool-step preambles are routed to the collapsible activity box and Overview drawer rather than cluttering the final Markdown answer.
+* **Overview `Task Subagents & Logs` Monitor:** Live subagent status cards (`Autonomous Engineer`, `Goal Executor`, `System Architect`, `Principal Verifier`) with step counters and scrolling logs inside the right-hand Overview card.
+
+### ⚡ Antigravity `/` Slash Commands
+* **Interactive Slash Command Menu (`PromptBar.tsx` & `server/src/index.ts`):** Type `/` (or click the `/` toolbar icon) to trigger `/goal`, `/plan`, `/boost`, `/grill-me`, `/teamwork`, `/browser`, `/learn`, `/compact`, `/schedule`, and `/clear`.
+
+---
+
 ## [v2.0.3] - 2026-11-06 (Context Window Protection & Full Local Filesystem Access)
 
 ### 🛡️ Unbounded Tool Output Truncation & Sliding Context Window Pruning

@@ -12,6 +12,17 @@ import {
   ShieldAlert,
   ArrowUp,
   Check,
+  Target,
+  Map,
+  Sparkles,
+  MessageSquareMore,
+  Users,
+  Globe,
+  BookOpen,
+  Minimize2,
+  Clock,
+  Trash2,
+  Slash,
 } from 'lucide-react';
 import { useSessionStore, QueuedMessage } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
@@ -30,12 +41,13 @@ interface PromptBarProps {
   onStop?: () => void;
   onQueue?: (text: string, images?: string[]) => void;
   onInterruptAndSend?: (item: QueuedMessage) => void;
+  onClearContext?: () => void;
 }
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
   low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM' },
   medium: { name: 'Qwen 3.5 9B Medium', sub: 'Balanced Workhorse' },
-  high: { name: 'Qwen 3.8 27B High', sub: 'Deep Multimodal' },
+  high: { name: 'Qwen 3.8 27B High', sub: 'Goal-Directed Deep' },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -44,12 +56,94 @@ const BUDGET_LABELS: Record<ThinkingBudget, string> = {
   deep: 'Deep',
 };
 
+export interface SlashCommandItem {
+  command: string;
+  title: string;
+  description: string;
+  badge: string;
+  icon: React.ReactNode;
+}
+
+export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommandItem[] = [
+  {
+    command: '/goal',
+    title: 'Autonomous Goal Mode',
+    description: 'Run a thorough, multi-step task with self-catching continuation until 100% achieved',
+    badge: '50 steps',
+    icon: <Target className="w-3.5 h-3.5 text-emerald-400 shrink-0" />,
+  },
+  {
+    command: '/plan',
+    title: 'Step-by-Step Architectural Plan',
+    description: 'Design a structured implementation plan & sync to the Plan Workbench before coding',
+    badge: 'Planner',
+    icon: <Map className="w-3.5 h-3.5 text-[#60A5FA] shrink-0" />,
+  },
+  {
+    command: '/boost',
+    title: 'Deep Multi-Perspective & Verification',
+    description: 'Engage goal-directed Deep Thinking, multi-angle analysis, and rigorous verification',
+    badge: 'Deep Verify',
+    icon: <Sparkles className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />,
+  },
+  {
+    command: '/grill-me',
+    title: 'Interactive Design Interview',
+    description: 'Align on requirements & resolve design trade-offs through focused questions first',
+    badge: 'Interview',
+    icon: <MessageSquareMore className="w-3.5 h-3.5 text-amber-400 shrink-0" />,
+  },
+  {
+    command: '/teamwork',
+    title: 'Autonomous Multi-Subagent Team',
+    description: 'Coordinate Researcher, Architect, Builder, and QA Verifier subagents in sequence',
+    badge: '4 Agents',
+    icon: <Users className="w-3.5 h-3.5 text-cyan-400 shrink-0" />,
+  },
+  {
+    command: '/browser',
+    title: 'Headless Playwright Web Agent',
+    description: 'Browse the web, inspect live pages, or scrape documentation with Playwright',
+    badge: 'Web',
+    icon: <Globe className="w-3.5 h-3.5 text-sky-400 shrink-0" />,
+  },
+  {
+    command: '/learn',
+    title: 'Persist Rule to Harness² Memory',
+    description: 'Save a lesson, correction, or engineering pattern into .localgravity/harness/memory.md',
+    badge: 'Memory',
+    icon: <BookOpen className="w-3.5 h-3.5 text-pink-400 shrink-0" />,
+  },
+  {
+    command: '/compact',
+    title: 'Compact Context Window',
+    description: 'Distill and compact conversation history to free up the model context window',
+    badge: 'Context',
+    icon: <Minimize2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />,
+  },
+  {
+    command: '/schedule',
+    title: 'Schedule Recurring Automation',
+    description: 'Design a recurring cron automation or scheduled background task',
+    badge: 'Cron',
+    icon: <Clock className="w-3.5 h-3.5 text-orange-400 shrink-0" />,
+  },
+  {
+    command: '/clear',
+    title: 'Clear Conversation Thread',
+    description: 'Immediately wipe messages in the current conversation thread',
+    badge: 'Reset',
+    icon: <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />,
+  },
+];
+
 export const PromptBar: React.FC<PromptBarProps> = ({
   onSend,
   onTierChange,
   onStop,
   onQueue,
   onInterruptAndSend,
+  onClearContext,
 }) => {
   const {
     selectedTier,
@@ -68,6 +162,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   const [images, setImages] = useState<string[]>([]);
   const [showMentionPopover, setShowMentionPopover] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
+  const [showSlashPopover, setShowSlashPopover] = useState(false);
+  const [slashFilter, setSlashFilter] = useState('');
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showBudgetMenu, setShowBudgetMenu] = useState(false);
@@ -83,8 +180,27 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     }
   }, [input]);
 
+  const filteredSlashCommands = ANTIGRAVITY_SLASH_COMMANDS.filter(
+    (c) =>
+      c.command.toLowerCase().includes(slashFilter) ||
+      c.title.toLowerCase().includes(slashFilter)
+  );
+
   const handleInputChange = (val: string) => {
     setInput(val);
+
+    // Check for leading `/` slash command trigger (e.g. "/" or "/go")
+    const slashMatch = val.match(/^\/([a-zA-Z0-9_-]*)$/);
+    if (slashMatch) {
+      setSlashFilter(slashMatch[1].toLowerCase());
+      setSlashSelectedIndex(0);
+      setShowSlashPopover(true);
+      setShowMentionPopover(false);
+      return;
+    } else {
+      setShowSlashPopover(false);
+    }
+
     const atMatch = val.match(/@([a-zA-Z0-9_./-]*)$/);
     if (atMatch) {
       setMentionFilter(atMatch[1].toLowerCase());
@@ -92,6 +208,27 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     } else {
       setShowMentionPopover(false);
     }
+  };
+
+  const selectSlashCommand = (cmd: SlashCommandItem) => {
+    if (cmd.command === '/clear') {
+      setInput('');
+      setShowSlashPopover(false);
+      onClearContext?.();
+      return;
+    }
+    if (cmd.command === '/compact') {
+      setInput('');
+      setShowSlashPopover(false);
+      onSend('/compact', undefined, selectedTier, thinkingBudget);
+      return;
+    }
+    if (cmd.command === '/boost') {
+      setThinkingBudget('deep');
+    }
+    setInput(`${cmd.command} `);
+    setShowSlashPopover(false);
+    textareaRef.current?.focus();
   };
 
   const insertMention = (token: string) => {
@@ -157,24 +294,61 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   };
 
   const handleSubmit = () => {
-    if (!input.trim() && images.length === 0) return;
+    const trimmed = input.trim();
+    if (!trimmed && images.length === 0) return;
+
+    if (trimmed.toLowerCase() === '/clear') {
+      setInput('');
+      setImages([]);
+      setShowSlashPopover(false);
+      onClearContext?.();
+      return;
+    }
 
     if (isGenerating) {
       if (onQueue) {
-        onQueue(input.trim(), images.length > 0 ? images : undefined);
+        onQueue(trimmed, images.length > 0 ? images : undefined);
         setInput('');
         setImages([]);
       }
       return;
     }
 
-    onSend(input.trim(), images.length > 0 ? images : undefined, selectedTier, thinkingBudget);
+    const effectiveBudget: ThinkingBudget = trimmed.toLowerCase().startsWith('/boost')
+      ? 'deep'
+      : thinkingBudget;
+
+    onSend(trimmed, images.length > 0 ? images : undefined, selectedTier, effectiveBudget);
     setInput('');
     setImages([]);
     setShowMentionPopover(false);
+    setShowSlashPopover(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSlashPopover && filteredSlashCommands.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashSelectedIndex((prev) => (prev + 1) % filteredSlashCommands.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashSelectedIndex(
+          (prev) => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length
+        );
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        const chosen = filteredSlashCommands[slashSelectedIndex] || filteredSlashCommands[0];
+        if (chosen) {
+          selectSlashCommand(chosen);
+        }
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (e.nativeEvent.isComposing) return;
@@ -187,6 +361,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       handleSubmit();
     } else if (e.key === 'Escape') {
       setShowMentionPopover(false);
+      setShowSlashPopover(false);
       setShowModelMenu(false);
       setShowBudgetMenu(false);
     }
@@ -214,6 +389,12 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         ]),
   ].filter((c) => c.label.toLowerCase().includes(mentionFilter));
 
+  const activeSlashCmd = ANTIGRAVITY_SLASH_COMMANDS.find(
+    (c) =>
+      input.toLowerCase().startsWith(c.command + ' ') ||
+      input.trim().toLowerCase() === c.command
+  );
+
   const hasContent = Boolean(input.trim() || images.length > 0);
 
   return (
@@ -230,6 +411,48 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           : 'border-[#2C2C30] focus-within:border-[#3E3E44]'
       }`}
     >
+      {/* Antigravity `/` Slash Commands Popover */}
+      {showSlashPopover && filteredSlashCommands.length > 0 && (
+        <div className="absolute bottom-full left-3 mb-2 w-80 sm:w-96 max-h-72 overflow-y-auto bg-[#1B1B1E] border border-[#2E2E34] rounded-xl shadow-2xl p-1.5 z-50 space-y-0.5 select-none">
+          <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-[#6E6E73] px-2.5 py-1">
+            <span>Antigravity Slash Commands</span>
+            <span className="font-mono text-[9px] text-[#55555A]">↑↓ Navigate • Tab/Enter</span>
+          </div>
+          {filteredSlashCommands.map((item, idx) => {
+            const isSelected = idx === slashSelectedIndex;
+            return (
+              <button
+                key={item.command}
+                type="button"
+                onClick={() => selectSlashCommand(item)}
+                onMouseEnter={() => setSlashSelectedIndex(idx)}
+                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer ${
+                  isSelected ? 'bg-[#28282E] text-[#E3E3E3]' : 'text-[#A0A0A6] hover:bg-[#232328]'
+                }`}
+              >
+                <div className="mt-0.5">{item.icon}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-xs font-semibold text-[#E3E3E3]">
+                        {item.command}
+                      </span>
+                      <span className="text-xs text-[#9A9A9E]">{item.title}</span>
+                    </div>
+                    <span className="px-1.5 py-0.5 rounded bg-[#141417] border border-[#2C2C32] text-[9px] font-mono text-[#8E8E93] shrink-0">
+                      {item.badge}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#6E6E73] leading-snug mt-0.5 truncate">
+                    {item.description}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* @file / @folder / @mcp Autocomplete Popover */}
       {showMentionPopover && mentionCandidates.length > 0 && (
         <div className="absolute bottom-full left-3 mb-2 w-72 max-h-52 overflow-y-auto bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5 select-none">
@@ -261,6 +484,23 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         onInterruptAndSend={(item) => onInterruptAndSend?.(item)}
         onEditInInput={handleEditInInput}
       />
+
+      {/* Active Slash Command Indicator Pill */}
+      {activeSlashCmd && (
+        <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-[#151518] border border-[#2A2A30] text-xs select-none">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {activeSlashCmd.icon}
+            <span className="font-mono font-semibold text-[#E3E3E3]">
+              {activeSlashCmd.command}
+            </span>
+            <span className="text-[#6E6E73]">•</span>
+            <span className="text-[11px] text-[#9A9A9E] truncate">{activeSlashCmd.title}</span>
+          </div>
+          <span className="text-[10px] font-mono text-emerald-400 shrink-0 ml-2">
+            {activeSlashCmd.badge}
+          </span>
+        </div>
+      )}
 
       {/* Attached Screenshots Tray */}
       {images.length > 0 && (
@@ -294,14 +534,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         }}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        placeholder="Ask anything, @ to mention, / for actions"
+        placeholder="Ask anything, @ to mention, / for actions (/goal, /plan, /boost...)"
         className="auto-fit-textarea bg-transparent resize-none outline-none text-[13px] text-[#E3E3E3] placeholder:text-[#6E6E73] font-sans leading-relaxed"
       />
 
       {/* Bottom Toolbar inside Composer (Antigravity 2.0 layout) */}
       <div className="flex items-center justify-between pt-1 gap-2 select-none">
-        {/* Left side: + button, Model Dropdown, Thinking Budget Dropdown */}
-        <div className="flex items-center gap-1.5 min-w-0">
+        {/* Left side: + button, / Slash button, Model Dropdown, Thinking Budget Dropdown */}
+        <div className="flex items-center gap-1 min-w-0">
           <input
             ref={fileInputRef}
             type="file"
@@ -317,12 +557,29 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               setInput((prev) => (prev.endsWith('@') ? prev : `${prev}@`));
               setMentionFilter('');
               setShowMentionPopover(true);
+              setShowSlashPopover(false);
               textareaRef.current?.focus();
             }}
             className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
             title="Add context (@file / @mcp)"
           >
             <Plus className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setInput('/');
+              setSlashFilter('');
+              setSlashSelectedIndex(0);
+              setShowSlashPopover(!showSlashPopover);
+              setShowMentionPopover(false);
+              textareaRef.current?.focus();
+            }}
+            className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            title="Slash Commands (/goal, /plan, /boost, /teamwork...)"
+          >
+            <Slash className="w-3.5 h-3.5" />
           </button>
 
           {/* Model Tier Dropdown */}

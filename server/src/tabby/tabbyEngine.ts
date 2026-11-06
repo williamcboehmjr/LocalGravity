@@ -103,6 +103,7 @@ export const THINKING_BUDGET_SPECS: Record<
   {
     budget: ThinkingBudget;
     maxThinkingTokens: number;
+    followUpStepMaxThinkingTokens: number;
     prefillClosedThink: boolean;
     systemDirective: string;
   }
@@ -110,23 +111,26 @@ export const THINKING_BUDGET_SPECS: Record<
   off: {
     budget: 'off',
     maxThinkingTokens: 0,
+    followUpStepMaxThinkingTokens: 0,
     prefillClosedThink: true,
     systemDirective:
-      'THINKING BUDGET: OFF (0 tokens). Respond or execute requested actions directly without deliberation.',
+      'THINKING BUDGET: OFF (0 tokens). Execute requested tools or respond directly with zero deliberation.',
   },
   fast: {
     budget: 'fast',
     maxThinkingTokens: 250,
+    followUpStepMaxThinkingTokens: 0,
     prefillClosedThink: true,
     systemDirective:
-      'THINKING BUDGET: FAST. Deliver a concise, direct response or tool execution with sub-second latency.',
+      'THINKING BUDGET: FAST. Deliver a concise, direct response or immediate tool execution with sub-second latency.',
   },
   deep: {
     budget: 'deep',
-    maxThinkingTokens: 8192,
+    maxThinkingTokens: 1200,
+    followUpStepMaxThinkingTokens: 320,
     prefillClosedThink: false,
     systemDirective:
-      'THINKING BUDGET: DEEP (Unconstrained). Perform thorough architectural reasoning inside <think>...</think> before acting.',
+      'THINKING BUDGET: DEEP (Goal-Directed Architectural Reasoning). Think with a concrete goal in mind inside <think>...</think>: identify the objective, map the exact files/tools needed, and immediately act. Do NOT ruminate in circles, repeat yourself, or over-think trivial steps—think just enough to get the job done right, then execute.',
   },
 };
 
@@ -585,6 +589,7 @@ export class TabbyEngine {
   public async streamChatCompletion(params: {
     tier: ModelTier;
     thinkingBudget: ThinkingBudget;
+    stepIndex?: number;
     messages: Array<{ role: string; content: any }>;
     tools?: any[];
     abortSignal?: AbortSignal;
@@ -661,19 +666,27 @@ export class TabbyEngine {
           headers['x-api-key'] = this.apiKey;
         }
 
+        const stepIdx = params.stepIndex || 1;
+        const isFollowUpStep = stepIdx > 1;
+        const effectiveMaxThinkingTokens = isFollowUpStep
+          ? budgetSpec.followUpStepMaxThinkingTokens
+          : budgetSpec.maxThinkingTokens;
+        const shouldPrefillClosedThink =
+          budgetSpec.prefillClosedThink || (isFollowUpStep && params.thinkingBudget !== 'deep') || (stepIdx > 2 && params.thinkingBudget === 'deep');
+
         const requestBody: Record<string, any> = {
           model: this.resolveDiskModelName(params.tier),
           messages: augmentedMessages,
           stream: true,
-          temperature: params.thinkingBudget === 'off' ? 0.2 : 0.6,
-          max_tokens: 4096,
+          temperature: params.thinkingBudget === 'off' ? 0.2 : 0.55,
+          max_tokens: 6144,
           chat_template_kwargs: {
-            enable_thinking: params.thinkingBudget === 'deep',
+            enable_thinking: params.thinkingBudget === 'deep' && !shouldPrefillClosedThink,
           },
         };
 
-        // If Thinking Budget is OFF, prefill closed <think></think> for 0ms overhead
-        if (budgetSpec.prefillClosedThink) {
+        // Pre-close <think></think> when thinking is off/fast or on deep follow-up tool steps (>2) so tool loops execute rapidly
+        if (shouldPrefillClosedThink) {
           requestBody.response_prefix = '<think></think>\n';
         }
 
@@ -763,7 +776,7 @@ export class TabbyEngine {
 
                   if (inThinkTag && params.thinkingBudget !== 'off') {
                     // Enforce ~250 token budget for 'fast'
-                    if (thinkingTokens < budgetSpec.maxThinkingTokens) {
+                    if (thinkingTokens < effectiveMaxThinkingTokens) {
                       thinkingTokens += Math.max(1, Math.ceil(textChunk.length / 4));
                       thinkingContent += textChunk;
                       thinkingDurationMs = Math.round(performance.now() - startTime);
@@ -809,11 +822,14 @@ export class TabbyEngine {
             }
           }
 
-          // Also check for XML tool calls inside content (e.g. <tool_call><function=list_directory>...)
+          // Also check for XML or JSON <tool_call> blocks inside content (and strip them from displayed content)
           if (params.onToolCallRequest && content.includes('<tool_call>')) {
-            const toolCallRegex = /<tool_call>[\s\S]*?<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>[\s\S]*?<\/tool_call>/g;
+            // Pattern 1: XML <tool_call><function=name><parameter=k>v</parameter></function></tool_call>
+            const xmlToolRegex = /<tool_call>[\s\S]*?<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>[\s\S]*?<\/tool_call>/g;
             let match;
-            while ((match = toolCallRegex.exec(content)) !== null) {
+            let parsedAnyXml = false;
+            while ((match = xmlToolRegex.exec(content)) !== null) {
+              parsedAnyXml = true;
               const toolName = match[1];
               const paramBody = match[2];
               const argsObj: Record<string, any> = {};
@@ -821,7 +837,7 @@ export class TabbyEngine {
               let pMatch;
               while ((pMatch = paramRegex.exec(paramBody)) !== null) {
                 const key = pMatch[1];
-                let val = pMatch[2].trim();
+                let val: any = pMatch[2].trim();
                 try {
                   val = JSON.parse(val);
                 } catch {}
@@ -829,6 +845,28 @@ export class TabbyEngine {
               }
               await params.onToolCallRequest(toolName, argsObj);
             }
+
+            // Pattern 2: JSON <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+            if (!parsedAnyXml) {
+              const jsonToolRegex = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+              let jMatch;
+              while ((jMatch = jsonToolRegex.exec(content)) !== null) {
+                try {
+                  const parsedCall = JSON.parse(jMatch[1]);
+                  const tName = parsedCall.name || parsedCall.function?.name;
+                  let tArgs = parsedCall.arguments ?? parsedCall.parameters ?? parsedCall.function?.arguments ?? {};
+                  if (typeof tArgs === 'string') {
+                    try { tArgs = JSON.parse(tArgs); } catch {}
+                  }
+                  if (tName) {
+                    await params.onToolCallRequest(tName, tArgs);
+                  }
+                } catch {}
+              }
+            }
+
+            // Strip raw <tool_call>...</tool_call> tags from content
+            content = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
           }
 
           this.swapStatus = 'ready';
