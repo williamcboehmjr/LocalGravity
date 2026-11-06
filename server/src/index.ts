@@ -503,6 +503,14 @@ export async function createDaemonServer(options?: {
     };
   });
 
+  app.get('/api/health', async () => {
+    return {
+      status: 'ok',
+      activeTier: tabby.getTelemetry().activeTier,
+      uptimeSeconds: Math.floor(process.uptime()),
+    };
+  });
+
   app.get('/api/runtime/ports', async () => ports);
 
   app.get('/api/client/appdata', async () => {
