@@ -100,6 +100,15 @@ export const App: React.FC = () => {
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+
+  const activeProjectIdRef = useRef(activeProjectId);
+  activeProjectIdRef.current = activeProjectId;
+
+  const workspacePathRef = useRef(workspacePath);
+  workspacePathRef.current = workspacePath;
+
   // Auto-discover runtime ports from `/runtime-ports.json` if running via Vite dev or Tauri
   useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('localgravity_brain_host')) {
@@ -125,10 +134,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
+    let isDisposed = false;
 
     const effectiveHost = hostUrl;
 
     const connect = () => {
+      if (isDisposed) return;
+
       try {
         const cleanHost = effectiveHost.replace(/^http/, 'ws');
         const url = `${cleanHost}/ws/sync`;
@@ -136,15 +148,21 @@ export const App: React.FC = () => {
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (isDisposed) {
+            try {
+              ws?.close();
+            } catch {}
+            return;
+          }
           setIsConnected(true);
           ws?.send(
             JSON.stringify({
               id: 'init-' + Date.now(),
               type: 'SESSION_INIT',
               payload: {
-                thread_id: sessionId,
-                project_id: activeProjectId,
-                workspace_path: workspacePath,
+                thread_id: sessionIdRef.current,
+                project_id: activeProjectIdRef.current,
+                workspace_path: workspacePathRef.current,
                 platform: navigator.userAgent.toLowerCase().includes('mac') ? 'macos' : 'windows',
                 client_version: '2.0.0',
               },
@@ -153,15 +171,18 @@ export const App: React.FC = () => {
         };
 
         ws.onclose = () => {
+          if (isDisposed) return;
           setIsConnected(false);
           reconnectTimeout = setTimeout(connect, 2500);
         };
 
         ws.onerror = () => {
+          if (isDisposed) return;
           setIsConnected(false);
         };
 
         ws.onmessage = (event) => {
+          if (isDisposed) return;
           try {
             const data = JSON.parse(event.data);
             const { type, payload } = data;
@@ -266,17 +287,45 @@ export const App: React.FC = () => {
           }
         };
       } catch {
-        reconnectTimeout = setTimeout(connect, 2500);
+        if (!isDisposed) {
+          setIsConnected(false);
+          reconnectTimeout = setTimeout(connect, 2500);
+        }
       }
     };
 
     connect();
 
     return () => {
-      if (ws) ws.close();
+      isDisposed = true;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) {
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        try {
+          ws.close();
+        } catch {}
+      }
     };
-  }, [hostUrl, sessionId, activeProjectId]);
+  }, [hostUrl]);
+
+  // Request sync over existing socket when project or thread changes without reconnecting
+  useEffect(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'REQUEST_SYNC',
+          payload: {
+            thread_id: sessionId,
+            project_id: activeProjectId,
+            workspace_path: workspacePath,
+          },
+        })
+      );
+    }
+  }, [sessionId, activeProjectId, workspacePath]);
 
   const handleSendPrompt = (
     text: string,
