@@ -1,6 +1,6 @@
 # Harness² Component 4: Tool Guidance (tools.md)
 ## Workstation-Wide Operations
-- **`list_directory`**: Can list any folder on the machine (e.g. `Downloads`, `C:/Users/Sue/Downloads`, `C:/`, or workspace).
+- **`list_directory`**: Can list any folder on the machine (e.g. `Downloads`, `Desktop`, `C:/Users/Sue/Downloads`, `C:/`, or workspace root `"."`).
 - **`read_file`**: Reads any file on the system using relative or absolute paths.
 - **`write_file` / `apply_diff`**: Edits files with automated rollback checkpoints.
 - **`search_codebase`**: Searches code or text files across any specified root path.
@@ -11,3 +11,4 @@
 2. **Mandatory Build Verification**: After modifying source files (especially TypeScript or Rust), ALWAYS execute a compile check via `run_terminal` (`npm run build` or `cargo check`). If compilation fails, immediately inspect errors and repair them before declaring completion.
 3. **Cross-Platform Directory Creation**: On Windows, PowerShell `mkdir -p dir1 dir2` fails with positional argument errors. Use `New-Item -ItemType Directory -Force -Path dir1, dir2` or create paths via Node/`write_file`.
 4. **Preserve Working Implementations**: Before refactoring or splitting a core service, inspect how incoming WebSocket events and HTTP endpoints bind to it so no existing runtime capabilities are broken.
+5. **Immediate Tool Execution**: When planning changes, execute the required tool calls (e.g. `read_file`, `write_file`, `run_terminal`) directly. Never output extensive internal monologue in place of executing actions.

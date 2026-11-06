@@ -214,7 +214,10 @@ export class BuiltinToolExecutor {
       switch (toolName) {
         case 'run_terminal': {
           const cmd = String(args.command || 'Get-Location');
-          const cwd = args.cwd ? this.resolveSafePath(ctx.workspaceRoot, args.cwd) : ctx.workspaceRoot;
+          let cwd = args.cwd ? this.resolveSafePath(ctx.workspaceRoot, args.cwd) : ctx.workspaceRoot;
+          if (!fs.existsSync(cwd)) {
+            cwd = ctx.workspaceRoot;
+          }
           const res = await this.terminal.executeCommand(cmd, cwd, 30000, (chunk, stream) => {
             if (stream === 'stdout') ctx.onStdoutChunk?.(chunk);
             else ctx.onStderrChunk?.(chunk);

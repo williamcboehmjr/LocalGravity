@@ -374,7 +374,13 @@ export class Harness2Manager {
   public buildCompiledHarnessPrompt(workspaceRoot: string): string {
     const components = this.listHarnessComponents(workspaceRoot);
     return components
-      .map((c) => `--- [${c.name}] ---\n${c.content.trim()}`)
+      .map((c) => {
+        let text = c.content.trim();
+        if (text.length > 2500) {
+          text = text.slice(0, 2500) + '\n... [Harness component truncated to preserve context]';
+        }
+        return `--- [${c.name}] ---\n${text}`;
+      })
       .join('\n\n');
   }
 
@@ -436,7 +442,7 @@ export class Harness2Manager {
       stdout: string;
       stderr: string;
     }>;
-  }): Promise<ProposeProbeComposeCycle> {
+  }): Promise<ProposeProbeComposeCycle | null> {
     const harnessDir = this.ensureWorkspaceHarness(params.workspaceRoot);
     const isGuardrailViolation =
       params.stderrBefore.toLowerCase().includes('forbidden') ||
@@ -449,9 +455,17 @@ export class Harness2Manager {
       : 'tools.md';
 
     const timestamp = new Date().toISOString();
+    const cleanCmd = String(params.failedCommand || '').replace(/[\r\n]+/g, ' ').replace(/[`\\$]/g, '').slice(0, 80);
+    const cleanErr = String(params.stderrBefore || '').replace(/[\r\n]+/g, ' ').replace(/[`\\$]/g, '').slice(0, 80);
+    
+    // Don't auto-log if command is malformed noise
+    if (cleanCmd.length < 3 || cleanCmd.includes(')]}') || cleanCmd.includes('))))')) {
+      return null;
+    }
+
     const proposedPatch = isGuardrailViolation
-      ? `\n- **[PPC Auto-Guardrail ${timestamp}]**: Command \`${params.failedCommand}\` failed with \`${params.stderrBefore.slice(0, 120)}\`. Enforce safe workspace-relative paths and dynamic ports.`
-      : `\n- **[PPC Auto-Tool Rule ${timestamp}]**: Tool \`${params.failedToolName}\` (\`${params.failedCommand}\`) encountered error \`${params.stderrBefore.slice(0, 120)}\`. Fallback to safe cross-platform invocation.`;
+      ? `\n- **[PPC Auto-Guardrail ${timestamp}]**: Command \`${cleanCmd}\` failed with \`${cleanErr}\`. Enforce safe workspace-relative paths and dynamic ports.`
+      : `\n- **[PPC Auto-Tool Rule ${timestamp}]**: Tool \`${params.failedToolName}\` (\`${cleanCmd}\`) encountered error \`${cleanErr}\`. Fallback to safe cross-platform invocation.`;
 
     // 1. PROPOSE: Apply candidate adjustment to tools.md or guardrails.md
     const targetPath = path.join(harnessDir, proposedTargetFile);

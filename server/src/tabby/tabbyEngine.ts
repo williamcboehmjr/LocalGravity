@@ -151,11 +151,11 @@ export const THINKING_BUDGET_SPECS: Record<
   },
   deep: {
     budget: 'deep',
-    maxThinkingTokens: 1200,
-    followUpStepMaxThinkingTokens: 320,
+    maxThinkingTokens: 600,
+    followUpStepMaxThinkingTokens: 180,
     prefillClosedThink: false,
     systemDirective:
-      'THINKING BUDGET: DEEP (Goal-Directed Architectural Reasoning). Think with a concrete goal in mind inside <think>...</think>: identify the objective, map the exact files/tools needed, and immediately act. Do NOT ruminate in circles, repeat yourself, or over-think trivial steps—think just enough to get the job done right, then execute.',
+      'THINKING BUDGET: DEEP (Goal-Directed Action). Plan concisely (under 20 lines): determine objective, select exact tools/files, then IMMEDIATELY execute. Never output speculative prose or monologue in place of executing real tool calls.',
   },
 };
 
