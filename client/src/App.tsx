@@ -41,6 +41,8 @@ import { PlanViewer } from './components/right-canvas/PlanViewer';
 import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
 import { Splitter } from './components/common/Splitter';
 import { ModelTier, ThinkingBudget } from './types/protocol';
+import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
+import { checkForAppUpdates, UpdateInfo } from './services/updaterService';
 
 export const App: React.FC = () => {
   const {
@@ -107,6 +109,21 @@ export const App: React.FC = () => {
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
   const [showSubagentDrawer, setShowSubagentDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      checkForAppUpdates()
+        .then((info) => {
+          if (info.available) {
+            setUpdateInfo(info);
+          }
+        })
+        .catch(() => {});
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -580,8 +597,15 @@ export const App: React.FC = () => {
   ];
 
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] w-screen bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
-      {/* 1. LEFT SIDEBAR (Google Antigravity 2.0 Navigation Rail) */}
+    <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-screen bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
+      {!updateDismissed && updateInfo && (
+        <UpdateNotificationBanner
+          updateInfo={updateInfo}
+          onDismiss={() => setUpdateDismissed(true)}
+        />
+      )}
+      <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+        {/* 1. LEFT SIDEBAR (Google Antigravity 2.0 Navigation Rail) */}
       {showLeftRail && (
         <aside
           style={{ width: `${leftRailWidth}px` }}
@@ -1040,6 +1064,8 @@ export const App: React.FC = () => {
           )}
         </aside>
       )}
+
+      </div>
 
       {/* Modals */}
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />

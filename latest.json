@@ -1,0 +1,15 @@
+{
+  "version": "v2.0.0",
+  "notes": "LocalGravity v2.0.0 Release - Auto-Update enabled via GitHub Releases.\nIncludes anti-repetition sampling, collapsible agent activity, and instant model hot-swapping.",
+  "pub_date": "2026-11-06T20:36:20.365Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelNaWVZOTTRQZWszU3dxU2Z1cU55SEY1czhHTUg4QUppZkRIc3N2bXpXVmxGNjR1eG9vNXNhajhVMVg1QmpXVmR5SGtOZEtVYkVmUW9ERnNIU3FrNWcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTk3MzU4CWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMApEdmtSTHp2V3RGYXVNaEpiZlFYSmljbTZ0ZnlMU005WXorYkxTOHVwMWdEQVJRWFVpalVSd2xoVjVkTS92RlBkSVpmdU05RS81SzhlK3dqWHpVTWlCQT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_x64_en-US.msi"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelNaWVZOTTRQZWszU3dxU2Z1cU55SEY1czhHTUg4QUppZkRIc3N2bXpXVmxGNjR1eG9vNXNhajhVMVg1QmpXVmR5SGtOZEtVYkVmUW9ERnNIU3FrNWcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTk3MzU4CWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMApEdmtSTHp2V3RGYXVNaEpiZlFYSmljbTZ0ZnlMU005WXorYkxTOHVwMWdEQVJRWFVpalVSd2xoVjVkTS92RlBkSVpmdU05RS81SzhlK3dqWHpVTWlCQT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_aarch64.dmg"
+    }
+  }
+}
