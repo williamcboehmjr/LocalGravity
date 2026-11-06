@@ -1,3 +1,28 @@
+
+export function hasConsecutiveRepetition(buffer: string): boolean {
+  if (!buffer || buffer.length < 16) return false;
+  const tail = buffer.slice(-300);
+  const match = tail.match(/(.{4,80}?)(?:[\s\n\r]*\1){2,}$/i);
+  return !!match;
+}
+
+export function deduplicateRepeatedSequences(text: string): string {
+  if (!text || text.length < 20) return text;
+  const lines = text.split(/\r?\n/);
+  const dedupLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (dedupLines.length >= 1 && trimmed.length > 5 && trimmed === dedupLines[dedupLines.length - 1].trim()) {
+      continue;
+    }
+    dedupLines.push(lines[i]);
+  }
+  let result = dedupLines.join('\n');
+  result = result.replace(/([^.!?\n]{6,}[.!?])(?:\s*\1){2,}/gi, '$1');
+  result = result.replace(/\b([a-zA-Z0-9_\-]{3,25}(?:\s+[a-zA-Z0-9_\-]{3,25}){0,3})\b(?:\s+\1\b){3,}/gi, '$1');
+  return result.trim();
+}
+
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -641,7 +666,7 @@ export class TabbyEngine {
     let thinkingDurationMs = 0;
 
     // Build messages with 3x3 Thinking Budget directive
-    const augmentedMessages = [...params.messages];
+    const augmentedMessages = params.messages.map(m => ({ ...m, content: deduplicateRepeatedSequences(m.content) }));
     if (augmentedMessages.length > 0 && augmentedMessages[0].role === 'system') {
       augmentedMessages[0] = {
         ...augmentedMessages[0],
@@ -680,6 +705,11 @@ export class TabbyEngine {
           stream: true,
           temperature: params.thinkingBudget === 'off' ? 0.2 : 0.55,
           max_tokens: 6144,
+          repetition_penalty: 1.10,
+          penalty_range: 2048,
+          dry_multiplier: 0.8,
+          dry_base: 1.75,
+          dry_allowed_length: 2,
           presence_penalty: 0.15,
           frequency_penalty: 0.1,
           chat_template_kwargs: {

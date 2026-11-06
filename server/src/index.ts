@@ -21,8 +21,7 @@ import {
 } from './db/database.js';
 import {
   TabbyEngine,
-  TIER_SPECS,
-} from './tabby/tabbyEngine.js';
+  TIER_SPECS,  deduplicateRepeatedSequences,} from './tabby/tabbyEngine.js';
 import { McpClientManager } from './mcp/mcpManager.js';
 import { SharedTerminalManager } from './terminal/terminalManager.js';
 import {
@@ -1309,7 +1308,7 @@ export async function createDaemonServer(options?: {
           break;
         }
 
-        const stepText = (result.content || '').trim();
+        const stepText = deduplicateRepeatedSequences((result.content || '').trim());
 
         // Check if no tools were executed in this step
         if (executedToolsThisStep.length === 0) {
