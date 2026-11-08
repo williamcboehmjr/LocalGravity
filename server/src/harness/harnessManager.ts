@@ -325,9 +325,15 @@ export class Harness2Manager {
       {
         id: 'skills',
         name: '6. Skills (skills/)',
-        relativePath: '.localgravity/harness/skills/code_audit.md',
+        relativePath: '.localgravity/harness/skills',
         kind: 'directory',
-        content: readSafe(path.join('skills', 'code_audit.md')),
+        content: (() => {
+          const files = listDirEntries('skills');
+          if (files.length === 0) return 'No skills configured.';
+          return files
+            .map((f) => `### Skill: ${f}\n${readSafe(path.join('skills', f))}`)
+            .join('\n\n---\n\n');
+        })(),
         entries: listDirEntries('skills'),
         updatedAt: statSafe('skills'),
       },

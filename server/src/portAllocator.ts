@@ -9,7 +9,7 @@ import os from 'node:os';
  * Port 5001 is the host TabbyAPI instance (PID 18372); daemon must not bind to it,
  * but TabbyEngine client communicates with it over http://127.0.0.1:5001.
  */
-export const FORBIDDEN_PORTS = new Set<number>([5000]);
+export const FORBIDDEN_PORTS = new Set<number>([5000, 5001]);
 
 export interface RuntimePortsConfig {
   daemonPort: number;
@@ -165,7 +165,7 @@ export async function allocateRuntimePorts(
 
   const daemonPort = await findFreePort(startDaemon, reserved);
   const vitePort = await findFreePort(startVite, reserved);
-  const tabbyPort = 5001;
+  const tabbyPort = 8080;
 
   const lanIp = detectLanIp();
 
@@ -178,9 +178,9 @@ export async function allocateRuntimePorts(
     localUrl: `http://localhost:${daemonPort}`,
     lanUrl: `http://${lanIp}:${daemonPort}`,
     wsSyncUrl: `ws://localhost:${daemonPort}/ws/sync`,
-    tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001',
+    tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:8080',
     allocatedAt: new Date().toISOString(),
-    forbiddenPorts: [5000],
+    forbiddenPorts: [5000, 5001],
   };
 
   writeRuntimePortsAtomically(repoRoot, config);

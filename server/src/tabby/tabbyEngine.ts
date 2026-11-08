@@ -1,163 +1,28 @@
-
-export function hasConsecutiveRepetition(buffer: string): boolean {
-  if (!buffer || buffer.length < 16) return false;
-  const tail = buffer.slice(-300);
-  const match = tail.match(/(.{4,80}?)(?:[\s\n\r]*\1){2,}$/i);
-  return !!match;
-}
-
-export function deduplicateRepeatedSequences(text: string): string {
-  if (!text || text.length < 20) return text;
-  const lines = text.split(/\r?\n/);
-  const dedupLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (dedupLines.length >= 1 && trimmed.length > 5 && trimmed === dedupLines[dedupLines.length - 1].trim()) {
-      continue;
-    }
-    dedupLines.push(lines[i]);
-  }
-  let result = dedupLines.join('\n');
-  result = result.replace(/([^.!?\n]{6,}[.!?])(?:\s*\1){2,}/gi, '$1');
-  result = result.replace(/\b([a-zA-Z0-9_\-]{3,25}(?:\s+[a-zA-Z0-9_\-]{3,25}){0,3})\b(?:\s+\1\b){3,}/gi, '$1');
-  return result.trim();
-}
-
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import YAML from 'yaml';
+import { LlamaMoESidecar } from './llamaSidecar.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
 
-export interface TierModelSpec {
-  tier: ModelTier;
-  displayName: string;
-  shortLabel: string;
-  modelName: string;
-  fallbackFolderNames: string[];
-  bpw: string;
-  maxSeqLen: number;
-  cacheMode: 'Q4';
-  autosplitReserve: [number];
-  visionOffload: boolean;
-  draftMode: 'ngram';
-  hybridDraftTokens: number;
-  estimatedVramGb: number;
-}
+// Pure text-normalization helpers extracted to a side-effect-free module.
+export { hasConsecutiveRepetition, deduplicateRepeatedSequences } from './textNormalizers.js';
+import { deduplicateRepeatedSequences } from './textNormalizers.js';
 
-export interface SysRamWarmStatus {
-  tier: ModelTier;
-  modelName: string;
-  state: 'cold' | 'warming' | 'warm' | 'vram_active';
-  bytesWarmed: number;
-  totalBytes: number;
-  filesCount: number;
-  throughputMBps: number;
-  lastWarmedAt: string | null;
-}
+// Static model-tier / thinking-budget configuration and telemetry types.
+export {
+  TIER_SPECS,
+  THINKING_BUDGET_SPECS,
+} from './modelSpecs.js';
+export type { TierModelSpec, SysRamWarmStatus, TabbyEngineTelemetry } from './modelSpecs.js';
+import {
+  TIER_SPECS,
+  THINKING_BUDGET_SPECS,
+  TierModelSpec,
+  SysRamWarmStatus,
+  TabbyEngineTelemetry,
+} from './modelSpecs.js';
 
-export interface TabbyEngineTelemetry {
-  connected: boolean;
-  tabbyUrl: string;
-  activeTier: ModelTier;
-  activeModel: string;
-  swapStatus: 'idle' | 'swapping' | 'ready' | 'generating' | 'error';
-  lastSwapDurationMs: number;
-  tokensPerSec: number;
-  cacheMode: 'Q4';
-  autosplitReserveMb: number;
-  draftMode: 'ngram';
-  hybridDraftTokens: number;
-  sysramCache: Record<ModelTier, SysRamWarmStatus>;
-}
-
-export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
-  low: {
-    tier: 'low',
-    displayName: 'Qwen 3.5 4B (EXL3 4.0bpw)',
-    shortLabel: 'Low 4B',
-    modelName: 'Qwen3.5-4B-EXL3-4.0bpw',
-    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.0bpw', 'Qwen3.5-4B-EXL3-4.5bpw'],
-    bpw: '4.0 bpw',
-    maxSeqLen: 32768,
-    cacheMode: 'Q4',
-    autosplitReserve: [256],
-    visionOffload: false,
-    draftMode: 'ngram',
-    hybridDraftTokens: 4,
-    estimatedVramGb: 3.4,
-  },
-  medium: {
-    tier: 'medium',
-    displayName: 'Qwen 3.5 9B (EXL3 4.0bpw)',
-    shortLabel: 'Med 9B',
-    modelName: 'Qwen3.5-9B-EXL3-4.0bpw',
-    fallbackFolderNames: ['Qwen3.5-9B-EXL3-4.0bpw'],
-    bpw: '4.0 bpw',
-    maxSeqLen: 32768,
-    cacheMode: 'Q4',
-    autosplitReserve: [256],
-    visionOffload: false,
-    draftMode: 'ngram',
-    hybridDraftTokens: 4,
-    estimatedVramGb: 6.8,
-  },
-  high: {
-    tier: 'high',
-    displayName: 'Qwen 3.8 27B (EXL3 11.5GB)',
-    shortLabel: 'High 27B',
-    modelName: 'Qwen3.8-27B-EXL3-11.5GB',
-    fallbackFolderNames: [
-      'Qwen3.8-27B-EXL3-11.5GB',
-      'Qwen-3.8-27B-VL-EXL3-4.0bpw',
-      'Qwen-3.8-27B-VL-EXL3-3.5bpw',
-    ],
-    bpw: '3.5 bpw',
-    maxSeqLen: 24576,
-    cacheMode: 'Q4',
-    autosplitReserve: [256],
-    visionOffload: true,
-    draftMode: 'ngram',
-    hybridDraftTokens: 4,
-    estimatedVramGb: 14.6,
-  },
-};
-
-export const THINKING_BUDGET_SPECS: Record<
-  ThinkingBudget,
-  {
-    budget: ThinkingBudget;
-    maxThinkingTokens: number;
-    followUpStepMaxThinkingTokens: number;
-    prefillClosedThink: boolean;
-    systemDirective: string;
-  }
-> = {
-  off: {
-    budget: 'off',
-    maxThinkingTokens: 0,
-    followUpStepMaxThinkingTokens: 0,
-    prefillClosedThink: true,
-    systemDirective:
-      'THINKING BUDGET: OFF (0 tokens). Execute requested tools or respond directly with zero deliberation.',
-  },
-  fast: {
-    budget: 'fast',
-    maxThinkingTokens: 250,
-    followUpStepMaxThinkingTokens: 0,
-    prefillClosedThink: true,
-    systemDirective:
-      'THINKING BUDGET: FAST. Deliver a concise, direct response or immediate tool execution with sub-second latency.',
-  },
-  deep: {
-    budget: 'deep',
-    maxThinkingTokens: 600,
-    followUpStepMaxThinkingTokens: 180,
-    prefillClosedThink: false,
-    systemDirective:
-      'THINKING BUDGET: DEEP (Goal-Directed Action). Plan concisely (under 20 lines): determine objective, select exact tools/files, then IMMEDIATELY execute. Never output speculative prose or monologue in place of executing real tool calls.',
-  },
-};
 
 export class TabbyEngine {
   private repoRoot: string;
@@ -166,7 +31,7 @@ export class TabbyEngine {
   private apiKey: string;
   private adminKey: string;
   private modelsRootDirs: string[];
-  private activeTier: ModelTier = 'medium';
+  private activeTier: ModelTier = 'high';
   private swapStatus: 'idle' | 'swapping' | 'ready' | 'generating' | 'error' = 'ready';
   private lastSwapDurationMs = 840;
   private tokensPerSec = 68.4;
@@ -174,14 +39,15 @@ export class TabbyEngine {
   private sysramCache: Record<ModelTier, SysRamWarmStatus>;
   private pinnedBuffers = new Map<string, Buffer>();
   private idleTimeoutTimer: NodeJS.Timeout | null = null;
-  private idleTimeoutMs: number = Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 10) * 60 * 1000;
+  private idleTimeoutMs: number = Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 15) * 60 * 1000;
+  private idleDeadlineEpochMs: number = Date.now() + Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 15) * 60 * 1000;
 
   constructor(options: { repoRoot: string; tabbyPort: number; tabbyBaseUrl?: string; apiKey?: string; idleTimeoutMinutes?: number }) {
     this.repoRoot = options.repoRoot;
     this.tabbyPort = options.tabbyPort;
-    this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001';
-    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'glasshouse-tabby-secret';
-    this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'glasshouse-admin-secret';
+    this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:8080';
+    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';
+    this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'localgravity-admin-secret';
     if (options.idleTimeoutMinutes !== undefined) {
       this.idleTimeoutMs = options.idleTimeoutMinutes * 60 * 1000;
     }
@@ -207,22 +73,22 @@ export class TabbyEngine {
       medium: {
         tier: 'medium',
         modelName: TIER_SPECS.medium.modelName,
-        state: 'vram_active',
-        bytesWarmed: 0,
-        totalBytes: 0,
-        filesCount: 0,
-        throughputMBps: 0,
-        lastWarmedAt: new Date().toISOString(),
-      },
-      high: {
-        tier: 'high',
-        modelName: TIER_SPECS.high.modelName,
         state: 'cold',
         bytesWarmed: 0,
         totalBytes: 0,
         filesCount: 0,
         throughputMBps: 0,
         lastWarmedAt: null,
+      },
+      high: {
+        tier: 'high',
+        modelName: TIER_SPECS.high.modelName,
+        state: 'vram_active',
+        bytesWarmed: 0,
+        totalBytes: 0,
+        filesCount: 0,
+        throughputMBps: 0,
+        lastWarmedAt: new Date().toISOString(),
       },
     };
 
@@ -409,7 +275,21 @@ export class TabbyEngine {
     return this.sysramCache;
   }
 
-  public async checkConnection(): Promise<boolean> {
+  public async checkConnection(tier?: ModelTier): Promise<boolean> {
+    const targetTier = tier || this.activeTier;
+    if (targetTier === 'high') {
+      try {
+        const res = await fetch('http://127.0.0.1:8080/health', {
+          signal: AbortSignal.timeout(1500),
+        });
+        this.connected = res.ok;
+        return this.connected;
+      } catch {
+        this.connected = false;
+        return false;
+      }
+    }
+
     try {
       const headers: Record<string, string> = {};
       if (this.apiKey) {
@@ -444,13 +324,28 @@ export class TabbyEngine {
     const spec = TIER_SPECS[newTier];
     const resolvedModelName = this.resolveDiskModelName(newTier);
 
-            const isLive = await this.checkConnection();
+    if (newTier === 'high') {
+      const sidecar = LlamaMoESidecar.getInstance();
+      await sidecar.ensureRunning();
+      this.activeTier = 'high';
+      this.lastSwapDurationMs = Math.round(performance.now() - startMs);
+      this.swapStatus = 'ready';
+      return {
+        tier: 'high',
+        modelName: 'qwen3.8-flash-next-iq3_s',
+        swapDurationMs: this.lastSwapDurationMs,
+        spec,
+        sysramCache: this.sysramCache,
+      };
+    }
+
+    const isLive = await this.checkConnection(newTier);
     if (isLive) {
       try {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
         };
-        const adminAuth = this.adminKey || 'glasshouse-admin-secret';
+        const adminAuth = this.adminKey || 'localgravity-admin-secret';
         headers['Authorization'] = `Bearer ${adminAuth}`;
         headers['x-admin-key'] = adminAuth;
         headers['x-api-key'] = adminAuth;
@@ -558,6 +453,7 @@ export class TabbyEngine {
       this.idleTimeoutTimer = null;
     }
     if (this.idleTimeoutMs > 0) {
+      this.idleDeadlineEpochMs = Date.now() + this.idleTimeoutMs;
       this.idleTimeoutTimer = setTimeout(() => {
         void this.unloadModelDueToIdle();
       }, this.idleTimeoutMs);
@@ -565,11 +461,71 @@ export class TabbyEngine {
     }
   }
 
+  public getIdleStatus(): {
+    idleTimeoutMinutes: number;
+    secondsRemaining: number;
+    isOffloaded: boolean;
+    activeTier: ModelTier;
+  } {
+    const isOffloaded = this.swapStatus === 'idle';
+    const remainingMs = Math.max(0, this.idleDeadlineEpochMs - Date.now());
+    return {
+      idleTimeoutMinutes: Math.round(this.idleTimeoutMs / 60000),
+      secondsRemaining: isOffloaded || this.idleTimeoutMs === 0 ? 0 : Math.round(remainingMs / 1000),
+      isOffloaded,
+      activeTier: this.activeTier,
+    };
+  }
+
+  public setIdleTimeoutMinutes(minutes: number): void {
+    if (minutes <= 0) {
+      this.idleTimeoutMs = 0; // Disabled
+      if (this.idleTimeoutTimer) {
+        clearTimeout(this.idleTimeoutTimer);
+        this.idleTimeoutTimer = null;
+      }
+    } else {
+      this.idleTimeoutMs = minutes * 60 * 1000;
+      this.resetIdleTimer();
+    }
+  }
+
+  public async offloadGpu(reason: string = 'manual'): Promise<void> {
+    console.log(`[TabbyEngine] Offload requested (${reason})`);
+    if (this.idleTimeoutTimer) {
+      clearTimeout(this.idleTimeoutTimer);
+      this.idleTimeoutTimer = null;
+    }
+    await this.unloadModelDueToIdle();
+  }
+
+  public async wakeGpu(): Promise<boolean> {
+    console.log('[TabbyEngine] Wake requested');
+    if (this.activeTier === 'high') {
+      const sidecar = LlamaMoESidecar.getInstance();
+      const ok = await sidecar.ensureRunning();
+      if (ok) {
+        this.swapStatus = 'ready';
+        this.resetIdleTimer();
+      }
+      return ok;
+    } else {
+      await this.switchModelTier(this.activeTier);
+      return this.swapStatus === 'ready';
+    }
+  }
+
   public async unloadModelDueToIdle(): Promise<void> {
     console.log(
-      `[TabbyEngine] Idle timeout reached (${Math.round(this.idleTimeoutMs / 60000)}m) - unloading model from VRAM to preserve GPU memory.`
+      `[TabbyEngine] Offloading model from GPU (${Math.round(this.idleTimeoutMs / 60000)}m timer) to preserve 100% VRAM.`
     );
-    const isLive = await this.checkConnection();
+    if (this.activeTier === 'high') {
+      const sidecar = LlamaMoESidecar.getInstance();
+      await sidecar.offloadFromGpu('idle_timeout');
+      this.swapStatus = 'idle';
+      return;
+    }
+    const isLive = await this.checkConnection(this.activeTier);
     if (isLive) {
       try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -679,7 +635,7 @@ export class TabbyEngine {
       });
     }
 
-    const isLive = await this.checkConnection();
+    const isLive = await this.checkConnection(params.tier);
 
     if (isLive) {
       try {
@@ -703,7 +659,9 @@ export class TabbyEngine {
           model: this.resolveDiskModelName(params.tier),
           messages: augmentedMessages,
           stream: true,
-          temperature: params.thinkingBudget === 'off' ? 0.2 : 0.55,
+          temperature: params.thinkingBudget === 'off' ? 0.2 : 0.60,
+          min_p: 0.05,
+          top_p: 0.95,
           max_tokens: 6144,
           repetition_penalty: 1.10,
           penalty_range: 2048,
@@ -718,7 +676,7 @@ export class TabbyEngine {
         };
 
         // Pre-close <think></think> when thinking is off/fast or on deep follow-up tool steps (>2) so tool loops execute rapidly
-        if (shouldPrefillClosedThink) {
+        if (shouldPrefillClosedThink && params.tier !== 'high') {
           requestBody.response_prefix = '<think></think>\n';
         }
 
@@ -726,7 +684,29 @@ export class TabbyEngine {
           requestBody.tools = params.tools;
         }
 
-        const response = await fetch(`${this.tabbyBaseUrl}/v1/chat/completions`, {
+        let endpointUrl = `${this.tabbyBaseUrl}/v1/chat/completions`;
+        if (params.tier === 'high') {
+          const sidecar = LlamaMoESidecar.getInstance();
+          await sidecar.ensureRunning();
+          endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
+
+          // Strata / Qwen 3.8 Flash-Next Reasoning Effort Tuning:
+          // Qwen 3.8 Flash-Next needs its reasoning tokens to formulate and validate tool calls.
+          // Disabling thinking entirely (enable_thinking: false) forces the model's inner monologue
+          // into user-facing text, causing it to simulate tool execution in prose instead of calling tools!
+          if (params.thinkingBudget === 'off') {
+            requestBody.chat_template_kwargs = { enable_thinking: false };
+            requestBody.reasoning_effort = 'none';
+          } else if (params.thinkingBudget === 'deep') {
+            requestBody.chat_template_kwargs = { reasoning_effort: 'high' };
+            requestBody.reasoning_effort = 'high';
+          } else {
+            // 'fast' (default): brief 25-100 token internal chain-of-thought before immediate tool call
+            requestBody.chat_template_kwargs = { reasoning_effort: 'low' };
+            requestBody.reasoning_effort = 'low';
+          }
+        }
+        const response = await fetch(endpointUrl, {
           method: 'POST',
           headers,
           body: JSON.stringify(requestBody),
@@ -917,11 +897,15 @@ export class TabbyEngine {
           this.resetIdleTimer();
           return { content, thinkingContent, thinkingDurationMs, thinkingTokens, outputTokens };
         }
+        console.error('[TabbyEngine] Generation error:', err);
       }
     }
 
-        // TabbyAPI Unreachable Fallback Handler:
-    const errorMsg = `⚠️ Central Brain is unable to reach TabbyAPI at ${this.tabbyBaseUrl}. Please ensure TabbyAPI is running on port 5001 on the workstation.`;
+        // TabbyAPI / Strata Unreachable Fallback Handler:
+    const targetService = params.tier === 'high' ? 'Strata Engine (Qwen 3.8 Flash-Next High)' : 'TabbyAPI';
+    const targetUrl = params.tier === 'high' ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
+    const targetPort = '8080';
+    const errorMsg = `⚠️ Central Brain is unable to reach ${targetService} at ${targetUrl}. Please ensure the engine is ready on port ${targetPort} on the workstation.`;
     outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
     content = errorMsg;
     params.onTokenDelta(errorMsg, outputTokens);

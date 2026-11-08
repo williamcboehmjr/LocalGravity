@@ -4,6 +4,8 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { LocalGravityDB, FileCheckpointRecord } from '../db/database.js';
 import { SharedTerminalManager } from '../terminal/terminalManager.js';
+import { McpClientManager } from '../mcp/mcpManager.js';
+import { SkillManager, SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
 
 export interface ToolExecutionContext {
   threadId: string;
@@ -178,10 +180,19 @@ export function truncateSafeOutput(output: string, maxChars = 16000): string {
 export class BuiltinToolExecutor {
   private db: LocalGravityDB;
   private terminal: SharedTerminalManager;
+  private mcp?: McpClientManager;
+  private skills?: SkillManager;
 
-  constructor(db: LocalGravityDB, terminal: SharedTerminalManager) {
+  constructor(
+    db: LocalGravityDB,
+    terminal: SharedTerminalManager,
+    mcp?: McpClientManager,
+    skills?: SkillManager
+  ) {
     this.db = db;
     this.terminal = terminal;
+    this.mcp = mcp;
+    this.skills = skills;
   }
 
   private resolveSafePath(workspaceRoot: string, inputPath?: string): string {
@@ -466,13 +477,81 @@ export class BuiltinToolExecutor {
           };
         }
 
-        default:
+        case 'list_skills': {
+          const list = this.skills?.listSkills() || [];
+          return {
+            stdout: JSON.stringify(list, null, 2),
+            stderr: '',
+            exitCode: 0,
+            durationMs: Math.round(performance.now() - startMs),
+          };
+        }
+
+        case 'read_skill': {
+          const name = String(args.name || '');
+          const skill = this.skills?.readSkill(name);
+          if (!skill) {
+            return {
+              stdout: '',
+              stderr: `Skill "${name}" not found. Available skills: ${(this.skills?.listSkills() || []).map(s => s.name).join(', ')}`,
+              exitCode: 1,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+          return {
+            stdout: `# Skill: ${skill.name} (${skill.path})\n\n${skill.content}`,
+            stderr: '',
+            exitCode: 0,
+            durationMs: Math.round(performance.now() - startMs),
+          };
+        }
+
+        case 'call_mcp_tool': {
+          if (!this.mcp) {
+            return {
+              stdout: '',
+              stderr: 'MCP Client Manager is not available on this server.',
+              exitCode: 1,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+          const serverName = String(args.ServerName || '');
+          const tName = String(args.ToolName || '');
+          const tArgs = (args.Arguments || {}) as Record<string, any>;
+          const res = await this.mcp.callMcpTool(serverName, tName, tArgs);
+          return {
+            stdout: res.outputText,
+            stderr: res.isError ? res.outputText : '',
+            exitCode: res.isError ? 1 : 0,
+            durationMs: Math.round(performance.now() - startMs),
+          };
+        }
+
+        default: {
+          if (toolName.startsWith('mcp_') && this.mcp) {
+            const activeTools = this.mcp.listActiveTools();
+            const matchingTool = activeTools.find(
+              (t) => t.name === toolName || `mcp_${t.serverName}_${t.name}` === toolName
+            );
+            const targetServer = matchingTool ? matchingTool.serverName : toolName.split('_')[1];
+            const targetTool = matchingTool ? matchingTool.name : toolName.replace(new RegExp(`^mcp_${targetServer}_`), '');
+
+            const res = await this.mcp.callMcpTool(targetServer, targetTool, args);
+            return {
+              stdout: res.outputText,
+              stderr: res.isError ? res.outputText : '',
+              exitCode: res.isError ? 1 : 0,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+
           return {
             stdout: `Executed ${toolName} with args: ${JSON.stringify(args)}`,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
           };
+        }
       }
     } catch (err: any) {
       return {

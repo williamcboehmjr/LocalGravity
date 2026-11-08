@@ -8,6 +8,11 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { WebSocket } from 'ws';
+import { queryHostHardwareTelemetry } from './utils/telemetry.js';
+import { pruneChatMessages } from './utils/messagePruning.js';
+import { detectPrematureStop } from './agent/prematureStop.js';
+import { parseAntigravitySlashCommand } from './agent/slashCommands.js';
+import { createPromptTurnHandler } from './agent/promptTurn.js';
 
 import {
   allocateRuntimePorts,
@@ -22,7 +27,9 @@ import {
 import {
   TabbyEngine,
   TIER_SPECS,  deduplicateRepeatedSequences,} from './tabby/tabbyEngine.js';
+import { LlamaMoESidecar } from './tabby/llamaSidecar.js';
 import { McpClientManager } from './mcp/mcpManager.js';
+import { SkillManager, SKILL_TOOLS_SCHEMA } from './skills/skillManager.js';
 import { SharedTerminalManager } from './terminal/terminalManager.js';
 import {
   BuiltinToolExecutor,
@@ -43,344 +50,13 @@ export interface DaemonContext {
   db: LocalGravityDB;
   tabby: TabbyEngine;
   mcp: McpClientManager;
+  skills: SkillManager;
   terminal: SharedTerminalManager;
   tools: BuiltinToolExecutor;
   harness: Harness2Manager;
   broadcastSync: (event: Record<string, any>) => void;
 }
 
-function queryHostHardwareTelemetry(activeTier: ModelTier): {
-  vramUsedGb: number;
-  vramTotalGb: number;
-  vramPercent: number;
-  hostRamUsedGb: number;
-  hostRamTotalGb: number;
-  hostRamPercent: number;
-  gpuUtilization: number;
-  cpuUtilization: number;
-} {
-  const totalMemGb = Number((os.totalmem() / 1024 ** 3).toFixed(1));
-  const freeMemGb = Number((os.freemem() / 1024 ** 3).toFixed(1));
-  const usedMemGb = Number((totalMemGb - freeMemGb).toFixed(1));
-  const hostRamPercent = Math.round((usedMemGb / Math.max(1, totalMemGb)) * 100);
-
-  let vramTotalGb = 16.0;
-  let vramUsedGb = TIER_SPECS[activeTier].estimatedVramGb;
-  let gpuUtil = 12;
-
-  try {
-    const smi = execSync(
-      'nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits',
-      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 800 }
-    )
-      .toString()
-      .trim()
-      .split('\n')[0];
-    if (smi) {
-      const [usedMb, totalMb, util] = smi.split(',').map((s) => Number(s.trim()));
-      if (!Number.isNaN(usedMb) && !Number.isNaN(totalMb) && totalMb > 0) {
-        vramUsedGb = Number((usedMb / 1024).toFixed(1));
-        vramTotalGb = Number((totalMb / 1024).toFixed(1));
-        gpuUtil = Number.isNaN(util) ? 12 : util;
-      }
-    }
-  } catch {
-    // Use estimated tier VRAM on systems where nvidia-smi isn't in PATH
-  }
-
-  return {
-    vramUsedGb,
-    vramTotalGb,
-    vramPercent: Math.round((vramUsedGb / Math.max(1, vramTotalGb)) * 100),
-    hostRamUsedGb: usedMemGb,
-    hostRamTotalGb: totalMemGb,
-    hostRamPercent,
-    gpuUtilization: gpuUtil,
-    cpuUtilization: Math.min(100, Math.max(4, Math.round(os.loadavg()[0] * 10) || 14)),
-  };
-}
-
-function pruneChatMessages(messages: Array<{ role: string; content: string; [k: string]: any }>, maxTotalChars = 65000) {
-  const pruned = messages.map(m => ({ ...m }));
-
-  // Strict Jinja / ChatML normalization:
-  // Ensure that ONLY index 0 can be role === 'system'. If any other message has role: 'system', merge it into pruned[0]
-  if (pruned.length > 0 && pruned[0].role !== 'system') {
-    for (let i = 1; i < pruned.length; i++) {
-      if (pruned[i].role === 'system') {
-        pruned[i].role = 'user';
-      }
-    }
-  } else if (pruned.length > 0) {
-    for (let i = 1; i < pruned.length; i++) {
-      if (pruned[i].role === 'system') {
-        pruned[0].content += '\n\n' + pruned[i].content;
-        pruned.splice(i, 1);
-        i--;
-      }
-    }
-  }
-
-  // Protect the most recent step's tool outputs (last 4 messages) so the model ALWAYS sees the full output of tools it just called!
-  const recentProtectedBoundary = Math.max(1, pruned.length - 4);
-
-  let total = pruned.reduce((acc, m) => acc + (m.content?.length || 0), 0);
-  if (total <= maxTotalChars) return pruned;
-
-  // Stage 1: Compact older historical tool outputs (from 2+ steps ago)
-  for (let i = 1; i < recentProtectedBoundary && total > maxTotalChars; i++) {
-    if (pruned[i].role === 'tool' && pruned[i].content && pruned[i].content.length > 1800) {
-      const reduction = pruned[i].content.length - 1400;
-      pruned[i].content =
-        pruned[i].content.slice(0, 1000) +
-        '\n... [Historical step output compacted after analysis] ...\n' +
-        pruned[i].content.slice(-400);
-      total -= reduction;
-    }
-  }
-
-  if (total <= maxTotalChars) return pruned;
-
-  // Stage 2: More aggressive compaction on older historical tool outputs (3+ steps ago)
-  for (let i = 1; i < recentProtectedBoundary && total > maxTotalChars; i++) {
-    if (pruned[i].role === 'tool' && pruned[i].content && pruned[i].content.length > 600) {
-      const reduction = pruned[i].content.length - 500;
-      pruned[i].content =
-        pruned[i].content.slice(0, 350) +
-        '\n... [Completed historical step compacted] ...\n' +
-        pruned[i].content.slice(-150);
-      total -= reduction;
-    }
-  }
-
-  if (total <= maxTotalChars) return pruned;
-
-  // Stage 3: Only if even the protected recent tool outputs alone exceed budget (e.g., 4 parallel 24k reads), cap individual protected tool outputs at 18,000 chars
-  for (let i = recentProtectedBoundary; i < pruned.length && total > maxTotalChars; i++) {
-    if (pruned[i].role === 'tool' && pruned[i].content && pruned[i].content.length > 18000) {
-      const reduction = pruned[i].content.length - 16000;
-      pruned[i].content =
-        pruned[i].content.slice(0, 11500) +
-        '\n... [Middle lines omitted for context budget] ...\n' +
-        pruned[i].content.slice(-4500);
-      total -= reduction;
-    }
-  }
-
-  if (total <= maxTotalChars) return pruned;
-
-  // Stage 4: Drop oldest historical turns from index 1 while preserving valid assistant/tool pairs
-  while (pruned.length > 4 && total > maxTotalChars) {
-    const item = pruned[1];
-    if (item.role === 'user' || (item.role === 'assistant' && !item.tool_calls)) {
-      const dropped = pruned.splice(1, 1)[0];
-      total -= (dropped.content?.length || 0);
-    } else if (item.role === 'assistant' && item.tool_calls) {
-      const dropped = pruned.splice(1, 1)[0];
-      total -= (dropped.content?.length || 0);
-      while (pruned.length > 1 && (pruned[1] as any).role === 'tool') {
-        const droppedTool = pruned.splice(1, 1)[0];
-        total -= (droppedTool.content?.length || 0);
-      }
-    } else {
-      const dropped = pruned.splice(1, 1)[0];
-      total -= (dropped.content?.length || 0);
-    }
-  }
-
-  return pruned;
-}
-
-interface SlashCommandParseResult {
-  command: string | null;
-  cleanPrompt: string;
-  modeDirective: string;
-  maxToolSteps: number;
-  maxAutoContinues: number;
-  forceThinkingBudget?: ThinkingBudget;
-  subagentRole: string;
-}
-
-function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResult {
-  const trimmed = rawPrompt.trim();
-  const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
-  if (!match) {
-    return {
-      command: null,
-      cleanPrompt: rawPrompt,
-      modeDirective: '',
-      maxToolSteps: 32,
-      maxAutoContinues: 1,
-      subagentRole: 'Autonomous Engineer',
-    };
-  }
-
-  const cmd = match[1].toLowerCase();
-  const body = (match[2] || '').trim();
-
-  switch (cmd) {
-    case 'goal':
-      return {
-        command: '/goal',
-        cleanPrompt: body || 'Complete the active workspace objective thoroughly from end to end.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /goal (RELENTLESS AUTONOMOUS GOAL EXECUTION) ===\n' +
-          'You are operating in /goal mode. Do NOT stop until the goal is 100% achieved, implemented, and verified.\n' +
-          '1. Decompose the goal into concrete phases.\n' +
-          '2. Execute all required file inspections, edits, and terminal verifications.\n' +
-          '3. Never stop after merely reading files—follow through all the way to the finished deliverable.',
-        maxToolSteps: 50,
-        maxAutoContinues: 1,
-        subagentRole: 'Goal Executor',
-      };
-    case 'plan':
-      return {
-        command: '/plan',
-        cleanPrompt: body || 'Create a comprehensive step-by-step architectural implementation plan for this workspace.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /plan (ARCHITECTURAL IMPLEMENTATION PLANNER) ===\n' +
-          'Inspect the relevant files in the workspace first, then produce a structured, production-grade Markdown Implementation Plan containing:\n' +
-          '1. Objective & Architectural Overview\n' +
-          '2. Proposed File Changes (with exact file paths & responsibilities)\n' +
-          '3. Step-by-Step Execution Checklist\n' +
-          '4. Verification & Testing Strategy',
-        maxToolSteps: 25,
-        maxAutoContinues: 1,
-        subagentRole: 'System Architect',
-      };
-    case 'boost':
-      return {
-        command: '/boost',
-        cleanPrompt: body || 'Perform a deep, multi-perspective architectural analysis and verification.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /boost (DEEP MULTI-PERSPECTIVE REASONING & VERIFICATION) ===\n' +
-          'Engage maximum analytical rigor: evaluate correctness, edge cases, concurrency/state bugs, and maintainability.\n' +
-          'Cross-check assumptions against the real source files before delivering a comprehensive, verified solution.',
-        maxToolSteps: 38,
-        maxAutoContinues: 1,
-        forceThinkingBudget: 'deep',
-        subagentRole: 'Principal Verifier',
-      };
-    case 'grill-me':
-      return {
-        command: '/grill-me',
-        cleanPrompt: body || 'Interview me to align on design decisions and requirements for our next feature or refactor.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /grill-me (INTERACTIVE DESIGN INTERVIEW) ===\n' +
-          'Briefly inspect the workspace context if helpful, then ask the user 3 to 5 high-leverage architectural/design questions.\n' +
-          'For each question, provide clear options with a "(Recommended)" default and explain the trade-off concisely.',
-        maxToolSteps: 15,
-        maxAutoContinues: 1,
-        subagentRole: 'Design Interviewer',
-      };
-    case 'teamwork':
-      return {
-        command: '/teamwork',
-        cleanPrompt: body || 'Coordinate a multi-agent team to analyze, architect, and improve this project.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /teamwork (AUTONOMOUS MULTI-AGENT TEAMWORK) ===\n' +
-          'Execute this task by coordinating four specialized subagent phases sequentially:\n' +
-          '- [Subagent 1: Codebase Researcher] — Map relevant files and dependencies.\n' +
-          '- [Subagent 2: Lead Architect] — Formulate the modular design.\n' +
-          '- [Subagent 3: Implementation Specialist] — Write or refactor the code.\n' +
-          '- [Subagent 4: QA Verifier] — Validate build & runtime integrity.\n' +
-          'Present the final output clearly organized by team findings and actions.',
-        maxToolSteps: 45,
-        maxAutoContinues: 1,
-        subagentRole: 'Team Coordinator',
-      };
-    case 'browser':
-      return {
-        command: '/browser',
-        cleanPrompt: body || 'Use headless Playwright browser automation to inspect or research the target.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /browser (PLAYWRIGHT WEB AUTOMATION AGENT) ===\n' +
-          'Immediately use the `browse_url` tool (Playwright headless browser) to navigate to the URL or search target, extract the live DOM text, and synthesize the findings.',
-        maxToolSteps: 25,
-        maxAutoContinues: 1,
-        subagentRole: 'Browser Agent',
-      };
-    case 'learn':
-      return {
-        command: '/learn',
-        cleanPrompt: body || 'Persist the key lessons and architectural rules from our session into Harness² memory.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /learn (PERSIST TO HARNESS² MEMORY) ===\n' +
-          'Read `.localgravity/harness/memory.md` (or `skills.md`), distill the user\'s instruction or lesson into a clear, permanent engineering rule, write the updated file back to disk using `write_file`, and confirm what was learned.',
-        maxToolSteps: 20,
-        maxAutoContinues: 1,
-        subagentRole: 'Harness² Learner',
-      };
-    case 'schedule':
-      return {
-        command: '/schedule',
-        cleanPrompt: body || 'Design and configure a scheduled background automation task.',
-        modeDirective:
-          '=== SLASH COMMAND ACTIVE: /schedule (BACKGROUND AUTOMATION DESIGNER) ===\n' +
-          'Design a scheduled automation workflow for the user\'s request, specifying the cron schedule, execution command, and persistence in `.localgravity/harness/scripts.md`.',
-        maxToolSteps: 20,
-        maxAutoContinues: 1,
-        subagentRole: 'Automation Scheduler',
-      };
-    default:
-      return {
-        command: null,
-        cleanPrompt: rawPrompt,
-        modeDirective: '',
-        maxToolSteps: 32,
-        maxAutoContinues: 1,
-        subagentRole: 'Autonomous Engineer',
-      };
-  }
-}
-
-function detectPrematureStop(
-  stepContent: string,
-  hasExecutedTools: boolean,
-  autoContinueCount: number,
-  maxAutoContinues: number
-): { shouldContinue: boolean; continuationPrompt: string } {
-  // Never allow more than maxAutoContinues (default 1)
-  if (autoContinueCount >= maxAutoContinues) {
-    return { shouldContinue: false, continuationPrompt: '' };
-  }
-
-  const trimmed = (stepContent || '').trim();
-
-  // 1. Model finished <think> but emitted 0 characters of output and 0 tool calls
-  if (trimmed.length === 0) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: You finished thinking without executing a tool or delivering an answer. Please either invoke the tool you need or write out your complete solution now.',
-    };
-  }
-
-  // 2. Output is a very short transitional line (< 140 chars) ending with colon ":"
-  if (trimmed.endsWith(':') && trimmed.length < 140) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: Please proceed directly with the tool execution or output the planned content now.',
-    };
-  }
-
-  // 3. Output is ONLY a very short single-sentence promise (< 140 chars, e.g. "Let me read the files now.")
-  // If the model wrote a substantial answer (>= 140 chars), NEVER treat it as premature stop!
-  if (trimmed.length < 140 && !trimmed.includes('\n')) {
-    const actionIntentRegex =
-      /^\s*(let me|now let me|i'll|i will|let's|i am going to|i need to)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
-    if (actionIntentRegex.test(trimmed)) {
-      return {
-        shouldContinue: true,
-        continuationPrompt:
-          '[ACTION REQUIRED]: Please execute the tool call for the action you planned, or if ready, deliver your complete answer directly.',
-      };
-    }
-  }
-
-  return { shouldContinue: false, continuationPrompt: '' };
-}
 
 export async function createDaemonServer(options?: {
   dbPath?: string;
@@ -423,8 +99,9 @@ export async function createDaemonServer(options?: {
   void tabby.prewarmInactiveTiersInSysRam();
 
   const mcp = new McpClientManager(REPO_ROOT);
+  const skills = new SkillManager(REPO_ROOT);
   const terminal = new SharedTerminalManager(REPO_ROOT);
-  const tools = new BuiltinToolExecutor(db, terminal);
+  const tools = new BuiltinToolExecutor(db, terminal, mcp, skills);
 
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024 });
   await app.register(fastifyCors, { origin: '*' });
@@ -514,6 +191,96 @@ export async function createDaemonServer(options?: {
     };
   });
 
+  // ==================== GPU LIFECYCLE & SELF-RESTART ENDPOINTS ====================
+  app.get('/api/gpu/status', async () => {
+    const sidecar = LlamaMoESidecar.getInstance();
+    const sidecarState = await sidecar.getState();
+    const idleStatus = tabby.getIdleStatus();
+    return {
+      gpuState: sidecarState,
+      idleTimeoutMinutes: idleStatus.idleTimeoutMinutes,
+      secondsRemaining: idleStatus.secondsRemaining,
+      isOffloaded: idleStatus.isOffloaded,
+      activeTier: idleStatus.activeTier,
+      recentLogs: sidecar.getRecentLogs().slice(-50),
+      offloadedAt: sidecar.getOffloadedAt(),
+    };
+  });
+
+  app.post('/api/gpu/offload', async () => {
+    await tabby.offloadGpu('manual_api_request');
+    broadcastSync({
+      type: 'MODEL_STATE',
+      payload: {
+        status: 'idle',
+        active_tier: 'high',
+        active_model: 'offloaded',
+        text: 'GPU Offloaded (0 MB VRAM)',
+      },
+    });
+    return { success: true, gpuState: 'standby' };
+  });
+
+  app.post('/api/gpu/wake', async () => {
+    broadcastSync({
+      type: 'MODEL_STATE',
+      payload: {
+        status: 'swapping',
+        active_tier: 'high',
+        active_model: 'waking',
+        text: 'Waking Strata GPU Engine...',
+      },
+    });
+    const ok = await tabby.wakeGpu();
+    broadcastSync({
+      type: 'MODEL_STATE',
+      payload: {
+        status: ok ? 'ready' : 'error',
+        active_tier: 'high',
+        active_model: 'Qwen 3.8 Flash-Next High',
+        text: ok ? 'GPU Active & Ready' : 'Failed to wake GPU',
+      },
+    });
+    return { success: ok, gpuState: ok ? 'active' : 'standby' };
+  });
+
+  app.post('/api/gpu/timeout', async (req) => {
+    const { minutes } = (req.body || {}) as { minutes?: number };
+    if (typeof minutes === 'number') {
+      tabby.setIdleTimeoutMinutes(minutes);
+    }
+    return tabby.getIdleStatus();
+  });
+
+  app.post('/api/system/restart', async () => {
+    console.log('[System] Self-restart requested via API.');
+    broadcastSync({
+      type: 'SYSTEM_RESTARTING',
+      payload: { message: 'LocalGravity Central Brain is restarting...', timestamp: Date.now() },
+    });
+    setTimeout(() => {
+      // Exit code 42 signals the Windows Tray supervisor to immediately restart
+      process.exit(42);
+    }, 400);
+    return { status: 'restarting', supervisorExitCode: 42 };
+  });
+
+  app.post('/api/system/shutdown', async () => {
+    console.log('[System] Graceful shutdown requested via API.');
+    broadcastSync({
+      type: 'SYSTEM_SHUTTING_DOWN',
+      payload: { message: 'LocalGravity is shutting down...', timestamp: Date.now() },
+    });
+    setTimeout(async () => {
+      try {
+        await tabby.offloadGpu('shutdown');
+        db.close();
+      } catch {}
+      process.exit(0);
+    }, 400);
+    return { status: 'shutting_down' };
+  });
+
   // ==================== HEADLESS BRAIN PROXY ENDPOINTS (`/v1/model/load`, `/v1/chat/completions`) ====================
   app.post('/v1/model/load', async (req) => {
     const body = (req.body || {}) as { tier?: ModelTier; model_name?: string };
@@ -544,7 +311,7 @@ export async function createDaemonServer(options?: {
       thinking_budget?: ThinkingBudget;
       messages?: Array<{ role: string; content: any }>;
     };
-    const tier: ModelTier = body.tier || 'medium';
+    const tier: ModelTier = body.tier || 'high';
     const budget: ThinkingBudget = body.thinking_budget || 'fast';
     const res = await tabby.streamChatCompletion({
       tier,
@@ -669,7 +436,7 @@ export async function createDaemonServer(options?: {
     const project = db.createProject({
       name: body.name || path.basename(resolvedRoot) || 'Workspace',
       root_path: resolvedRoot,
-      default_model_tier: body.default_model_tier || 'medium',
+      default_model_tier: body.default_model_tier || 'high',
       default_thinking_budget: body.default_thinking_budget || 'fast',
       custom_instructions: body.custom_instructions || '',
       enabled_mcp_servers: body.enabled_mcp_servers || ['local-fetch', 'filesystem'],
@@ -716,7 +483,7 @@ export async function createDaemonServer(options?: {
     const thread = db.createThread({
       project_id: projectId,
       title: body.title || 'New Thread',
-      active_model_tier: body.active_model_tier || 'medium',
+      active_model_tier: body.active_model_tier || 'high',
       active_thinking_budget: body.active_thinking_budget || 'fast',
     });
     broadcastSync({ type: 'THREAD_CREATED', payload: { thread } });
@@ -908,6 +675,17 @@ export async function createDaemonServer(options?: {
     return { sysramCache: cache };
   });
 
+  app.get('/api/skills', async () => {
+    return { skills: skills.listSkills() };
+  });
+
+  app.get('/api/skills/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const skill = skills.readSkill(name);
+    if (!skill) return reply.status(404).send({ error: `Skill "${name}" not found` });
+    return skill;
+  });
+
   app.get('/api/mcp/servers', async () => {
     return {
       servers: mcp.listServers(),
@@ -938,578 +716,12 @@ export async function createDaemonServer(options?: {
   });
 
   // ==================== TURN EXECUTION ENGINE (WITH HARNESS² + PROPOSE-PROBE-COMPOSE) ====================
-  async function handlePromptTurn(params: {
-    threadId: string;
-    prompt: string;
-    tier: ModelTier;
-    thinkingBudget: ThinkingBudget;
-    attachments?: any[];
-  }) {
-    const promptStr = typeof params.prompt === 'string' ? params.prompt : '';
-    let thread = db.getThread(params.threadId);
-    if (!thread) {
-      const defaultProj = db.ensureDefaultProject(REPO_ROOT);
-      thread = db.createThread({
-        id: params.threadId,
-        project_id: defaultProj.id,
-        title: promptStr.slice(0, 42) || 'New Thread',
-        active_model_tier: params.tier,
-        active_thinking_budget: params.thinkingBudget,
-      });
-    } else if (thread.title === 'New Thread' || thread.title === 'Initial Thread') {
-      const cleanTitle = promptStr.replace(/\s+/g, ' ').trim().slice(0, 44);
-      if (cleanTitle) {
-        thread = db.updateThread(thread.id, { title: cleanTitle }) || thread;
-      }
-    }
+    const handlePromptTurn = createPromptTurnHandler({
+    db, tabby, mcp, skills, tools, harness, terminal,
+    broadcastSync, activeAbortControllers, repoRoot: REPO_ROOT,
+  });
 
-    const project = db.getProject(thread.project_id) || db.ensureDefaultProject(REPO_ROOT);
-    const compiledHarness = harness.buildCompiledHarnessPrompt(project.root_path);
 
-    // 1. Persist User Message
-    const userMsg = db.createMessage({
-      thread_id: thread.id,
-      role: 'user',
-      content: params.prompt,
-      attachments: params.attachments || [],
-    });
-
-    // 2. Create Placeholder Assistant Message & Register 250ms Rehydration Stream Buffer
-    const assistantMsg = db.createMessage({
-      thread_id: thread.id,
-      role: 'assistant',
-      content: '',
-      thinking_content: '',
-    });
-    db.beginStreamingMessage(assistantMsg.id, thread.id);
-    db.updateThread(thread.id, {
-      status: params.thinkingBudget === 'off' ? 'executing_tool' : 'thinking',
-      active_model_tier: params.tier,
-      active_thinking_budget: params.thinkingBudget,
-    });
-
-    broadcastSync({
-      type: 'TURN_STARTED',
-      payload: {
-        threadId: thread.id,
-        userMessage: userMsg,
-        assistantMessage: assistantMsg,
-        tier: params.tier,
-        thinkingBudget: params.thinkingBudget,
-      },
-    });
-
-    const abortController = new AbortController();
-    activeAbortControllers.set(thread.id, abortController);
-
-    try {
-      const history = db.listMessages(thread.id);
-      const userHome = os.homedir().replace(/\\/g, '/');
-      const downloadsDir = path.join(os.homedir(), 'Downloads').replace(/\\/g, '/');
-      const desktopDir = path.join(os.homedir(), 'Desktop').replace(/\\/g, '/');
-      const documentsDir = path.join(os.homedir(), 'Documents').replace(/\\/g, '/');
-
-      // Parse Antigravity Slash Commands (/goal, /plan, /boost, /grill-me, /teamwork, /browser, /learn, /compact, /schedule)
-      const slashInfo = parseAntigravitySlashCommand(params.prompt);
-      const effectiveThinkingBudget: ThinkingBudget = slashInfo.forceThinkingBudget || params.thinkingBudget;
-
-      // Special fast-path for /compact command
-      if (params.prompt.trim().toLowerCase().startsWith('/compact')) {
-        const msgCount = history.length;
-        const summaryNote =
-          `✅ **Context Compacted (/compact)**\n\n` +
-          `Compacted ${msgCount} historical messages in thread **${thread.title}**. ` +
-          `Older intermediate tool outputs and verbose turns have been distilled so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
-        db.appendTokenDelta(assistantMsg.id, thread.id, summaryNote, Math.ceil(summaryNote.length / 4));
-        broadcastSync({
-          type: 'TOKEN_STREAM',
-          payload: {
-            session_id: thread.id,
-            thread_id: thread.id,
-            message_id: assistantMsg.id,
-            chunk: summaryNote,
-            output_tokens: Math.ceil(summaryNote.length / 4),
-            is_finished: true,
-          },
-        });
-        db.finalizeStreamingMessage(assistantMsg.id);
-        const updatedThread = db.updateThread(thread.id, { status: 'idle' });
-        broadcastSync({
-          type: 'TURN_COMPLETED',
-          payload: { threadId: thread.id, messageId: assistantMsg.id, thread: updatedThread },
-        });
-        return;
-      }
-
-      const systemDirective =
-        `You are LocalGravity (Google Antigravity 2.0 Local Architecture), running directly on the user's workstation with TabbyAPI EXL2/EXL3.\n` +
-        `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
-        `Workstation Paths: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}".\n\n` +
-        `=== UNRESTRICTED SYSTEM ACCESS & AUTONOMOUS EXECUTION ===\n` +
-        `1. FULL ACCESS: You have complete, unrestricted access to the entire computer and local filesystem, granted directly by the user.\n` +
-        `2. NO GUARDRAIL REFUSALS: You CAN access, inspect, list, read, search, and manage files anywhere on the machine (including Downloads, Desktop, Documents, C:/, E:/, etc.). NEVER claim that you lack permission or are confined to the workspace.\n` +
-        `3. EFFICIENT FILE READING: ` +
-        `` + `read_file` + `` + ` returns up to 24,000 characters (~650 lines) per call completely intact. Read files in 300–500 line ranges (or full files) rather than tiny chunks. Do NOT waste steps testing truncation thresholds.\n` +
-        `4. NEVER STOP MID-TASK: Never output a sentence like "Let me read X" or "I will now check Y" and stop without actually emitting the tool call in the same turn. Always follow through until you deliver the complete, thorough answer or code implementation.\n` +
-        `5. GOAL-DIRECTED EXECUTION: Keep intermediate tool-step commentary brief (1 sentence max) or invoke the tool directly, saving your detailed prose and code blocks for the final synthesis.\n\n` +
-        (slashInfo.modeDirective ? `${slashInfo.modeDirective}\n\n` : '') +
-        `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
-        (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
-
-      const historyMessages = history
-        .filter((m) => m.id !== assistantMsg.id)
-        .slice(-14)
-        .map((m, idx, arr) => ({
-          role: m.role,
-          content: idx === arr.length - 1 && m.role === 'user' && slashInfo.command ? slashInfo.cleanPrompt : m.content,
-        }));
-
-      const chatMessages: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
-        {
-          role: 'system',
-          content: systemDirective,
-        },
-        ...historyMessages,
-      ];
-
-      const MAX_TOOL_STEPS = slashInfo.maxToolSteps;
-      const MAX_AUTO_CONTINUES = slashInfo.maxAutoContinues;
-      let step = 0;
-      let autoContinueCount = 0;
-      let cumulativeOutputTokens = 0;
-      let cumulativeThinkingTokens = 0;
-      let lastThinkingMs = 0;
-      let hasExecutedTools = false;
-      let committedFinalContent = '';
-      const collectedStepNotes: string[] = [];
-
-      // Broadcast active subagent start to Overview drawer
-      const subagentId = `subagent-${assistantMsg.id.slice(0, 8)}`;
-      broadcastSync({
-        type: 'SUBAGENT_EVENT',
-        payload: {
-          id: subagentId,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          role: slashInfo.subagentRole,
-          command: slashInfo.command || 'autonomous',
-          status: 'running',
-          step: 1,
-          maxSteps: MAX_TOOL_STEPS,
-          summary: `Starting ${slashInfo.subagentRole} (${params.tier.toUpperCase()} • ${effectiveThinkingBudget.toUpperCase()})`,
-          timestamp: Date.now(),
-        },
-      });
-
-      while (step < MAX_TOOL_STEPS) {
-        step++;
-        const isFinalStep = step === MAX_TOOL_STEPS;
-        const executedToolsThisStep: Array<{
-          id: string;
-          toolName: string;
-          arguments: any;
-          output: string;
-        }> = [];
-
-        // On the final step, omit tools so the model must provide its final text synthesis
-        const activeTools = isFinalStep ? undefined : BUILTIN_TOOLS_SCHEMA;
-        if (isFinalStep && hasExecutedTools && chatMessages.length > 0) {
-          chatMessages[0] = {
-            ...chatMessages[0],
-            content:
-              chatMessages[0].content +
-              '\n\n[FINAL SYNTHESIS STEP]: You have gathered all needed information from tools. Now write your complete, detailed analysis, code refactoring, and actionable solution for the user.',
-          };
-        }
-
-        const result = await tabby.streamChatCompletion({
-          tier: params.tier,
-          thinkingBudget: effectiveThinkingBudget,
-          stepIndex: step,
-          messages: pruneChatMessages(chatMessages, params.tier === 'high' ? 58000 : 78000),
-          tools: activeTools,
-          abortSignal: abortController.signal,
-          onThoughtDelta: (delta, elapsedMs, tokenCount) => {
-            cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
-            lastThinkingMs = elapsedMs;
-            db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, cumulativeThinkingTokens);
-            broadcastSync({
-              type: 'THOUGHT_STREAM',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                chunk: delta,
-                elapsed_ms: elapsedMs,
-                token_count: cumulativeThinkingTokens,
-                is_finished: false,
-              },
-            });
-          },
-          onTokenDelta: (delta, tokenCount) => {
-            cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
-            db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
-            broadcastSync({
-              type: 'TOKEN_STREAM',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                chunk: delta,
-                output_tokens: cumulativeOutputTokens,
-                is_finished: false,
-              },
-            });
-          },
-          onToolCallRequest: async (toolName, toolArgs) => {
-            hasExecutedTools = true;
-            db.updateThread(thread!.id, { status: 'executing_tool' });
-            const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
-            const toolExec = db.createToolExecution({
-              message_id: assistantMsg.id,
-              thread_id: thread!.id,
-              tool_name: toolName,
-              mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
-              arguments_json: JSON.stringify(toolArgs),
-            });
-
-            broadcastSync({
-              type: 'TOOL_EVENT',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                tool_execution_id: toolExec.id,
-                tool_name: toolName,
-                command: cmdFormatted,
-                arguments: toolArgs,
-                output: '',
-                status: 'running',
-              },
-            });
-
-            broadcastSync({
-              type: 'SUBAGENT_EVENT',
-              payload: {
-                id: subagentId,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                role: slashInfo.subagentRole,
-                command: slashInfo.command || 'autonomous',
-                status: 'running',
-                step,
-                maxSteps: MAX_TOOL_STEPS,
-                summary: `Step ${step}: ${toolName}(${ toolArgs.path || toolArgs.command || toolArgs.url || '' })`.slice(0, 90),
-                timestamp: Date.now(),
-              },
-            });
-
-            const execResult = await tools.executeTool(toolName, toolArgs, {
-              threadId: thread!.id,
-              messageId: assistantMsg.id,
-              workspaceRoot: project.root_path,
-              onStdoutChunk: (chunk) => {
-                broadcastSync({
-                  type: 'TOOL_STREAM',
-                  payload: {
-                    thread_id: thread!.id,
-                    message_id: assistantMsg.id,
-                    tool_execution_id: toolExec.id,
-                    stream: 'stdout',
-                    chunk,
-                  },
-                });
-              },
-              onStderrChunk: (chunk) => {
-                broadcastSync({
-                  type: 'TOOL_STREAM',
-                  payload: {
-                    thread_id: thread!.id,
-                    message_id: assistantMsg.id,
-                    tool_execution_id: toolExec.id,
-                    stream: 'stderr',
-                    chunk,
-                  },
-                });
-              },
-              onFileCheckpointCreated: (checkpoint) => {
-                broadcastSync({
-                  type: 'CHECKPOINT_CREATED',
-                  payload: { thread_id: thread!.id, checkpoint },
-                });
-              },
-              onScreenCaptured: (base64Image, windowTitle) => {
-                broadcastSync({
-                  type: 'VISION_CAPTURE',
-                  payload: {
-                    base64DataUrl: base64Image,
-                    activeWindowTitle: windowTitle,
-                  },
-                });
-              },
-            });
-
-            // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
-            const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
-              workspaceRoot: project.root_path,
-              toolName,
-              command: cmdFormatted,
-              exitCode: execResult.exitCode,
-              stdout: execResult.stdout,
-              stderr: execResult.stderr,
-            });
-
-            if (ppcCycle) {
-              broadcastSync({
-                type: 'HARNESS_PPC_COMPLETED',
-                payload: {
-                  cycle: ppcCycle,
-                  components: harness.listHarnessComponents(project.root_path),
-                },
-              });
-            }
-
-            const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
-            db.updateToolExecution(toolExec.id, {
-              stdout_stream: execResult.stdout,
-              stderr_stream: execResult.stderr,
-              exit_code: execResult.exitCode,
-              status: finalStatus,
-              duration_ms: execResult.durationMs,
-            });
-
-            broadcastSync({
-              type: 'TOOL_EVENT',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                tool_execution_id: toolExec.id,
-                tool_name: toolName,
-                command: cmdFormatted,
-                arguments: toolArgs,
-                output: execResult.stdout || execResult.stderr,
-                exit_code: execResult.exitCode,
-                duration_ms: execResult.durationMs,
-                status: finalStatus,
-              },
-            });
-
-            executedToolsThisStep.push({
-              id: toolExec.id,
-              toolName,
-              arguments: toolArgs,
-              output: execResult.stdout || execResult.stderr || 'Success (no output)',
-            });
-          },
-        });
-
-        if (abortController.signal.aborted) {
-          break;
-        }
-
-        const stepText = deduplicateRepeatedSequences((result.content || '').trim());
-
-        // Check if no tools were executed in this step
-        if (executedToolsThisStep.length === 0) {
-          // Did the model stop prematurely with an unfulfilled intention ("Let me read...", empty output, etc.)?
-          if (!isFinalStep) {
-            const autoCheck = detectPrematureStop(
-              stepText,
-              hasExecutedTools,
-              autoContinueCount,
-              MAX_AUTO_CONTINUES
-            );
-            if (autoCheck.shouldContinue) {
-              autoContinueCount++;
-              if (stepText) {
-                collectedStepNotes.push(stepText);
-              }
-              // Move the transient status note into the collapsible activity log and keep main message buffer clean
-              db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-              broadcastSync({
-                type: 'STEP_NOTE_COMMITTED',
-                payload: {
-                  session_id: thread.id,
-                  thread_id: thread.id,
-                  message_id: assistantMsg.id,
-                  step,
-                  note: stepText || 'Continuing multi-step execution...',
-                  committed_content: committedFinalContent,
-                  is_auto_continue: true,
-                },
-              });
-              broadcastSync({
-                type: 'SUBAGENT_EVENT',
-                payload: {
-                  id: subagentId,
-                  thread_id: thread.id,
-                  message_id: assistantMsg.id,
-                  role: slashInfo.subagentRole,
-                  command: slashInfo.command || 'autonomous',
-                  status: 'running',
-                  step,
-                  maxSteps: MAX_TOOL_STEPS,
-                  summary: `Auto-continuing (#${autoContinueCount}): ${(stepText || 'proceeding to next action').slice(0, 75)}`,
-                  timestamp: Date.now(),
-                },
-              });
-
-              chatMessages.push({
-                role: 'assistant',
-                content: stepText || 'Proceeding to next action.',
-              });
-              chatMessages.push({
-                role: 'user',
-                content: autoCheck.continuationPrompt,
-              });
-              continue;
-            }
-          }
-
-          // Model genuinely completed its final response!
-          committedFinalContent = committedFinalContent
-            ? `${committedFinalContent}\n\n${stepText}`
-            : stepText;
-          break;
-        }
-
-        // Tools were executed in this step!
-        // If the model emitted a short transitional preamble (< 650 chars, e.g., "Let me read index.ts..."),
-        // move it into the collapsible activity window (STEP_NOTE_COMMITTED) instead of polluting the final answer!
-        if (stepText) {
-          if (stepText.length < 650) {
-            collectedStepNotes.push(stepText);
-            db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-            broadcastSync({
-              type: 'STEP_NOTE_COMMITTED',
-              payload: {
-                session_id: thread.id,
-                thread_id: thread.id,
-                message_id: assistantMsg.id,
-                step,
-                note: stepText,
-                committed_content: committedFinalContent,
-                is_auto_continue: false,
-              },
-            });
-          } else {
-            // Substantial output emitted alongside tools: keep it in the main answer
-            committedFinalContent = committedFinalContent
-              ? `${committedFinalContent}\n\n${stepText}`
-              : stepText;
-            db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent + '\n\n');
-          }
-        }
-
-        // Feed tool outputs back to the model for next turn reasoning
-        db.updateThread(thread.id, { status: 'thinking' });
-
-        const toolCallsArray = executedToolsThisStep.map((t) => ({
-          id: t.id,
-          type: 'function',
-          function: {
-            name: t.toolName,
-            arguments: JSON.stringify(t.arguments),
-          },
-        }));
-
-        chatMessages.push({
-          role: 'assistant',
-          content: result.content || '',
-          tool_calls: toolCallsArray,
-        });
-
-        for (const t of executedToolsThisStep) {
-          chatMessages.push({
-            role: 'tool',
-            tool_call_id: t.id,
-            name: t.toolName,
-            content: t.output,
-          });
-        }
-      }
-
-      // If /plan was used, automatically sync the generated plan to the Plan Workbench
-      if (slashInfo.command === '/plan' && committedFinalContent.trim().length > 40) {
-        broadcastSync({
-          type: 'ARTIFACT_SYNC',
-          payload: {
-            session_id: thread.id,
-            artifact_name: 'plan.md',
-            content: committedFinalContent,
-            version: Date.now(),
-          },
-        });
-      }
-
-      broadcastSync({
-        type: 'SUBAGENT_EVENT',
-        payload: {
-          id: subagentId,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          role: slashInfo.subagentRole,
-          command: slashInfo.command || 'autonomous',
-          status: 'completed',
-          step,
-          maxSteps: MAX_TOOL_STEPS,
-          summary: `Completed in ${step} step${step === 1 ? '' : 's'}${autoContinueCount > 0 ? ` (${autoContinueCount} self-catches)` : ''}`,
-          timestamp: Date.now(),
-        },
-      });
-
-      db.finalizeStreamingMessage(assistantMsg.id);
-      const updatedThread = db.updateThread(thread.id, { status: 'idle' });
-
-      broadcastSync({
-        type: 'THOUGHT_STREAM',
-        payload: {
-          session_id: thread.id,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          chunk: '',
-          elapsed_ms: lastThinkingMs,
-          token_count: cumulativeThinkingTokens,
-          is_finished: true,
-        },
-      });
-
-      broadcastSync({
-        type: 'TOKEN_STREAM',
-        payload: {
-          session_id: thread.id,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          chunk: '',
-          output_tokens: cumulativeOutputTokens,
-          is_finished: true,
-        },
-      });
-
-      broadcastSync({
-        type: 'TURN_COMPLETED',
-        payload: {
-          threadId: thread.id,
-          messageId: assistantMsg.id,
-          thread: updatedThread,
-        },
-      });
-    } catch (err: any) {
-      db.finalizeStreamingMessage(assistantMsg.id);
-      db.updateThread(thread.id, { status: 'error' });
-      broadcastSync({
-        type: 'TURN_ERROR',
-        payload: {
-          threadId: thread.id,
-          messageId: assistantMsg.id,
-          error: err?.message || String(err),
-        },
-      });
-    } finally {
-      activeAbortControllers.delete(thread.id);
-    }
-  }
 
   // REST Endpoint for submitting a turn
   app.post('/api/threads/:id/prompt', async (req) => {
@@ -1521,7 +733,7 @@ export async function createDaemonServer(options?: {
       attachments?: any[];
     };
     const thread = db.getThread(id);
-    const tier = body.tier || thread?.active_model_tier || 'medium';
+    const tier = body.tier || thread?.active_model_tier || 'high';
     const budget = body.thinking_budget || thread?.active_thinking_budget || 'fast';
 
     void handlePromptTurn({
@@ -1600,7 +812,7 @@ export async function createDaemonServer(options?: {
           );
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
-          const tier: ModelTier = payload.tier || 'medium';
+          const tier: ModelTier = payload.tier || 'high';
           const budget: ThinkingBudget = payload.thinking_budget || 'fast';
           void handlePromptTurn({
             threadId,
@@ -1610,7 +822,7 @@ export async function createDaemonServer(options?: {
             attachments: payload.images || payload.attachments || [],
           });
         } else if (type === 'TIER_SWITCH') {
-          const newTier: ModelTier = payload.new_tier || payload.tier || 'medium';
+          const newTier: ModelTier = payload.new_tier || payload.tier || 'high';
           const swapRes = await tabby.switchModelTier(newTier);
           if (payload.session_id || payload.thread_id) {
             db.updateThread(payload.thread_id || payload.session_id, {
@@ -1745,7 +957,7 @@ export async function createDaemonServer(options?: {
     await app.register(fastifyStatic, {
       root: clientDistPath,
       prefix: '/',
-      wildcard: false,
+      
     });
 
     app.setNotFoundHandler((req, reply) => {
@@ -1763,6 +975,7 @@ export async function createDaemonServer(options?: {
     db,
     tabby,
     mcp,
+    skills,
     terminal,
     tools,
     harness,
