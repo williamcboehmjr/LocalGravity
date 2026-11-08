@@ -6,7 +6,14 @@
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        ".",
+        "C:\\Users\\Sue\\Downloads",
+        "C:\\Users\\Sue\\Desktop",
+        "C:\\Users\\Sue\\Documents"
+      ]
     }
   }
 }

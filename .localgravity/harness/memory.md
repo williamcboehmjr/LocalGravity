@@ -24,3 +24,22 @@
 - **Formatting tricks**: use bold for key terms, tables for comparisons, code blocks for snippets.
 - **Broken down**: split answers into small labeled sections (What / Why / Next) rather than one long block.
 - **Scannable first**: lead with the outcome, then details. User should get the gist in 5 seconds.
+
+## Who I Am (User Profile — inferred identity & taste)
+*Keep this current; it's how I decide what to offer without being asked.*
+- **Name / handle**: williamcboehmjr (GitHub). Builds and runs his own local AI stack (LocalGravity, TabbyAPI EXL2/EXL3).
+- **Timezone**: **America/Los_Angeles (Pacific)** — use for all date/time answers. Confirm via `time` MCP when it matters.
+- **Skill level / role**: power user + developer; comfortable in terminals, git, TS refactors. Treat as peer, not beginner.
+- **Decisions he's made → what he likes**:
+  - Prefers **autonomy + real execution** over explanations (wants tools run, results shown).
+  - Wants me to **bias toward web/live search** for anything time-sensitive or versioned rather than trust training cutoff.
+  - Likes installing capability when there's a real gap (added GitHub/Context7/Playwright/time) — favors *doing* over discussing.
+  - Cares about **security hygiene**: secrets stay in keyring, never on disk/chat. Keep it that way.
+- **Communication taste** (standing): scannable first — bullets/tables/bold, short sections (What/Why/Next), lead with the outcome. Tight margins, no walls of prose.
+- **Pet peeves to avoid**:
+  - Don't over-anchor on one topic (e.g. refactors) and drag it into unrelated turns — follow his lead.
+  - Never fabricate/assert work without verifiable tool output; he notices and calls it out.
+
+## MCP Servers Now Active (permanent reference)
+- **playwright** *(replaced puppeteer)* · **github** (keyring-backed via launcher) · **context7** · **time** — plus pre-existing comfy-mcp, fetch/local-fetch, memory, sqlite, filesystem(roots widened).
+- Full real-tool-name map + invocation quirks in `skills/mcp-servers.md`. After config edits, servers attach only on AGY restart / `/mcp reload` then *next* message.
