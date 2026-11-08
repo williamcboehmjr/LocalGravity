@@ -14,9 +14,9 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
   tokenCount = 0,
   isStreaming = false,
 }) => {
-  // Auto-expand while streaming, auto-collapse once done (unless user manually toggled)
-  const [isOpen, setIsOpen] = useState<boolean>(isStreaming);
-  const [userToggled, setUserToggled] = useState<boolean>(false);
+  // Stay collapsed by default to keep the interface clean and calm.
+  // The user can click to expand thoughts at any time on demand.
+  const [isOpen, setIsOpen] = useState<boolean>(false);
   const [liveMs, setLiveMs] = useState(elapsedMs);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -31,17 +31,7 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
     return () => clearInterval(interval);
   }, [isStreaming, elapsedMs]);
 
-  // Auto-expand while streaming, auto-collapse when done
-  useEffect(() => {
-    if (isStreaming) {
-      if (!userToggled) setIsOpen(true);
-    } else {
-      setIsOpen(false);
-      setUserToggled(false);
-    }
-  }, [isStreaming]);
-
-  // Auto-scroll the thought body to the bottom as new tokens arrive
+  // Auto-scroll the thought body to the bottom as new tokens arrive if user has it open
   useEffect(() => {
     if (isOpen && isStreaming && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -55,52 +45,49 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
   const effectiveTokens = tokenCount || Math.max(1, Math.ceil((thought || '').length / 4));
 
   return (
-    <div className="my-1 select-none">
-      {/* Header Bar */}
+    <div className="my-1.5 select-none">
+      {/* Minimalist Antigravity Thought Bar */}
       <button
         type="button"
-        onClick={() => {
-          setUserToggled(true);
-          setIsOpen(!isOpen);
-        }}
-        className="group inline-flex items-center gap-1.5 text-xs text-[#8E8E93] hover:text-[#E3E3E3] transition-colors py-1 cursor-pointer focus:outline-none"
+        onClick={() => setIsOpen(!isOpen)}
+        className="group inline-flex items-center gap-2 text-[14px] sm:text-[14.5px] text-[#9AA0A6] hover:text-[#E8EAED] transition-colors py-1 px-2.5 -ml-2 rounded-lg hover:bg-[#1A1B1E] cursor-pointer focus:outline-none"
       >
         {isStreaming ? (
-          <Loader2 className="w-3 h-3 text-[#8E8E93] animate-spin shrink-0" />
+          <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />
         ) : (
-          <Brain className="w-3 h-3 text-[#6E6E73] shrink-0" />
+          <Brain className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] shrink-0" />
         )}
 
-        <span className="font-sans">
-          {isStreaming ? `Thinking for ${formattedTime}` : `Thought for ${formattedTime}`}
+        <span className="font-sans font-medium">
+          {isStreaming ? `Thinking (${formattedTime})` : `Thought for ${formattedTime}`}
         </span>
 
         {effectiveTokens > 0 && (
-          <span className="text-[11px] text-[#5E5E63] hidden sm:inline">
-            ({effectiveTokens} tok)
+          <span className="text-[12px] text-[#5F6368] hidden sm:inline">
+            ({effectiveTokens} tokens)
           </span>
         )}
 
         {isOpen ? (
-          <ChevronDown className="w-3.5 h-3.5 text-[#6E6E73] group-hover:text-[#9A9A9E] transition-transform" />
+          <ChevronDown className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] transition-transform" />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-[#6E6E73] group-hover:text-[#9A9A9E] transition-transform group-hover:translate-x-0.5" />
+          <ChevronRight className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] transition-transform group-hover:translate-x-0.5" />
         )}
       </button>
 
-      {/* Expanded Thought Body */}
+      {/* Expanded Thought Body (Only on demand) */}
       {isOpen && (
         <div
           ref={scrollRef}
-          className={`mt-1 ml-1 pl-3 border-l text-xs leading-relaxed whitespace-pre-wrap max-h-72 overflow-y-auto py-1 select-text transition-colors ${
+          className={`mt-1.5 ml-1 pl-3.5 border-l text-[13.5px] sm:text-[14px] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto py-2 select-text rounded-r-xl transition-colors ${
             isStreaming
-              ? 'border-[#3A3A40] text-[#B0B0B5] bg-[#1A1A1D] rounded-r-lg'
-              : 'border-[#2C2C30] text-[#9A9A9E]'
+              ? 'border-[#3C4043] text-[#BDC1C6] bg-[#141518]'
+              : 'border-[#2D2F34] text-[#9AA0A6] bg-[#101113]'
           }`}
         >
-          {thought || 'Thinking...'}
+          {thought || 'Analyzing request and context...'}
           {isStreaming && (
-            <span className="inline-block w-1.5 h-3 bg-[#8E8E93] animate-pulse ml-0.5 align-middle" />
+            <span className="inline-block w-1.5 h-3.5 bg-[#8AB4F8] animate-pulse ml-1 align-middle" />
           )}
         </div>
       )}

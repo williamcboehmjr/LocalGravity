@@ -8,7 +8,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        canvas: '#131314',
+        canvas: '#101114',
         surface: {
           DEFAULT: '#131314',
           1: '#101012',
@@ -23,7 +23,7 @@ export default {
           focus: '#4E4E54',
         },
         accent: {
-          blue: '#60A5FA',
+          blue: '#8AB4F8',
           buttonStart: '#262629',
           buttonEnd: '#2E2E32',
           purple: '#C084FC',
@@ -40,8 +40,25 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"Inter"', '"Google Sans"', 'sans-serif'],
-        mono: ['"SF Mono"', '"JetBrains Mono"', '"Fira Code"', 'Menlo', 'monospace'],
+        sans: [
+          '"Google Sans"',
+          '"Google Sans Text"',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Inter"',
+          'Roboto',
+          '"Segoe UI"',
+          'sans-serif',
+        ],
+        mono: [
+          '"Roboto Mono"',
+          '"SF Mono"',
+          '"JetBrains Mono"',
+          '"Fira Code"',
+          'Menlo',
+          'Consolas',
+          'monospace',
+        ],
       },
     },
   },

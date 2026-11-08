@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Download,
   ExternalLink,
+  ZoomIn,
 } from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 import { testBrainConnection, cleanHostAndPort } from '../../utils/connectionTester';
@@ -29,7 +30,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const { brainHost, brainPort, setBrainConnection } = useSessionStore();
+  const { brainHost, brainPort, setBrainConnection, dpiScale, setDpiScale } = useSessionStore();
 
   const [inputHost, setInputHost] = useState(brainHost || '127.0.0.1');
   const [inputPort, setInputPort] = useState(brainPort || '3390');
@@ -125,8 +126,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-      <div className="w-full max-w-lg bg-surface border border-border-strong rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface-muted">
+      <div className="w-full max-w-lg max-h-[90%] flex flex-col bg-surface border border-border-strong rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle bg-surface-muted shrink-0">
           <div className="flex items-center gap-2 font-medium text-text-primary text-sm">
             <Settings className="w-4 h-4 text-accent-blue" />
             <span>LocalGravity Settings</span>
@@ -134,13 +135,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           <button
             type="button"
             onClick={onClose}
-            className="p-1 hover:bg-surface rounded text-text-muted hover:text-text-primary transition-colors"
+            className="p-1 hover:bg-surface rounded text-text-muted hover:text-text-primary transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-4 space-y-4 text-xs max-h-[80vh] overflow-y-auto">
+        <div className="p-4 space-y-4 text-xs flex-1 min-h-0 overflow-y-auto">
+          {/* Display & DPI Scaling */}
+          <div className="space-y-2.5 p-3 rounded-lg bg-surface-muted/60 border border-border-subtle">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 font-semibold text-text-primary text-xs">
+                <ZoomIn className="w-4 h-4 text-accent-blue" />
+                <span>Display & DPI Scale</span>
+              </label>
+              <div className="flex items-center gap-1 font-mono text-[11px] text-accent-blue font-semibold">
+                <span>{Math.round(dpiScale * 100)}%</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-text-muted leading-relaxed">
+              Dynamically resize text, inputs, cards, and toolbars. Use <code className="text-text-primary">Ctrl +</code> and <code className="text-text-primary">Ctrl -</code> to scale on demand, or <code className="text-text-primary">Ctrl 0</code> to reset.
+            </p>
+
+            <div className="flex items-center gap-3 pt-1">
+              <input
+                type="range"
+                min="0.75"
+                max="1.75"
+                step="0.05"
+                value={dpiScale}
+                onChange={(e) => setDpiScale(parseFloat(e.target.value))}
+                className="flex-1 accent-[#8AB4F8] cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
+              {[0.85, 1.0, 1.15, 1.30, 1.50].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setDpiScale(preset)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                    Math.abs(dpiScale - preset) < 0.02
+                      ? 'bg-accent-blue text-black font-semibold'
+                      : 'bg-canvas hover:bg-surface border border-border-subtle text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  {preset === 1.0 ? '100% (Default)' : `${Math.round(preset * 100)}%`}
+                </button>
+              ))}
+            </div>
+          </div>
           {/* PC Brain Connection Config */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  FileCode2,
   Terminal,
   ListTodo,
   PanelLeft,
@@ -43,6 +42,8 @@ import { Splitter } from './components/common/Splitter';
 import { ModelTier, ThinkingBudget } from './types/protocol';
 import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
 import { checkForAppUpdates, UpdateInfo } from './services/updaterService';
+import { DpiScaleControl } from './components/center-canvas/DpiScaleControl';
+import { applyDpiScaleToDom } from './store/useSessionStore';
 
 export const App: React.FC = () => {
   const {
@@ -82,6 +83,10 @@ export const App: React.FC = () => {
     hydrateMessagesFromServer,
     clearMessages,
     deleteSession,
+    dpiScale,
+    zoomIn,
+    zoomOut,
+    resetZoom,
   } = useSessionStore();
 
   const {
@@ -109,6 +114,32 @@ export const App: React.FC = () => {
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
   const [showSubagentDrawer, setShowSubagentDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
+  const [gpuStatus, setGpuStatus] = useState<{
+    gpuState: 'active' | 'standby' | 'waking' | 'offline';
+    secondsRemaining: number;
+    idleTimeoutMinutes: number;
+  }>({ gpuState: 'standby', secondsRemaining: 0, idleTimeoutMinutes: 15 });
+
+  useEffect(() => {
+    const checkGpu = () => {
+      fetch(`${apiBaseUrl}/api/gpu/status`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) {
+            setGpuStatus({
+              gpuState: data.gpuState || 'standby',
+              secondsRemaining: data.secondsRemaining || 0,
+              idleTimeoutMinutes: data.idleTimeoutMinutes || 15,
+            });
+          }
+        })
+        .catch(() => {});
+    };
+
+    checkGpu();
+    const interval = setInterval(checkGpu, 3000);
+    return () => clearInterval(interval);
+  }, [apiBaseUrl]);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
 
@@ -124,6 +155,28 @@ export const App: React.FC = () => {
     }, 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  // Global Keyboard Shortcuts for DPI / UI Zoom (+, -, 0)
+  useEffect(() => {
+    applyDpiScaleToDom(dpiScale);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          zoomIn();
+        } else if (e.key === '-') {
+          e.preventDefault();
+          zoomOut();
+        } else if (e.key === '0') {
+          e.preventDefault();
+          resetZoom();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [dpiScale, zoomIn, zoomOut, resetZoom]);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -597,7 +650,7 @@ export const App: React.FC = () => {
   ];
 
   return (
-    <div className="flex flex-col h-[100dvh] max-h-[100dvh] w-screen bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
+    <div className="flex flex-col h-full max-h-full w-full bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
       {!updateDismissed && updateInfo && (
         <UpdateNotificationBanner
           updateInfo={updateInfo}
@@ -715,9 +768,9 @@ export const App: React.FC = () => {
       )}
 
       {/* 2. CENTER PANE (Conversation Stream & Composer) */}
-      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-[#131314] relative">
-        {/* Top Header Bar matching Screenshot 1 */}
-        <header className="h-10 shrink-0 px-4 flex items-center justify-between bg-[#131314] z-10 select-none">
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-[#0c0d0e] relative">
+        {/* Top Header Bar matching Antigravity Mobile */}
+        <header className="h-11 shrink-0 px-4 flex items-center justify-between bg-[#0c0d0e] border-b border-[#1f2023] z-10 select-none">
           <div className="flex items-center gap-2 min-w-0">
             {!showLeftRail && (
               <button
@@ -730,7 +783,7 @@ export const App: React.FC = () => {
               </button>
             )}
 
-            <div className="flex items-center gap-1.5 text-xs min-w-0 truncate">
+            <div className="flex items-center gap-1.5 text-[14px] sm:text-[14.5px] min-w-0 truncate">
               <span className="text-[#8E8E93] truncate">
                 {activeProject?.name || 'LocalGravity'}
               </span>
@@ -743,28 +796,49 @@ export const App: React.FC = () => {
 
           {/* Right Top Controls matching Screenshot 1 */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Subtle Brain Connection Pill */}
+            {/* DPI / UI Scale Control Pill (+ / -) */}
+            <DpiScaleControl />
+
+            {/* Brain & GPU Lifecycle Status Pill */}
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border ${
                 isConnected
-                  ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
+                  ? gpuStatus.gpuState === 'active'
+                    ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
+                    : 'bg-[#151821] border-[#252E3E] text-[#7DD3FC] hover:text-[#BAE6FD]'
                   : 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:bg-amber-900/50'
               }`}
               title={
-                isConnected
-                  ? `Connected to Brain (${brainHost}:${brainPort}) — Click to configure`
-                  : `Disconnected from ${brainHost}:${brainPort} — Click to configure & test`
+                !isConnected
+                  ? `Disconnected from ${brainHost}:${brainPort} — Click to configure & test`
+                  : gpuStatus.gpuState === 'active'
+                  ? `Connected (${brainHost}:${brainPort}) — GPU Active in VRAM. Auto-offloads after ${gpuStatus.idleTimeoutMinutes}m idle to free 100% VRAM.`
+                  : gpuStatus.gpuState === 'waking'
+                  ? `Connected (${brainHost}:${brainPort}) — ⚡ Waking Strata GPU Engine...`
+                  : `Connected (${brainHost}:${brainPort}) — 🌙 Standby (0 MB VRAM). Automatically wakes into GPU when you send a prompt!`
               }
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  isConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+                  !isConnected
+                    ? 'bg-amber-400 animate-pulse'
+                    : gpuStatus.gpuState === 'active'
+                    ? 'bg-emerald-400'
+                    : gpuStatus.gpuState === 'waking'
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-sky-400'
                 }`}
               />
-              <span className="hidden sm:inline">
-                {isConnected ? `${brainHost}:${brainPort}` : 'Connect Brain'}
+              <span className="hidden sm:inline font-mono">
+                {!isConnected
+                  ? 'Connect Brain'
+                  : gpuStatus.gpuState === 'active'
+                  ? `${brainHost}:${brainPort} • GPU Active${gpuStatus.secondsRemaining > 0 ? ` (${Math.ceil(gpuStatus.secondsRemaining / 60)}m)` : ''}`
+                  : gpuStatus.gpuState === 'waking'
+                  ? `${brainHost}:${brainPort} • Waking GPU...`
+                  : `${brainHost}:${brainPort} • Standby (0 MB)`}
               </span>
             </button>
 
@@ -837,6 +911,15 @@ export const App: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setMobileTab(mobileTab === 'chat' ? 'tasks' : 'chat')}
+              className="p-1.5 rounded-md hover:bg-[#1E1E20] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors md:hidden"
+              title={mobileTab === 'chat' ? 'View Review / Tasks' : 'Back to Chat'}
+            >
+              {mobileTab === 'chat' ? <ListTodo className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowRightDrawer(!showRightDrawer)}
               className={`p-1.5 rounded-md transition-colors hidden md:block ${
                 showRightDrawer
@@ -852,6 +935,26 @@ export const App: React.FC = () => {
 
         {/* Center Body */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+          {mobileTab !== 'chat' && (
+            <div className="shrink-0 h-11 px-4 flex items-center justify-between border-b border-[#222225] bg-[#141518] md:hidden select-none">
+              <button
+                type="button"
+                onClick={() => setMobileTab('chat')}
+                className="flex items-center gap-1.5 text-xs text-[#8AB4F8] hover:underline"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back to Chat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileTab(mobileTab === 'workbench' ? 'tasks' : 'workbench')}
+                className="text-xs px-2.5 py-1 rounded-md bg-[#222327] text-[#E8EAED] border border-[#34363B]"
+              >
+                {mobileTab === 'workbench' ? 'Switch to Tasks' : 'Switch to Files'}
+              </button>
+            </div>
+          )}
+
           <div
             className={`flex-1 min-h-0 flex flex-col ${
               mobileTab === 'chat' ? 'flex' : 'hidden md:flex'
@@ -859,6 +962,27 @@ export const App: React.FC = () => {
           >
             <ChatFeed />
             <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
+              {/* Antigravity Floating Pills (Review & Status) */}
+              {(totalTasks > 0 || isGenerating) && (
+                <div className="flex items-center gap-2 mb-2 select-none overflow-x-auto">
+                  {totalTasks > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMobileTab('tasks')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#1C1D20] border border-[#2B2C30] hover:bg-[#25262B] transition-colors shadow-sm"
+                    >
+                      <span>{totalTasks} tasks ({completedTasks} completed)</span>
+                      <ChevronRight className="w-3 h-3 text-[#9AA0A6]" />
+                    </button>
+                  )}
+                  {isGenerating && (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#8AB4F8] bg-[#8AB4F8]/10 border border-[#8AB4F8]/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#8AB4F8] animate-ping" />
+                      <span>Reasoning active</span>
+                    </div>
+                  )}
+                </div>
+              )}
               <PromptBar
                 onSend={handleSendPrompt}
                 onTierChange={handleTierSwitch}
@@ -882,42 +1006,6 @@ export const App: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* Mobile Bottom Bar */}
-        <nav className="h-12 shrink-0 border-t border-[#222225] flex md:hidden bg-[#101012] z-20 select-none">
-          <button
-            type="button"
-            onClick={() => setMobileTab('chat')}
-            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
-              mobileTab === 'chat' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>Chat</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileTab('workbench')}
-            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
-              mobileTab === 'workbench' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
-            }`}
-          >
-            <FileCode2 className="w-4 h-4" />
-            <span>Files</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileTab('tasks')}
-            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] ${
-              mobileTab === 'tasks' ? 'text-[#E3E3E3] font-medium' : 'text-[#6E6E73]'
-            }`}
-          >
-            <ListTodo className="w-4 h-4" />
-            <span>
-              Review ({completedTasks}/{totalTasks})
-            </span>
-          </button>
-        </nav>
       </main>
 
       {showRightDrawer && (

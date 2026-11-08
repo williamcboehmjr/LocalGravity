@@ -119,6 +119,7 @@ interface SessionState {
   isThinkingFinished: boolean;
   isGenerating: boolean;
   subagentTasks: SubagentTaskItem[];
+  dpiScale: number;
 
   setProjects: (projects: ProjectItem[], activeId?: string) => void;
   setActiveProjectId: (projectId: string) => void;
@@ -134,6 +135,10 @@ interface SessionState {
   setThinkingBudget: (budget: ThinkingBudget) => void;
   setExecutionPolicy: (policy: 'always_proceed' | 'request_review') => void;
   setModelState: (status: ModelStateStatus, modelName: string, text?: string) => void;
+  setDpiScale: (scale: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
   addMessage: (msg: ChatMessage) => void;
   updateLastAssistantMessage: (contentDelta: string, outputTokens?: number) => void;
   updateLastAssistantTool: (
@@ -165,10 +170,40 @@ interface SessionState {
   autoNameSessionFromPrompt: (sessionId: string, promptText: string) => void;
 }
 
+export function applyDpiScaleToDom(scale: number) {
+  if (typeof document === 'undefined') return;
+  const clamped = Math.max(0.75, Math.min(1.75, Math.round(scale * 100) / 100));
+  const root = document.getElementById('root');
+  if (root) {
+    root.style.setProperty('--dpi-scale', String(clamped));
+    root.style.zoom = String(clamped);
+    root.style.width = `calc(100vw / ${clamped})`;
+    root.style.height = `calc(100dvh / ${clamped})`;
+    root.style.maxHeight = `calc(100dvh / ${clamped})`;
+  }
+}
+
+const getInitialDpiScale = (): number => {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('localgravity:dpiScale');
+    if (saved) {
+      const parsed = parseFloat(saved);
+      if (!isNaN(parsed) && parsed >= 0.75 && parsed <= 1.75) {
+        return parsed;
+      }
+    }
+  }
+  return 1.0;
+};
+
 const initialSessionId = 'thread-default';
 
 const getInitialBrainSettings = () => {
   if (typeof window !== 'undefined') {
+    // If loaded from the Central Brain web server directly, match its host and port
+    if (window.location.port && window.location.port !== '5173') {
+      return { host: window.location.hostname || '127.0.0.1', port: window.location.port };
+    }
     const savedHost = localStorage.getItem('localgravity_brain_host');
     const savedPort = localStorage.getItem('localgravity_brain_port');
     if (savedHost) {
@@ -187,7 +222,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       name: 'LocalGravity',
       root_path: '.',
       git_branch: 'main',
-      default_model_tier: 'medium',
+      default_model_tier: 'high',
       default_thinking_budget: 'fast',
       custom_instructions: '',
       enabled_mcp_servers: '["local-fetch","filesystem"]',
@@ -207,12 +242,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hostUrl: `ws://${initialConn.host}:${initialConn.port}`,
   apiBaseUrl: `http://${initialConn.host}:${initialConn.port}`,
   isConnected: false,
-  selectedTier: 'medium',
+  selectedTier: 'high',
   thinkingBudget: 'fast',
   executionPolicy: 'always_proceed',
   modelStatus: 'ready',
   modelStatusText: 'TabbyAPI Ready (Q4 KV • SysRAM Warm)',
-  activeModelName: 'Qwen3.5-9B-EXL3-4.0bpw',
+  activeModelName: 'Qwen3.8-27B-EXL3-11.5GB',
   messages: [],
   messageQueue: [],
   currentStreamingThought: '',
@@ -221,6 +256,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isThinkingFinished: false,
   isGenerating: false,
   subagentTasks: [],
+  dpiScale: getInitialDpiScale(),
+
+  setDpiScale: (scale: number) => {
+    const clamped = Math.max(0.75, Math.min(1.75, Math.round(scale * 100) / 100));
+    set({ dpiScale: clamped });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('localgravity:dpiScale', String(clamped));
+    }
+    applyDpiScaleToDom(clamped);
+  },
+  zoomIn: () => {
+    const current = get().dpiScale;
+    const next = Math.min(1.75, Math.round((current + 0.10) * 100) / 100);
+    get().setDpiScale(next);
+  },
+  zoomOut: () => {
+    const current = get().dpiScale;
+    const next = Math.max(0.75, Math.round((current - 0.10) * 100) / 100);
+    get().setDpiScale(next);
+  },
+  resetZoom: () => {
+    get().setDpiScale(1.0);
+  },
 
   setProjects: (projects, activeId) =>
     set((state) => {

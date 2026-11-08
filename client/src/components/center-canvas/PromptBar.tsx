@@ -46,8 +46,8 @@ interface PromptBarProps {
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
   low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM' },
-  medium: { name: 'Qwen 3.5 9B Medium', sub: 'Balanced Workhorse' },
-  high: { name: 'Qwen 3.8 27B High', sub: 'Goal-Directed Deep' },
+  medium: { name: 'Qwen 3.8 27B Medium', sub: 'Fast Workhorse (60+ tok/s)' },
+  high: { name: 'Qwen 3.8 Flash-Next High', sub: 'MoE 176B/6B active (High Horsepower)' },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -405,10 +405,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       }}
       onDragLeave={() => setIsDraggingOver(false)}
       onDrop={handleDrop}
-      className={`relative px-3.5 pt-3 pb-2.5 bg-[#1E1E20] border rounded-2xl shadow-lg space-y-2 shrink-0 transition-colors ${
+      className={`relative px-3.5 pt-3 pb-2.5 bg-[#1E1F22] border rounded-2xl shadow-lg space-y-2 shrink-0 transition-colors ${
         isDraggingOver
-          ? 'border-[#60A5FA] bg-[#60A5FA]/5'
-          : 'border-[#2C2C30] focus-within:border-[#3E3E44]'
+          ? 'border-[#8AB4F8] bg-[#8AB4F8]/5'
+          : 'border-[#34363A] focus-within:border-[#4E5157]'
       }`}
     >
       {/* Antigravity `/` Slash Commands Popover */}
@@ -434,16 +434,16 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-xs font-semibold text-[#E3E3E3]">
+                      <span className="font-mono text-[13px] font-semibold text-[#E3E3E3]">
                         {item.command}
                       </span>
-                      <span className="text-xs text-[#9A9A9E]">{item.title}</span>
+                      <span className="text-[13px] text-[#9A9A9E]">{item.title}</span>
                     </div>
-                    <span className="px-1.5 py-0.5 rounded bg-[#141417] border border-[#2C2C32] text-[9px] font-mono text-[#8E8E93] shrink-0">
+                    <span className="px-1.5 py-0.5 rounded bg-[#141417] border border-[#2C2C32] text-[10px] font-mono text-[#8E8E93] shrink-0">
                       {item.badge}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#6E6E73] leading-snug mt-0.5 truncate">
+                  <div className="text-[12px] text-[#6E6E73] leading-snug mt-0.5 truncate">
                     {item.description}
                   </div>
                 </div>
@@ -534,14 +534,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         }}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        placeholder="Ask anything, @ to mention, / for actions (/goal, /plan, /boost...)"
-        className="auto-fit-textarea bg-transparent resize-none outline-none text-[13px] text-[#E3E3E3] placeholder:text-[#6E6E73] font-sans leading-relaxed"
+        placeholder="Ask anything, @ to mention, / for actions"
+        className="auto-fit-textarea bg-transparent resize-none outline-none text-[15.5px] sm:text-[16.5px] text-[#E8EAED] placeholder:text-[#80868B] font-sans leading-relaxed"
       />
 
       {/* Bottom Toolbar inside Composer (Antigravity 2.0 layout) */}
       <div className="flex items-center justify-between pt-1 gap-2 select-none">
         {/* Left side: + button, / Slash button, Model Dropdown, Thinking Budget Dropdown */}
-        <div className="flex items-center gap-1 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           <input
             ref={fileInputRef}
             type="file"
@@ -560,7 +560,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               setShowSlashPopover(false);
               textareaRef.current?.focus();
             }}
-            className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            className="p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors"
             title="Add context (@file / @mcp)"
           >
             <Plus className="w-4 h-4" />
@@ -576,13 +576,13 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               setShowMentionPopover(false);
               textareaRef.current?.focus();
             }}
-            className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            className="hidden sm:inline-flex p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors"
             title="Slash Commands (/goal, /plan, /boost, /teamwork...)"
           >
             <Slash className="w-3.5 h-3.5" />
           </button>
 
-          {/* Model Tier Dropdown */}
+          {/* Model Tier Pill (Antigravity Style) */}
           <div className="relative">
             <button
               type="button"
@@ -590,10 +590,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 setShowModelMenu(!showModelMenu);
                 setShowBudgetMenu(false);
               }}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#9A9A9E] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#222327] border border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A] transition-all"
             >
-              <span>{TIER_LABELS[selectedTier].name}</span>
-              <ChevronDown className="w-3 h-3 text-[#6E6E73]" />
+              <span className="truncate max-w-[150px] sm:max-w-[180px]">{TIER_LABELS[selectedTier].name}</span>
+              <ChevronDown className="w-3 h-3 text-[#9AA0A6]" />
             </button>
 
             {showModelMenu && (
@@ -621,7 +621,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           </div>
 
           {/* Thinking Effort Dropdown */}
-          <div className="relative">
+          <div className="relative hidden sm:block">
             <button
               type="button"
               onClick={() => {
@@ -669,7 +669,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 executionPolicy === 'always_proceed' ? 'request_review' : 'always_proceed'
               )
             }
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
+            className={`hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
               executionPolicy === 'always_proceed'
                 ? 'text-[#9A9A9E] hover:text-[#E3E3E3] hover:bg-[#28282C]'
                 : 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/20'
@@ -696,7 +696,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-1.5 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+            className="hidden sm:inline-flex p-1.5 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
             title="Attach Image or Screenshot"
           >
             <ImageIcon className="w-3.5 h-3.5" />
@@ -706,20 +706,20 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             <button
               type="button"
               onClick={onStop}
-              className="w-7 h-7 rounded-lg bg-[#DC2626] hover:bg-[#EF4444] text-white flex items-center justify-center transition-colors shadow-sm"
+              className="w-8 h-8 rounded-full bg-[#DC2626] hover:bg-[#EF4444] text-white flex items-center justify-center transition-colors shadow-sm"
               title="Stop Generation"
             >
-              <Square className="w-3 h-3 fill-current" />
+              <Square className="w-3.5 h-3.5 fill-current" />
             </button>
           ) : (
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!hasContent}
-              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
                 hasContent
-                  ? 'bg-[#E3E3E3] hover:bg-white text-[#131314] cursor-pointer shadow-sm'
-                  : 'bg-[#28282C] text-[#55555A] cursor-not-allowed'
+                  ? 'bg-white hover:bg-[#F1F3F4] text-[#101114] cursor-pointer shadow-md'
+                  : 'bg-[#282A2E] text-[#5F6368] cursor-not-allowed border border-[#3C4044]'
               }`}
               title={isGenerating ? 'Queue Follow-Up Prompt' : 'Send Prompt (Enter)'}
             >
