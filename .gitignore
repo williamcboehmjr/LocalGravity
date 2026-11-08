@@ -31,3 +31,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# --- Repo hygiene (added during WIP commit pass) ---
+# Compiled tray binary (source: tray/*.cs, rebuildable)
+tray/*.exe
+# Refactor codemod scratch artifacts from server/scripts/build_refactor.mjs
+server/scripts/_*
