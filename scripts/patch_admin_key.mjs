@@ -11,8 +11,8 @@ content = content.replace(
 
 // 2. Initialize in constructor
 content = content.replace(
-  "    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'glasshouse-tabby-secret';",
-  "    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'glasshouse-tabby-secret';\n    this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'glasshouse-admin-secret';"
+  "    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';",
+  "    this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';\n    this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'localgravity-admin-secret';"
 );
 
 // 3. In switchModelTier

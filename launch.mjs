@@ -85,6 +85,63 @@ async function isDaemonHealthy(port) {
   }
 }
 
+async function isStrataHealthy() {
+  try {
+    const res = await fetch('http://127.0.0.1:8080/health', {
+      signal: AbortSignal.timeout(1500),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureStrataRunning() {
+  if (await isStrataHealthy()) {
+    console.log('  [Strata Engine]         : Active & Ready on http://127.0.0.1:8080 (Qwen 3.8 Flash-Next + DFlash2)');
+    return true;
+  }
+
+  console.log('  [Strata Engine]         : Not detected on port 8080. Starting Strata Engine...');
+
+  const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
+  const configPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.json');
+  const pythonExe = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'python', 'python.exe');
+  const serverPy = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'serve', 'server.py');
+
+  if (!fs.existsSync(configPath) || !fs.existsSync(pythonExe) || !fs.existsSync(serverPy)) {
+    console.warn('  [Strata Engine]         : Strata components not found at ' + configPath);
+    return false;
+  }
+
+  const strataCwd = path.join(localAppData, 'Strata', 'terminal', '0.1.58');
+  const child = spawn(
+    pythonExe,
+    [serverPy, '--engine', 'strata', '--config', configPath, '--port', '8080'],
+    {
+      cwd: strataCwd,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    }
+  );
+  child.unref();
+
+  process.stdout.write('  [Strata Engine]         : Loading weights & DFlash2 expert cache into RAM/VRAM ');
+  const start = Date.now();
+  while (Date.now() - start < 180000) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (await isStrataHealthy()) {
+      const sec = Math.round((Date.now() - start) / 1000);
+      console.log(`\n  [Strata Engine]         : READY in ${sec}s on port 8080!`);
+      return true;
+    }
+    process.stdout.write('.');
+  }
+  console.log('\n  [Strata Engine]         : Warning: Strata took longer than 180s to respond.');
+  return false;
+}
+
 async function openBrowser(url) {
   if (os.platform() === 'win32') {
     const child = spawn('cmd.exe', ['/c', 'start', '', url], {
@@ -123,21 +180,21 @@ async function main() {
     const reserved = new Set([5000, 5001]);
     const daemonPort = await findFreePort(3390, reserved);
     const vitePort = await findFreePort(5173, reserved);
-    const tabbyPort = 5001;
     const lanIp = detectLanIp();
 
     portsCfg = {
       daemonPort,
-      tabbyPort,
       vitePort,
+      strataPort: 8080,
       daemonHost: '0.0.0.0',
       lanIp,
       localUrl: `http://localhost:${daemonPort}`,
       lanUrl: `http://${lanIp}:${daemonPort}`,
       wsSyncUrl: `ws://localhost:${daemonPort}/ws/sync`,
-      tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:5001',
+      strataUrl: 'http://127.0.0.1:8080',
+      tabbyBaseUrl: process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:8080',
       allocatedAt: new Date().toISOString(),
-      forbiddenPorts: [5000],
+      forbiddenPorts: [5000, 5001],
     };
 
     writePortsAtomically(portsCfg);
@@ -145,26 +202,29 @@ async function main() {
     const distEntry = path.join(SERVER_DIR, 'dist', 'index.js');
 
     if (isForeground) {
-      // Attached Foreground Execution:
-      // Opening the browser in 1 second, while keeping server logs in this console
+      console.log('==================================================================');
+      console.log('  LocalGravity 2.0 (Google Antigravity 2.0 + Strata Local Engine)');
+      console.log('==================================================================');
+      console.log(`  Local Desktop URL       : ${portsCfg.localUrl}`);
+      console.log(`  LAN / Remote Web URL    : ${portsCfg.lanUrl}`);
+      console.log(`  WebSocket Multiplexer   : ${portsCfg.wsSyncUrl}`);
+      console.log(`  Strata Inference Engine : http://127.0.0.1:8080 (Qwen 3.8 Flash-Next)`);
+      console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
+      console.log('------------------------------------------------------------------');
+
+      // Proactively ensure Strata Local Inference Engine is running
+      await ensureStrataRunning();
+
+      console.log('------------------------------------------------------------------');
+      console.log('  [RUNNING IN FOREGROUND]');
+      console.log('  Closing this console window immediately shuts down the Brain.');
+      console.log('==================================================================\n');
+
       if (!isHeadless) {
         setTimeout(() => {
           openBrowser(portsCfg.localUrl);
         }, 800);
       }
-
-      console.log('==================================================================');
-      console.log('  LocalGravity 2.0 (Google Antigravity 2.0 + Harness² Engine)');
-      console.log('==================================================================');
-      console.log(`  Local Desktop URL       : ${portsCfg.localUrl}`);
-      console.log(`  LAN / Remote Web URL    : ${portsCfg.lanUrl}`);
-      console.log(`  WebSocket Multiplexer   : ${portsCfg.wsSyncUrl}`);
-      console.log(`  TabbyAPI EXL3 Endpoint  : ${portsCfg.tabbyBaseUrl} (Q4 KV, N-gram x4)`);
-      console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
-      console.log('------------------------------------------------------------------');
-      console.log('  [RUNNING IN FOREGROUND]');
-      console.log('  Closing this console window immediately shuts down the Brain.');
-      console.log('==================================================================\n');
 
       // Import and start server directly in this process
       const serverModule = await import('./server/dist/index.js');
@@ -179,6 +239,7 @@ async function main() {
           ctx.terminal?.dispose();
           ctx.db?.close();
         } catch {}
+        console.log('LocalGravity Central Brain stopped.');
         process.exit(0);
       };
 
@@ -187,12 +248,13 @@ async function main() {
       return;
     } else {
       // Detached Daemon Execution
+      await ensureStrataRunning();
       const child = spawn(process.execPath, [distEntry], {
         cwd: SERVER_DIR,
         env: {
           ...process.env,
           LOCALGRAVITY_DAEMON_PORT: String(daemonPort),
-          LOCALGRAVITY_TABBY_PORT: String(tabbyPort),
+          LOCALGRAVITY_TABBY_PORT: '8080',
           LOCALGRAVITY_VITE_PORT: String(vitePort),
           LOCALGRAVITY_REUSE_PORTS: '1',
         },
@@ -218,21 +280,13 @@ async function main() {
     }
   }
 
-  // Trigger SysRAM Pre-Warm pass
-  try {
-    await fetch(`http://127.0.0.1:${portsCfg.daemonPort}/api/tabby/prewarm`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(4000),
-    });
-  } catch {}
-
   console.log('==================================================================');
-  console.log('  LocalGravity 2.0 (Google Antigravity 2.0 + Harness² Engine)');
+  console.log('  LocalGravity 2.0 (Google Antigravity 2.0 + Strata Local Engine)');
   console.log('==================================================================');
   console.log(`  Local Desktop URL       : ${portsCfg.localUrl}`);
   console.log(`  LAN / Remote Web URL    : ${portsCfg.lanUrl}`);
   console.log(`  WebSocket Multiplexer   : ${portsCfg.wsSyncUrl}`);
-  console.log(`  TabbyAPI EXL3 Endpoint  : ${portsCfg.tabbyBaseUrl} (Q4 KV, N-gram x4)`);
+  console.log(`  Strata Inference Engine : http://127.0.0.1:8080 (Qwen 3.8 Flash-Next)`);
   console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
   console.log('==================================================================');
 

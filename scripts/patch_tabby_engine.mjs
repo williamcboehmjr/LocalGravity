@@ -34,7 +34,7 @@ content = content.replace(
 );
 content = content.replace(
   "this.apiKey = options.apiKey || process.env.TABBY_API_KEY || '';",
-  "this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'glasshouse-tabby-secret';"
+  "this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';"
 );
 
 // 4. Models dir on E drive
