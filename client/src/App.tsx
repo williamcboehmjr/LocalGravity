@@ -269,6 +269,11 @@ export const App: React.FC = () => {
               if (payload.messages) {
                 hydrateMessagesFromServer(payload.messages, payload.activeStreams || []);
               }
+              const hasActiveStream = Array.isArray(payload.activeStreams) && payload.activeStreams.length > 0;
+              if (!hasActiveStream && isGenerating) {
+                finalizeAssistantMessage();
+                setIsGenerating(false);
+              }
               if (payload.checkpoints) {
                 setCheckpoints(payload.checkpoints);
               }

@@ -10,6 +10,7 @@ import { SkillManager, SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
 import type { AttachmentManager } from '../files/attachmentManager.js';
 import { extractJpegsFromPdf } from '../files/attachmentManager.js';
 import { createRequire } from 'node:module';
+import { HANDLER_REGISTRY } from './handlers/index.js';
 const require = createRequire(import.meta.url);
 
 export interface ToolExecutionContext {
@@ -32,466 +33,8 @@ export interface BuiltinToolResult {
   screenshotBase64?: string;
 }
 
-export const BUILTIN_TOOLS_SCHEMA = [
-  {
-    type: 'function',
-    function: {
-      name: 'run_terminal',
-      description:
-        'Execute any shell or system command in the interactive terminal (powershell.exe on Windows, /bin/zsh on macOS) with full workstation permissions and stream live stdout/stderr.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Shell command to execute' },
-          cwd: { type: 'string', description: 'Optional working directory anywhere on the system' },
-        },
-        required: ['command'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'read_file',
-      description:
-        'Read the contents of any file on the workstation (supports relative workspace paths, system aliases like "strata", "models", and absolute system paths like C:/Users/Sue/Downloads/file.txt or ~/Downloads).',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative path, system alias, or absolute system file path' },
-          start_line: { type: 'number', description: 'Optional 1-based start line' },
-          end_line: { type: 'number', description: 'Optional 1-based end line' },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'write_file',
-      description:
-        'Write content to any file on the system or workspace with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative path, system alias, or absolute system file path' },
-          content: { type: 'string', description: 'Full file content to write' },
-        },
-        required: ['path', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'apply_diff',
-      description:
-        'Apply a target/replacement edit to any file on the system or workspace with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative path, system alias, or absolute system file path' },
-          target: { type: 'string', description: 'Exact string block to replace' },
-          replacement: { type: 'string', description: 'Replacement string block' },
-        },
-        required: ['path', 'target', 'replacement'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_web',
-      description:
-        'SEARCH THE LIVE WEB IMMEDIATELY: Your primary instinct when you do not know an answer with 100% certainty, or when dealing with current documentation, library usage, how-to guides, error codes, recipe/drink ingredients, prices, or technical tutorials. DO NOT GUESS or make excuses. Call this tool freely and frequently—it runs in under 1 second and provides verified real-world facts, titles, snippets, and source URLs.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Search query or error message' },
-          limit: { type: 'number', description: 'Optional maximum results to return (default: 8, max: 15)' },
-        },
-        required: ['query'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_models',
-      description:
-        'Search Hugging Face Model Hub for open-source AI models, GGUF quantizations, and mmproj vision projectors, or list files in any repository directly.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Model keywords or filename filter (e.g. "Qwen3.8-Flash-Next", "mmproj", "gguf")',
-          },
-          repo: {
-            type: 'string',
-            description: 'Optional specific Hugging Face repository to list files for (e.g. "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF")',
-          },
-          limit: { type: 'number', description: 'Optional maximum models to return (default: 8)' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'find_files',
-      description:
-        'Recursively locate files by filename or pattern across directories (e.g. "setup.py", "*.json", "*vision*", "mmproj*") without needing to guess directory structures.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pattern: {
-            type: 'string',
-            description: 'Filename or wildcard pattern to search for (e.g. "setup.py", "*.json", "*vision*")',
-          },
-          path: {
-            type: 'string',
-            description: 'Optional starting directory (supports "strata", "models", "downloads", or absolute path; default: workspace root)',
-          },
-          max_results: { type: 'number', description: 'Optional maximum files to return (default: 50)' },
-        },
-        required: ['pattern'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_codebase',
-      description:
-        'Search file contents across any directory on the computer (workspace, strata, models, downloads, etc.). Uses safe case-insensitive substring matching by default with optional regex.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Search term or regex pattern' },
-          path: {
-            type: 'string',
-            description: 'Optional directory path (supports "strata", "models", "downloads", "desktop", or absolute paths; default: workspace root)',
-          },
-          file_pattern: { type: 'string', description: 'Optional file extension filter (e.g. .ts, .py, .json)' },
-          is_regex: {
-            type: 'boolean',
-            description: 'Whether query should be treated as regex (default: false, safe literal substring)',
-          },
-        },
-        required: ['query'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'code_outline',
-      description:
-        'Extract a structured code outline (classes, functions, methods, interfaces, types, exports) with exact line numbers from source files (TypeScript, JavaScript, Python, C#, Rust, Go). Rapidly inspect file architecture without reading hundreds of lines.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'File path to inspect (supports relative, aliases, or absolute)' },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'patch_json',
-      description:
-        'Safely inspect, get, set, or delete keys in JSON configuration files (e.g. Strata iq3_s-64k.json, package.json, tsconfig.json) without fragile string replacements.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Path to JSON file (supports "strata/launch/iq3_s-64k.json", workspace, etc.)' },
-          action: {
-            type: 'string',
-            enum: ['read', 'set', 'delete'],
-            description: 'Action: "read" to inspect key or whole file, "set" to update/add key, "delete" to remove key',
-          },
-          key_path: {
-            type: 'string',
-            description: 'Optional dot-separated key path (e.g. "vision.elastic", "args", "scripts.build"). Omit to read full JSON.',
-          },
-          value: {
-            description: 'Value to set (for action "set": can be boolean, number, string, array, or object)',
-          },
-        },
-        required: ['path', 'action'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'download_file',
-      description:
-        'Download any remote file (model weights, mmproj projector, archive, script, dataset) directly to a local directory with streaming and validation.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: 'Direct HTTP/HTTPS download URL' },
-          destination: {
-            type: 'string',
-            description: 'Destination path or folder (supports "models", "strata", "downloads", workspace, or absolute path)',
-          },
-          filename: { type: 'string', description: 'Optional explicit filename (inferred from URL if omitted)' },
-        },
-        required: ['url', 'destination'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'http_request',
-      description:
-        'Send an HTTP request (GET, POST, PUT, DELETE) to any local or remote API endpoint (e.g. Strata port 8080, ComfyUI port 8188, Ollama 11434, Central Brain 3390). Returns status, headers, and parsed data. (Ports 5000 and 5001 forbidden).',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: 'Target URL to call' },
-          method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method (default: GET)' },
-          headers: { type: 'object', description: 'Optional request headers' },
-          body: { description: 'Optional request body (JSON object or string)' },
-          timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default: 10000)' },
-        },
-        required: ['url'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'manage_files',
-      description:
-        'Perform filesystem management: inspect file metadata ("stat"), copy file/directory ("copy"), move/rename ("move"), or safely delete ("delete").',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['stat', 'copy', 'move', 'delete'], description: 'File operation to perform' },
-          source: { type: 'string', description: 'Source file or folder path' },
-          destination: { type: 'string', description: 'Destination path (for copy or move)' },
-        },
-        required: ['action', 'source'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'inspect_models',
-      description:
-        'Inspect the local inference engines (Strata / TabbyAPI), loaded model metadata, vision/multimodal status, and local model files on disk (E:/Models and Strata launch configs). Also supports testing vision inference or restarting Strata.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['inspect', 'test_vision', 'restart'],
-            description: '"inspect" (default): reports active model, vision status, context size, and disk models. "test_vision": sends a live multimodal test image to Strata and verifies end-to-end vision processing. "restart": restarts the Strata inference engine on port 8080.',
-          },
-          test_prompt: {
-            type: 'string',
-            description: 'Optional prompt when action is "test_vision" (default: "What color is this test image?")',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'inspect_system',
-      description:
-        'Inspect workstation hardware and processes: GPU VRAM usage and temperature (Nvidia), active listening network ports, or running system processes.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['gpu_stats', 'list_ports', 'find_process'],
-            description: 'Action: "gpu_stats" for VRAM/GPU utilization, "list_ports" for active listeners, "find_process" to search running processes by name',
-          },
-          filter: { type: 'string', description: 'Optional process name or port filter (e.g. "strata", "node", "8080", "3390")' },
-        },
-        required: ['action'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'list_directory',
-      description:
-        'List files and subdirectories in any directory on the computer (e.g. "strata", "models", "downloads", "desktop", "C:/", or workspace root). Full system access is granted.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Directory path (e.g. "strata", "models", "downloads", "C:/", or "." for workspace root)',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'capture_screen',
-      description:
-        'Capture a live screenshot of the desktop or active window for Vision-Language multimodal grounding.',
-      parameters: {
-        type: 'object',
-        properties: {
-          mode: {
-            type: 'string',
-            enum: ['desktop', 'active_window'],
-            description: 'Capture full desktop or active window',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'inspect_window',
-      description: 'Inspect active desktop windows and capture grounding metadata + screenshot.',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'browser_inspect',
-      description: 'Inspect a live web URL (DOM structure, title, headings, cleaned text content, and preview).',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: 'Target URL to inspect' },
-        },
-        required: ['url'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'restart_brain',
-      description:
-        'Restart the LocalGravity Central Brain process. The Windows Tray supervisor immediately captures exit code 42 and reboots the daemon with fresh code, models, and tools. Use whenever the user asks to restart or reload LocalGravity.',
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: {
-            type: 'string',
-            description: 'Optional explanation for restart (e.g. "Reloading after code modifications")',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'read_system_logs',
-      description:
-        'Read the latest system logs to diagnose issues autonomously: "strata" (Strata Engine port 8080 log), "tray" (LocalGravity tray supervisor log), or "daemon" (Central Brain runtime log).',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: {
-            type: 'string',
-            enum: ['strata', 'tray', 'daemon'],
-            description: 'Log source to read: "strata" (Strata port 8080 log), "tray" (Tray supervisor log), "daemon" (Central Brain)',
-          },
-          lines: {
-            type: 'number',
-            description: 'Number of recent lines to read (default: 50, max: 200)',
-          },
-        },
-        required: ['target'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'manage_strata',
-      description:
-        'Inspect or control the Strata local inference engine on port 8080: "status" (check if active and get loaded model/context), "test_vision" (verify live multimodal vision processing with a test image), "restart" (reboot engine).',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['status', 'test_vision', 'restart'],
-            description: 'Action to perform on Strata engine',
-          },
-          test_prompt: {
-            type: 'string',
-            description: 'Optional prompt when action is "test_vision"',
-          },
-        },
-        required: ['action'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'inspect_document',
-      description:
-        'Deeply inspect and parse documents (PDF, DOCX, TXT, CSV, Markdown, EPUB, JSON): extracts full text content, page count, document outline/info, and extracts embedded raster images (e.g. photos of drink menus, receipts, scanned book pages) to disk as JPG files for visual perception.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Path to the document file on disk (supports relative, alias like "downloads/menu.pdf", or absolute path)',
-          },
-          extract_images: {
-            type: 'boolean',
-            description: 'Whether to extract embedded photos/raster images to disk for visual analysis (default true)',
-          },
-          max_pages: {
-            type: 'number',
-            description: 'Maximum number of pages or sections to extract text from (default 30)',
-          },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'inspect_file_metadata',
-      description:
-        'Inspect deep metadata of any file, document, or image on the workstation: extracts image dimensions & EXIF metadata (camera make/model, lens, GPS coordinates, date/time, ISO, exposure, f-number), file hash (SHA-256), byte size, MIME type, and line/text stats.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Path to file or image (supports relative, alias like "downloads/photo.jpg", or absolute path)',
-          },
-        },
-        required: ['path'],
-      },
-    },
-  },
-];
+export { BUILTIN_TOOLS_SCHEMA } from './builtinToolsSchema.js';
+
 
 export function truncateSafeOutput(output: string, maxChars = 16000): string {
   if (!output || output.length <= maxChars) return output;
@@ -523,6 +66,24 @@ export class BuiltinToolExecutor {
   }
 
   public resolveSafePath(workspaceRoot: string, inputPath?: string): string {
+    return this.resolveSafePathInternal(workspaceRoot, inputPath);
+  }
+
+  // Exposes the executor surface (deps + helpers) to registry handlers. Class fields
+  // are private; ToolExec gives handlers a controlled view without widening visibility.
+  public asExec(): import('./handlers/types.js').ToolExec {
+    return {
+      db: this.db,
+      terminal: this.terminal,
+      mcp: this.mcp,
+      skills: this.skills,
+      attachmentManager: this.attachmentManager,
+      resolveSafePath: (w, p) => this.resolveSafePath(w, p),
+      executeTool: (t, a, c) => this.executeTool(t, a, c),
+    };
+  }
+
+  private resolveSafePathInternal(workspaceRoot: string, inputPath?: string): string {
     if (!inputPath || inputPath === '.') return workspaceRoot;
     if (inputPath.startsWith('~')) {
       return path.resolve(os.homedir(), inputPath.slice(1).replace(/^[/\\]/, ''));
@@ -585,6 +146,12 @@ export class BuiltinToolExecutor {
     }
 
     try {
+      // Registry-first dispatch (Strangler-Fig): migrated tools live in ./handlers.
+      const handler = HANDLER_REGISTRY[toolName];
+      if (handler) {
+        return await handler(args, ctx, this.asExec());
+      }
+
       switch (toolName) {
         case 'inspect_document': {
           const rawPath = String(args.path || '');
@@ -687,27 +254,6 @@ export class BuiltinToolExecutor {
               durationMs: Math.round(performance.now() - startMs),
             };
           }
-        }
-
-        case 'restart_brain': {
-          const reason = String(args.reason || 'User requested restart via chat');
-          setTimeout(() => {
-            process.exit(42);
-          }, 600);
-          return {
-            stdout: JSON.stringify(
-              {
-                status: 'restarting',
-                supervisor_signal: 42,
-                message: `Central Brain reboot initiated (${reason}). Windows Tray supervisor will recycle the brain process in 500ms.`,
-              },
-              null,
-              2
-            ),
-            stderr: '',
-            exitCode: 0,
-            durationMs: Math.round(performance.now() - startMs),
-          };
         }
 
         case 'read_system_logs': {

@@ -179,3 +179,10 @@
 - **[PPC Auto-Tool Rule 2026-11-09T15:24:53.612Z]**: Tool `run_terminal` (`run_terminal({"command":"env:NODE_OPTIONS=''; & "C:Program Filesnodejsnode.exe" `) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-09T17:09:16.646Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && echo \"=== LARGEST SOURCE FILES ===\" && git ls-files \"*.ts\" \"*.tsx\" \"*.js\" \"*.mjs\" | xargs wc -l 2>/dev/null | sort -rn | head -30"})`)
+- **Initial Failure Telemetry**: `At line:1 char:58 + cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && echo "=== ... +                                                          ~~ The `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T17:09:16.646Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `At line:1 char:58 + cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

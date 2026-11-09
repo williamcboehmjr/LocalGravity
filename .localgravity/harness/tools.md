@@ -73,3 +73,5 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T15:22:15.111Z]**: Tool `run_terminal` (`run_terminal({"command":"node .runtime/pdf_extract4.js ".runtime/uploads/908b4fa`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T15:24:53.612Z]**: Tool `run_terminal` (`run_terminal({"command":"env:NODE_OPTIONS=''; & "C:Program Filesnodejsnode.exe" `) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T17:09:16.646Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `At line:1 char:58 + cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && `. Fallback to safe cross-platform invocation.
