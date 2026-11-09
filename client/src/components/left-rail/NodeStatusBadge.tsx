@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Cpu, HardDrive, Plug, Zap, RefreshCw, Settings, ChevronUp, ChevronDown } from 'lucide-react';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useSessionStore } from '../../store/useSessionStore';
-import { ModelTier } from '../../types/protocol';
 
 interface NodeStatusBadgeProps {
   onOpenSettings?: () => void;
@@ -17,12 +16,11 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
     hostRamTotalGb,
     tokensPerSec,
     lastSwapDurationMs,
-    sysramCache,
     mcpServers,
     setMcpServers,
   } = useTelemetryStore();
 
-  const { isConnected, activeModelName, selectedTier, apiBaseUrl, brainHost, brainPort } =
+  const { isConnected, activeModelName, apiBaseUrl, brainHost, brainPort } =
     useSessionStore();
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -45,13 +43,13 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
     }
   };
 
+
+
   const handlePrewarmSysRam = async () => {
     try {
       await fetch(`${apiBaseUrl}/api/tabby/prewarm`, { method: 'POST' });
     } catch {}
   };
-
-  const tiers: ModelTier[] = ['low', 'medium', 'high'];
 
   return (
     <div className="pt-2 border-t border-[#222225] text-xs shrink-0 select-none">
@@ -86,7 +84,7 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
               <div className="flex justify-between text-[10px] text-[#8E8E93] mb-0.5">
                 <span className="flex items-center gap-1">
                   <Cpu className="w-3 h-3" />
-                  <span>VRAM ({selectedTier.toUpperCase()})</span>
+                  <span>VRAM (Swift 1.5)</span>
                 </span>
                 <span className="font-mono text-[#E3E3E3]">
                   {vramUsedGb.toFixed(1)} / {vramTotalGb.toFixed(0)} GB
@@ -110,26 +108,11 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
                   {hostRamUsedGb.toFixed(0)} / {hostRamTotalGb.toFixed(0)} GB
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-1">
-                {tiers.map((t) => {
-                  const cacheItem = sysramCache?.[t];
-                  const isVramActive = cacheItem
-                    ? cacheItem.state === 'vram_active'
-                    : t === selectedTier;
-                  return (
-                    <div
-                      key={t}
-                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono flex items-center justify-between border ${
-                        isVramActive
-                          ? 'bg-[#262629] border-[#3E3E44] text-[#E3E3E3]'
-                          : 'bg-[#131314] border-[#242427] text-[#6E6E73]'
-                      }`}
-                    >
-                      <span className="uppercase">{t}</span>
-                      <span>{isVramActive ? 'VRAM' : 'RAM'}</span>
-                    </div>
-                  );
-                })}
+              <div className="grid grid-cols-1 gap-1">
+                <div className="px-2 py-0.5 rounded text-[9.5px] font-mono flex items-center justify-between border bg-[#262629] border-[#3E3E44] text-[#E3E3E3]">
+                  <span className="font-semibold text-emerald-400">Swift 1.5 IQ2_XS + Vision</span>
+                  <span className="text-[#9A9A9E]">VRAM Active</span>
+                </div>
               </div>
             </div>
           </div>

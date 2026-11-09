@@ -51,9 +51,9 @@ interface PromptBarProps {
 }
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
-  low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM (3.4 GB)' },
-  medium: { name: 'Qwen 3.8 27B Medium', sub: 'Fast Workhorse (EXL3 11.5 GB)' },
-  high: { name: 'Qwen 3.8 Flash-Next High', sub: 'Strata IQ3_S + Vision • 64k Context (Main)' },
+  low: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
+  medium: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
+  high: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -713,23 +713,19 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             </button>
 
             {showModelMenu && (
-              <div className="absolute bottom-full left-0 mb-1.5 w-52 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
-                {(['low', 'medium', 'high'] as ModelTier[]).map((tier) => (
+              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                {(['high'] as ModelTier[]).map((tier) => (
                   <button
                     key={tier}
                     type="button"
                     onClick={() => handleSelectTier(tier)}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
-                      selectedTier === tier
-                        ? 'bg-[#28282C] text-[#E3E3E3]'
-                        : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
-                    }`}
+                    className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors bg-[#28282C] text-[#E3E3E3]"
                   >
                     <div>
                       <div className="font-medium">{TIER_LABELS[tier].name}</div>
-                      <div className="text-[10px] text-[#6E6E73]">{TIER_LABELS[tier].sub}</div>
+                      <div className="text-[10px] text-emerald-400 font-mono">{TIER_LABELS[tier].sub}</div>
                     </div>
-                    {selectedTier === tier && <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />}
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
                   </button>
                 ))}
               </div>

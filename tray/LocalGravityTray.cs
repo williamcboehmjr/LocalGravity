@@ -345,8 +345,8 @@ namespace LocalGravityTray
                 int m = secondsRemaining / 60;
                 int s = secondsRemaining % 60;
                 string offloadText = idleTimeoutMinutes > 0
-                    ? string.Format("🟢 GPU Active (Qwen 3.8 Flash-Next • {0}m {1:D2}s idle left)", m, s)
-                    : "🟢 GPU Active (Qwen 3.8 Flash-Next • Always in VRAM)";
+                    ? string.Format("🟢 GPU Active (Swift 1.5 Flash-Next • {0}m {1:D2}s idle left)", m, s)
+                    : "🟢 GPU Active (Swift 1.5 Flash-Next • Always in VRAM)";
                 gpuStateItem.Text = offloadText;
                 offloadGpuItem.Enabled = true;
                 offloadGpuItem.Text = "💤 Offload GPU Now (Free 100% VRAM)";
@@ -565,7 +565,7 @@ namespace LocalGravityTray
                 }
                 else
                 {
-                    tooltipText = "LocalGravity — GPU Active (Qwen 3.8 Flash-Next)";
+                    tooltipText = "LocalGravity — GPU Active (Swift 1.5 Flash-Next)";
                 }
             }
             else if (state == "standby")
@@ -687,7 +687,7 @@ namespace LocalGravityTray
         public void WakeGpuManual()
         {
             AppendLog("[Tray] Manual GPU wake requested.");
-            ShowNotification("LocalGravity", "Waking Strata GPU Engine (Qwen 3.8 Flash-Next)...");
+            ShowNotification("LocalGravity", "Waking Strata GPU Engine (Swift 1.5 Flash-Next)...");
             PostApi("http://127.0.0.1:3390/api/gpu/wake", "{}");
         }
 

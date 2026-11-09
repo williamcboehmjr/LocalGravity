@@ -51,9 +51,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     latency?: number;
   }>({ status: 'idle' });
 
-  const [lowModel, setLowModel] = useState('Qwen3.5-4B-EXL3-4.0bpw');
-  const [medModel, setMedModel] = useState('Qwen3.8-27B-EXL3-11.5GB');
-  const [highModel, setHighModel] = useState('qwen3.8-flash-next-iq3_s (Strata + Vision • 64k)');
+  const [highModel, setHighModel] = useState('Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS (Strata + Vision • 64k)');
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
@@ -415,41 +413,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
           </div>
 
-          {/* Model tier mappings */}
+          {/* Active Model */}
           <div className="space-y-2 pt-3 border-t border-border-subtle/50">
             <label className="flex items-center gap-1.5 font-medium text-text-primary">
-              <Cpu className="w-3.5 h-3.5 text-purple-400" />
-              <span>Strata & Tiered Model Mappings (Main: Qwen 3.8 Flash-Next)</span>
+              <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Active Strata Inference Engine Model</span>
             </label>
 
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="w-16 font-mono text-rose-400 font-semibold">High:</span>
+                <span className="w-20 font-mono text-emerald-400 font-semibold text-xs">Flagship:</span>
                 <input
                   type="text"
                   value={highModel}
                   onChange={(e) => setHighModel(e.target.value)}
-                  className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="w-16 font-mono text-amber-400">Medium:</span>
-                <input
-                  type="text"
-                  value={medModel}
-                  onChange={(e) => setMedModel(e.target.value)}
-                  className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="w-16 font-mono text-blue-400">Low:</span>
-                <input
-                  type="text"
-                  value={lowModel}
-                  onChange={(e) => setLowModel(e.target.value)}
-                  className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue"
+                  className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue text-xs"
                 />
               </div>
             </div>

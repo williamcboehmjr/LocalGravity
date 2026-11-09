@@ -60,7 +60,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   cpuUtilization: 8,
   rttLatencyMs: 2,
   activeTier: 'high',
-  activeModel: 'qwen3.8-flash-next-iq3_s',
+  activeModel: 'swift-1.5-iq2_xs',
   tokensPerSec: 74.2,
   lastSwapDurationMs: 840,
   tabbyConnected: true,
