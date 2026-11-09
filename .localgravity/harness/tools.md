@@ -85,3 +85,5 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T19:59:25.987Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path 'se`) encountered error `At line:1 char:163 + ... ','import.*handlers' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T19:59:53.069Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "cd server; npx tsc --no`) encountered error `At line:1 char:51 + cd server; npx tsc --noEmit; Write-Host ('EXIT=' + ) +      `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T20:29:42.679Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/App.tsx","replacement":"              <ReconnectB`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.

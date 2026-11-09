@@ -114,13 +114,15 @@ async function main() {
   // Step 3: Build Windows MSI + Updater Signature
   console.log('--- Step 3/6: Building Signed Windows MSI ---');
   const privateKey = fs.readFileSync(keyPath, 'utf8').trim();
+  const buildEnv = {
+    ...process.env,
+    TAURI_SIGNING_PRIVATE_KEY: privateKey,
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '',
+  };
   execSync('npx tauri build --bundles msi', {
     cwd: clientDir,
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      TAURI_SIGNING_PRIVATE_KEY: privateKey,
-    },
+    env: buildEnv,
   });
 
   const msiPath = path.join(
@@ -153,7 +155,7 @@ async function main() {
   if (fs.existsSync(targetDmg)) {
     execSync(
       `npm run tauri -- signer sign -f "${keyPath}" --app-version "${newVersion}" "${targetDmg}"`,
-      { cwd: clientDir, stdio: 'inherit' }
+      { cwd: clientDir, stdio: 'inherit', env: buildEnv }
     );
     const dmgSigPath = `${targetDmg}.sig`;
     if (fs.existsSync(dmgSigPath)) {

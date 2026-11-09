@@ -18,6 +18,7 @@ const privateKey = fs.readFileSync(keyPath, 'utf8').trim();
 const env = {
   ...process.env,
   TAURI_SIGNING_PRIVATE_KEY: privateKey,
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '',
 };
 
 console.log('Loaded signing key. Starting Tauri release build with updater artifacts...');

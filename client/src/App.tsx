@@ -28,6 +28,7 @@ import { useTelemetryStore } from './store/useTelemetryStore';
 import { SessionList } from './components/left-rail/SessionList';
 import { SkillsDrawer } from './components/left-rail/SkillsDrawer';
 import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
+import { ReconnectBadge } from './components/ReconnectBadge';
 import { SettingsModal } from './components/left-rail/SettingsModal';
 import { MobileRemoteModal } from './components/left-rail/MobileRemoteModal';
 import { AutomationsModal } from './components/left-rail/AutomationsModal';
@@ -129,6 +130,8 @@ export const App: React.FC = () => {
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
   const [reconnectKey, setReconnectKey] = useState<number>(0);
+
+
 
   const handleManualReconnect = useCallback(() => {
     setReconnectCountdown(0);
@@ -440,6 +443,8 @@ export const App: React.FC = () => {
 
     return () => clearInterval(timer);
   }, [isConnected, reconnectCountdown, handleManualReconnect]);
+
+
 
   // Proactive HTTP health probe when disconnected: detects server recovery & auto-discovers port
   useEffect(() => {
@@ -1066,7 +1071,9 @@ export const App: React.FC = () => {
         {!isConnected && (
           <div className="shrink-0 bg-gradient-to-r from-amber-950/90 via-amber-900/80 to-amber-950/90 border-b border-amber-600/40 px-4 py-2 flex items-center justify-between text-xs sm:text-sm text-amber-200 select-none z-20">
             <div className="flex items-center gap-2.5 min-w-0">
+                            <ReconnectBadge secondsRemaining={reconnectCountdown} totalSeconds={3} attempt={reconnectAttempt} />
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
+
               <span className="font-semibold text-amber-100">Brain is offline or restarting</span>
               <span className="text-amber-400/60 hidden sm:inline">•</span>
               <span className="text-amber-300 font-mono text-[11.5px] sm:text-xs">

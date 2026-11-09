@@ -1,15 +1,15 @@
 {
-  "version": "v2.1.1",
-  "notes": "LocalGravity v2.1.1 Release:\n- Standardized on Swift 1.5 Flash-Next (GSQ-RCO-IQ2_XS + Vision) across WebUI, Windows, and macOS.\n- Removed inactive legacy models from UI selectors and settings for streamlined experience.\n- Trailing action intent detection in premature stop guard.\n- Real-time live tokens/second calculation and telemetry streaming.",
-  "pub_date": "2026-11-09T19:47:00.000Z",
+  "version": "v2.1.3",
+  "notes": "v2.1.3: Live SVG reconnect countdown badge ring and automatic recovery banner",
+  "pub_date": "2026-11-09T20:45:50.971Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemNENVA1NjJpS0pEN1Q5UDR5SHI4enlkeTJaY1kxWnpkTkdlUUxzNlo2WHhUMCtHaEduREEyZEhpcXpvdXhUbDIzbUo2TGxReFZzVjZ1Sk85QVprbVFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjUzMjIzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4xX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjEuMQoydyt0aEMyeE9DK1ZaWjRHaGJlTlJnWmZGdDNoZDhzc21oMnRTM0pOcGpkREEyY21paVRGNzVsLzNJQjV0RHE4RGVZWklNY21UVURDN1VSWkNWSTVBdz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.1/LocalGravity_2.1.1_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhveldzNWZDSEtNaTA5d3ozNFBVd3hoS3RzeFpVNmROQW9aWElCZlVCRnNWVmpqN2JvcXhsVWpucGJYc25mdmlLWmxKVU5NdHUzRk8raysrYUpRZG04bUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU3MTUwCWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4zX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjEuMwpDUkRRYllOTkR6Rjh0VDJVTlNhVjFpMXRKb0lwUmpJMnpTZGdxM2xCMU5Bak1wZEhoMnFzWXRBdXdMK2U1ZTR1OVhsZVVPQXNhOVoxS2FhZklsbURCZz09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.3/LocalGravity_2.1.3_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelRoOVNReUFrZXNDcHpJSjlSQU1ZelBaY3dpWFVkdnFrbHh6ZE44QkFFUE9ldERHV3F4OUVYdUt4RUVvSHJ4UTRsRnlHaldKbTZ6NTF4UW1qSmNwdWcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjUzNjM0CWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4xX2FhcmNoNjQuZG1nCXZlcnNpb246Mi4xLjEKdndOWExxNVhmbkVqUlNWdEVjam10YVNZYUFuckZtR2x4cWxiVEtGb0xlU2lNSENmMWxsampuRXRQSXdxWUkrQ2V6V3Bmdnc3d29CNXV3eXhuMXd6Q2c9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.1/LocalGravity_2.1.1_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhveldzNWZDSEtNaTA5d3ozNFBVd3hoS3RzeFpVNmROQW9aWElCZlVCRnNWVmpqN2JvcXhsVWpucGJYc25mdmlLWmxKVU5NdHUzRk8raysrYUpRZG04bUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjU3MTUwCWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4zX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjEuMwpDUkRRYllOTkR6Rjh0VDJVTlNhVjFpMXRKb0lwUmpJMnpTZGdxM2xCMU5Bak1wZEhoMnFzWXRBdXdMK2U1ZTR1OVhsZVVPQXNhOVoxS2FhZklsbURCZz09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.3/LocalGravity_2.1.3_aarch64.dmg"
     }
   }
 }

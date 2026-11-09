@@ -221,3 +221,10 @@
 - **[PPC Auto-Tool Rule 2026-11-09T19:59:53.069Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "cd server; npx tsc --no`) encountered error `At line:1 char:51 + cd server; npx tsc --noEmit; Write-Host ('EXIT=' + ) +      `. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-09T20:29:42.679Z]
+- **Failed Tool**: `apply_diff` (`apply_diff({"path":"client/src/App.tsx","replacement":"              <ReconnectBadge secondsRemaining={reconnectCountdown} totalSeconds={3} attempt={reconnectAttempt} />\n              <span className=\"font-semibold text-amber-100\">Brain is offline or restarting</span>\n","target":"              <span className=\"w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0\" />\n              <span className=\"font-semibold text-amber-100\">Brain is offline or restarting</span>\n              <span className=\"text-amber-400/60 hidden sm:inline\">•</span>\n              <span className=\"text-amber-300 font-mono text-[11.5px] sm:text-xs\">\n                {reconnectCountdown > 0\n                  ? `Reconnecting in ${reconnectCountdown}s...`\n                  : 'Probing connection...'}\n                {reconnectAttempt > 0 && ` (Attempt #${reconnectAttempt})`}\n              </span>\n"})`)
+- **Initial Failure Telemetry**: `Target block not found in C:\Users\Sue\.gemini\antigravity\scratch\LocalGravity\client\src\App.tsx`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T20:29:42.679Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/App.tsx","replacement":"              <ReconnectB`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for apply_diff with updated tools.md)
+
