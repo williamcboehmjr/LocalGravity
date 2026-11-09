@@ -458,4 +458,26 @@ export const BUILTIN_TOOLS_SCHEMA = [
       },
     },
   },
-];
+  {
+    type: 'function',
+    function: {
+      name: 'publish_release',
+      description:
+        'Build, cryptographically sign, and publish an official LocalGravity release to GitHub. Automates compilation checks, version bumping, Windows MSI building with minisign signatures, macOS DMG signing, latest.json updater manifest creation, Git push, and GitHub Release publishing so users can hit Check for Updates to install new features immediately.',
+      parameters: {
+        type: 'object',
+        properties: {
+          bump: {
+            type: 'string',
+            enum: ['patch', 'minor', 'major'],
+            description: 'Semver bump type: patch (default) or minor',
+          },
+          notes: {
+            type: 'string',
+            description: 'Changelog summarizing the new features, UI/UX changes, or fixes built',
+          },
+        },
+        required: ['notes'],
+      },
+    },
+  },];

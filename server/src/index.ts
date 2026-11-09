@@ -1,3 +1,15 @@
+process.on('uncaughtException', (err: any) => {
+  if (
+    err?.code === 'ECONNRESET' ||
+    err?.code === 'EPIPE' ||
+    err?.message?.includes('closed') ||
+    err?.message?.includes('aborted')
+  ) {
+    return;
+  }
+  console.error('[CentralBrain] Uncaught Exception:', err);
+});
+
 process.on('unhandledRejection', (reason: any) => {
   if (
     reason?.name === 'AbortError' ||

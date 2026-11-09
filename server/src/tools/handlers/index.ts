@@ -9,6 +9,7 @@ import * as readSystemLogs from './readSystemLogs.js';
 import * as listSkills from './listSkills.js';
 import * as readSkill from './readSkill.js';
 import * as callMcpTool from './callMcpTool.js';
+import * as publishRelease from './publishRelease.js';
 
 export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
   [restartBrain.name]: restartBrain.execute,
@@ -16,4 +17,5 @@ export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
   [listSkills.name]: listSkills.execute,
   [readSkill.name]: readSkill.execute,
   [callMcpTool.name]: callMcpTool.execute,
+  [publishRelease.name]: publishRelease.execute,
 };

@@ -207,3 +207,17 @@
 - **[PPC Auto-Tool Rule 2026-11-09T19:28:04.195Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe fallback succeeded)
 
+### [PPC Composed Fix • 2026-11-09T19:59:25.987Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"Select-String -Path 'server/src/tools/builtinTools.ts' -Pattern 'HANDLER_REGISTRY','asExec','registry','import.*handlers' | ForEach-Object { $_.LineNumber.ToString() + ': ' + $_.Line.Trim() }\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:163 + ... ','import.*handlers' | ForEach-Object { .LineNumber.ToString() + ': ' ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T19:59:25.987Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path 'se`) encountered error `At line:1 char:163 + ... ','import.*handlers' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T19:59:53.069Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"cd server; npx tsc --noEmit; Write-Host ('EXIT=' + $LASTEXITCODE)\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/server"})`)
+- **Initial Failure Telemetry**: `At line:1 char:51 + cd server; npx tsc --noEmit; Write-Host ('EXIT=' + ) +                                                   ~ You must provide a value expressi`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T19:59:53.069Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "cd server; npx tsc --no`) encountered error `At line:1 char:51 + cd server; npx tsc --noEmit; Write-Host ('EXIT=' + ) +      `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

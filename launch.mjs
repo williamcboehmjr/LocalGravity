@@ -21,6 +21,14 @@ const SERVER_DIR = path.join(SCRIPT_DIR, 'server');
 const RUNTIME_DIR = path.join(SCRIPT_DIR, '.runtime');
 const PORTS_FILE = path.join(RUNTIME_DIR, 'ports.json');
 
+process.on('uncaughtException', (err) => {
+  if (err?.code === 'ECONNRESET' || err?.code === 'EPIPE' || err?.message?.includes('closed')) return;
+  console.error('[Launch] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Launch] Unhandled Rejection:', reason);
+});
+
 const FORBIDDEN_PORTS = new Set([5000, 5001]);
 
 function isPortFree(port, host = '0.0.0.0') {
@@ -245,7 +253,9 @@ async function main() {
 
       process.on('SIGINT', cleanup);
       process.on('SIGTERM', cleanup);
-      return;
+
+      // Keep foreground process alive indefinitely until SIGINT/SIGTERM
+      await new Promise(() => {});
     } else {
       // Detached Daemon Execution
       await ensureStrataRunning();
