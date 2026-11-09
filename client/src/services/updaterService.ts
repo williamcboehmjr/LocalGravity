@@ -1,5 +1,6 @@
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { useSessionStore } from '../store/useSessionStore';
 
 export interface UpdateInfo {
   available: boolean;
@@ -27,11 +28,46 @@ export function isTauriEnvironment(): boolean {
 }
 
 /**
- * Checks GitHub / Tauri endpoints for available LocalGravity updates
+ * Checks Brain proxy & GitHub / Tauri endpoints for available LocalGravity updates
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
+  const currentVersion = '2.1.0';
 
+  // 1. Primary Check: Query Central Brain's authenticated updater endpoint (works seamlessly over LAN for private repos)
+  try {
+    const apiBaseUrl = useSessionStore.getState().apiBaseUrl || 'http://127.0.0.1:3390';
+    const brainRes = await fetch(`${apiBaseUrl}/api/updater/latest.json`, {
+      signal: AbortSignal.timeout(4000),
+      headers: { Accept: 'application/json' },
+    });
+    if (brainRes.ok) {
+      const manifest = await brainRes.json();
+      const latestTag = manifest.version?.replace(/^v/, '') || '';
+      const isNewer = compareSemver(latestTag, currentVersion) > 0;
+      if (isNewer) {
+        const isMac =
+          typeof navigator !== 'undefined' &&
+          /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
+        const platformKey = isMac ? 'darwin-aarch64' : 'windows-x86_64';
+        const platform = manifest.platforms?.[platformKey];
+        return {
+          available: true,
+          version: latestTag,
+          currentVersion,
+          body: manifest.notes || '',
+          date: manifest.pub_date,
+          downloadUrl:
+            platform?.url ||
+            `${apiBaseUrl}/api/updater/download/${isMac ? `LocalGravity_${latestTag}_aarch64.dmg` : `LocalGravity_${latestTag}_x64_en-US.msi`}`,
+        };
+      }
+    }
+  } catch (brainErr) {
+    console.warn('[Updater] Central Brain updater check failed, falling back to native/web:', brainErr);
+  }
+
+  // 2. Native Tauri Check (if updater endpoints are accessible)
   if (isTauri) {
     try {
       const update = await check({
@@ -48,44 +84,35 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           updateHandle: update,
         };
       }
-
-      return {
-        available: false,
-        currentVersion: '2.1.0',
-      };
     } catch (err: any) {
       console.warn('[Updater] Tauri native check failed or offline:', err);
-      // Fallback to checking GitHub API directly if Tauri endpoint fails
     }
   }
 
-  // Fallback for Web Companion / Browser
+  // 3. Fallback for Web Companion / Browser
   try {
     const res = await fetch('https://api.github.com/repos/williamcboehmjr/LocalGravity/releases/latest', {
       headers: { Accept: 'application/vnd.github.v3+json' },
     });
-    if (!res.ok) {
-      return { available: false, currentVersion: '2.1.0' };
+    if (res.ok) {
+      const data = await res.json();
+      const latestTag = data.tag_name?.replace(/^v/, '') || '';
+      const isNewer = compareSemver(latestTag, currentVersion) > 0;
+
+      return {
+        available: isNewer,
+        version: latestTag,
+        currentVersion,
+        body: data.body || '',
+        date: data.published_at,
+        downloadUrl: data.html_url,
+      };
     }
-
-    const data = await res.json();
-    const latestTag = data.tag_name?.replace(/^v/, '') || '';
-    const currentVersion = '2.1.0';
-
-    const isNewer = compareSemver(latestTag, currentVersion) > 0;
-
-    return {
-      available: isNewer,
-      version: latestTag,
-      currentVersion,
-      body: data.body || '',
-      date: data.published_at,
-      downloadUrl: data.html_url,
-    };
   } catch (webErr) {
     console.warn('[Updater] Web GitHub release check failed:', webErr);
-    return { available: false, currentVersion: '2.1.0' };
   }
+
+  return { available: false, currentVersion };
 }
 
 /**
