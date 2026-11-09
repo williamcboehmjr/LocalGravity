@@ -325,7 +325,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <span>LocalGravity Auto-Updates</span>
               </label>
               <span className="text-[11px] font-mono text-text-muted">
-                v2.0.0 ({isTauri ? 'Desktop Native' : 'Web Companion'})
+                v{availableUpdate?.currentVersion || '2.2.0'} ({isTauri ? 'Desktop Native' : 'Web Companion'})
               </span>
             </div>
 

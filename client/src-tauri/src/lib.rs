@@ -119,6 +119,48 @@ async fn install_dmg_update(dmg_url: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn install_msi_update(msi_url: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_msi = temp_dir.join("localgravity_update.msi");
+        let temp_msi_str = temp_msi.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&temp_msi);
+
+        let curl_out = Command::new("curl.exe")
+            .args(["-s", "-L", "-f", "-o", &temp_msi_str, &msi_url])
+            .output()
+            .map_err(|e| format!("curl.exe execution failed: {}", e))?;
+
+        if !curl_out.status.success() {
+            return Err(format!(
+                "Failed to download MSI update from {}: {}",
+                msi_url,
+                String::from_utf8_lossy(&curl_out.stderr)
+            ));
+        }
+
+        let ps_cmd = format!(
+            "Start-Sleep -Milliseconds 600; Start-Process msiexec.exe -ArgumentList '/i', '\"{}\"', '/passive', '/norestart' -Wait; Start-Process 'C:\\Program Files\\LocalGravity\\localgravity-edge.exe'",
+            temp_msi_str
+        );
+        let _ = Command::new("powershell.exe")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_cmd])
+            .spawn();
+
+        std::process::exit(0);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = msi_url;
+        Err("install_msi_update is only supported on Windows".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -131,7 +173,8 @@ pub fn run() {
             get_system_platform,
             init_client_appdata,
             init_workspace_harness,
-            install_dmg_update
+            install_dmg_update,
+            install_msi_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

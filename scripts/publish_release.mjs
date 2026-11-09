@@ -153,9 +153,11 @@ async function main() {
 
   let macSignature = winSignature;
   if (fs.existsSync(targetDmg)) {
+    const signEnv = { ...buildEnv };
+    delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
     execSync(
-      `npm run tauri -- signer sign -f "${keyPath}" --app-version "${newVersion}" "${targetDmg}"`,
-      { cwd: clientDir, stdio: 'inherit', env: buildEnv }
+      `npm run tauri -- signer sign -f "${keyPath}" --password "" --app-version "${newVersion}" "${targetDmg}"`,
+      { cwd: clientDir, stdio: 'inherit', env: signEnv }
     );
     const dmgSigPath = `${targetDmg}.sig`;
     if (fs.existsSync(dmgSigPath)) {
@@ -193,6 +195,7 @@ async function main() {
     cwd: rootDir,
     stdio: 'inherit',
   });
+  try { execSync('git pull --rebase -X ours origin main', { cwd: rootDir, stdio: 'inherit' }); } catch {}
   execSync('git push origin main', { cwd: rootDir, stdio: 'inherit' });
 
   const assets = [

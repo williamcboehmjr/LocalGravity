@@ -1,6 +1,7 @@
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { useSessionStore } from '../store/useSessionStore';
 
 export interface UpdateInfo {
@@ -33,9 +34,36 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  const currentVersion = '2.1.0';
+  let currentVersion = '2.2.0';
+  if (isTauri) {
+    try {
+      currentVersion = await getVersion();
+    } catch {}
+  }
 
-  // 1. Primary Check: Query Central Brain's authenticated updater endpoint (works seamlessly over LAN for private repos)
+  // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)
+  if (isTauri) {
+    try {
+      const update = await check({
+        timeout: 10000,
+      });
+
+      if (update) {
+        return {
+          available: true,
+          version: update.version.replace(/^v/, ''),
+          currentVersion: update.currentVersion,
+          body: update.body || '',
+          date: update.date,
+          updateHandle: update,
+        };
+      }
+    } catch (err: any) {
+      console.warn('[Updater] Tauri native check failed, falling back to Central Brain:', err);
+    }
+  }
+
+  // 2. Secondary Check: Query Central Brain's authenticated updater endpoint (works seamlessly over LAN)
   try {
     const apiBaseUrl = useSessionStore.getState().apiBaseUrl || 'http://127.0.0.1:3390';
     const brainRes = await fetch(`${apiBaseUrl}/api/updater/latest.json`, {
@@ -65,29 +93,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       }
     }
   } catch (brainErr) {
-    console.warn('[Updater] Central Brain updater check failed, falling back to native/web:', brainErr);
-  }
-
-  // 2. Native Tauri Check (if updater endpoints are accessible)
-  if (isTauri) {
-    try {
-      const update = await check({
-        timeout: 10000,
-      });
-
-      if (update) {
-        return {
-          available: true,
-          version: update.version,
-          currentVersion: update.currentVersion,
-          body: update.body || '',
-          date: update.date,
-          updateHandle: update,
-        };
-      }
-    } catch (err: any) {
-      console.warn('[Updater] Tauri native check failed or offline:', err);
-    }
+    console.warn('[Updater] Central Brain updater check failed, falling back to web:', brainErr);
   }
 
   // 3. Fallback for Web Companion / Browser
@@ -165,6 +171,17 @@ export async function downloadAndApplyUpdate(
   }
 
   if (!updateHandle) {
+    if (isTauri && !isMac && downloadUrl) {
+      onProgress?.({
+        status: 'downloading',
+        downloadedBytes: 2500000,
+        totalBytes: 5800000,
+        percent: 50,
+        statusText: 'Downloading & installing Windows MSI update...',
+      });
+      await invoke('install_msi_update', { msiUrl: downloadUrl });
+      return;
+    }
     if (downloadUrl) {
       window.open(downloadUrl, '_blank');
       return;
