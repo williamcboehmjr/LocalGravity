@@ -75,3 +75,9 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T15:24:53.612Z]**: Tool `run_terminal` (`run_terminal({"command":"env:NODE_OPTIONS=''; & "C:Program Filesnodejsnode.exe" `) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T17:09:16.646Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `At line:1 char:58 + cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T19:09:47.992Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command 'Select-String -Path ser`) encountered error `At line:1 char:100 + ... iltinTools.ts -Pattern ^s*cases+. | ForEach-Object { {0`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T19:26:45.064Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T19:28:04.195Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.

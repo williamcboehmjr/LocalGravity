@@ -322,6 +322,9 @@ export const App: React.FC = () => {
                 ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
               });
             } else if (type === 'THOUGHT_STREAM') {
+              if (payload.tokens_per_sec) {
+                setTelemetry({ tokensPerSec: payload.tokens_per_sec });
+              }
               appendStreamingThought(
                 payload.chunk,
                 payload.elapsed_ms,
@@ -329,11 +332,14 @@ export const App: React.FC = () => {
                 payload.is_finished
               );
             } else if (type === 'TOKEN_STREAM') {
+              if (payload.tokens_per_sec) {
+                setTelemetry({ tokensPerSec: payload.tokens_per_sec });
+              }
               if (payload.is_finished) {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
               } else {
-                updateLastAssistantMessage(payload.chunk, payload.output_tokens);
+                updateLastAssistantMessage(payload.chunk, payload.output_tokens, payload.tokens_per_sec);
               }
             } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
               finalizeAssistantMessage();
@@ -1252,7 +1258,7 @@ export const App: React.FC = () => {
                   )}
                 </div>
                 <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
-                  {subagentTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec.toFixed(0)} tok/s
+                  {subagentTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec > 0 ? tokensPerSec.toFixed(1) : '—'} tok/s
                 </span>
               </button>
 

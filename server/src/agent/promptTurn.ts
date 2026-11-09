@@ -327,6 +327,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       let cumulativeOutputTokens = 0;
       let cumulativeThinkingTokens = 0;
       let lastThinkingMs = 0;
+      const turnStartMs = Date.now();
       let hasExecutedTools = false;
       let committedFinalContent = '';
       const collectedStepNotes: string[] = [];
@@ -387,6 +388,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           onThoughtDelta: (delta, elapsedMs, tokenCount) => {
             cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
             lastThinkingMs = elapsedMs;
+            const liveTokPerSec = tabby.getTelemetry().tokensPerSec || Number((cumulativeThinkingTokens / Math.max(0.08, elapsedMs / 1000)).toFixed(1));
             db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, cumulativeThinkingTokens);
             broadcastSync({
               type: 'THOUGHT_STREAM',
@@ -397,12 +399,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 chunk: delta,
                 elapsed_ms: elapsedMs,
                 token_count: cumulativeThinkingTokens,
+                tokens_per_sec: liveTokPerSec,
                 is_finished: false,
               },
             });
           },
-          onTokenDelta: (delta, tokenCount) => {
+          onTokenDelta: (delta, tokenCount, measuredTokPerSec) => {
             cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
+            const liveTokPerSec = measuredTokPerSec || tabby.getTelemetry().tokensPerSec || Number((cumulativeOutputTokens / Math.max(0.08, (Date.now() - turnStartMs) / 1000)).toFixed(1));
             db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
             broadcastSync({
               type: 'TOKEN_STREAM',
@@ -412,6 +416,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 message_id: assistantMsg.id,
                 chunk: delta,
                 output_tokens: cumulativeOutputTokens,
+                tokens_per_sec: liveTokPerSec,
                 is_finished: false,
               },
             });
@@ -791,6 +796,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           message_id: assistantMsg.id,
           chunk: '',
           output_tokens: cumulativeOutputTokens,
+          tokens_per_sec: tabby.getTelemetry().tokensPerSec,
           is_finished: true,
         },
       });

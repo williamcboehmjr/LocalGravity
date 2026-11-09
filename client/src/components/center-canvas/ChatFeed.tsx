@@ -23,6 +23,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { useSessionStore, ToolCallItemData } from '../../store/useSessionStore';
+import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
 import { ThoughtAccordion } from './ThoughtAccordion';
 
@@ -687,7 +688,9 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     currentThoughtTokens,
     isThinkingFinished,
     isGenerating,
+    activeModelName,
   } = useSessionStore();
+  const { tokensPerSec } = useTelemetryStore();
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
   const { setActiveTab } = useArtifactStore();
@@ -1043,11 +1046,19 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                   </div>
 
                   <div className="flex items-center gap-2 font-mono text-[10.5px] text-[#5F6368]">
-                    <span>{msg.modelName || 'Qwen 3.8 Flash-Next (Strata IQ3_S + Vision)'}</span>
+                    <span>{msg.modelName || (activeModelName ? `Swift 1.5 (${activeModelName})` : 'Swift 1.5 Flash-Next (Vision)')}</span>
                     {Boolean(msg.outputTokens && msg.outputTokens > 0) && (
                       <>
                         <span>•</span>
                         <span>{msg.outputTokens} tok</span>
+                      </>
+                    )}
+                    {Boolean((msg.tokensPerSec && msg.tokensPerSec > 0) || (isCurrentlyGenerating && tokensPerSec > 0)) && (
+                      <>
+                        <span>•</span>
+                        <span className="text-[#388BFD] font-semibold">
+                          {(isCurrentlyGenerating ? tokensPerSec : (msg.tokensPerSec || tokensPerSec)).toFixed(1)} tok/s
+                        </span>
                       </>
                     )}
                   </div>

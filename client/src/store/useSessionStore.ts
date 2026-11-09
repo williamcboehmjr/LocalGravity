@@ -35,6 +35,7 @@ export interface ChatMessage {
   thoughtElapsedMs?: number;
   thoughtTokenCount?: number;
   outputTokens?: number;
+  tokensPerSec?: number;
   tier?: ModelTier;
   thinkingBudget?: ThinkingBudget;
   modelName?: string;
@@ -160,7 +161,7 @@ interface SessionState {
   goBackThread: () => string | null;
   goForwardThread: () => string | null;
   addMessage: (msg: ChatMessage) => void;
-  updateLastAssistantMessage: (contentDelta: string, outputTokens?: number) => void;
+  updateLastAssistantMessage: (contentDelta: string, outputTokens?: number, tokensPerSec?: number) => void;
   updateLastAssistantTool: (
     command: string,
     output?: string,
@@ -536,13 +537,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     }),
 
-  updateLastAssistantMessage: (delta, outputTokens) =>
+  updateLastAssistantMessage: (delta, outputTokens, tokensPerSec) =>
     set((state) => {
       const list = [...state.messages];
       if (list.length > 0 && list[list.length - 1].role === 'assistant') {
         const last = { ...list[list.length - 1] };
         last.content += delta;
         if (outputTokens !== undefined) last.outputTokens = outputTokens;
+        if (tokensPerSec !== undefined && tokensPerSec > 0) last.tokensPerSec = tokensPerSec;
         list[list.length - 1] = last;
         return { messages: list };
       }

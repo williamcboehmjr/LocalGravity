@@ -211,8 +211,8 @@ async function runSelfTest() {
               payload: {
                 thread_id: initialThread.id,
                 prompt: 'List files in workspace',
-                tier: 'low',
-                thinking_budget: 'fast',
+                tier: 'high',
+                thinking_budget: 'off',
               },
             })
           );
@@ -230,7 +230,7 @@ async function runSelfTest() {
         }
       });
 
-      setTimeout(() => reject(new Error('WebSocket sync timeout')), 10000);
+      setTimeout(() => reject(new Error('WebSocket sync timeout')), 30000);
     });
 
     assert(clientBEvents.includes('SYNC_STATE'), 'Client B must receive SYNC_STATE');

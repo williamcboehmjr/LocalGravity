@@ -87,10 +87,12 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
   },
   high: {
     tier: 'high',
-    displayName: 'Qwen 3.8 Flash-Next High (IQ3_S + Vision)',
+    displayName: 'Swift 1.5 Flash-Next High (IQ2_XS + Vision)',
     shortLabel: 'Flash-Next High',
-    modelName: 'qwen3.8-flash-next-iq3_s',
+    modelName: 'swift-1.5-iq2_xs',
     fallbackFolderNames: [
+      'Swift-1.5',
+      'Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS',
       'Qwen3.8-Flash-Next-IQ3_S',
       'Qwen3.8-Flash-Next-IQ3_XXS',
       'Qwen3.8-Flash-Next',

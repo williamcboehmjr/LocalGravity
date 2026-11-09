@@ -563,6 +563,12 @@ export class TabbyEngine {
     };
   }
 
+  public updateMeasuredTokensPerSec(tokPerSec: number): void {
+    if (tokPerSec > 0 && !isNaN(tokPerSec)) {
+      this.tokensPerSec = Number(tokPerSec.toFixed(1));
+    }
+  }
+
   /**
    * Streams completion from TabbyAPI `/v1/chat/completions` enforcing the
    * Decoupled 3x3 Matrix (Model Tier × Thinking Budget: Off | Fast | Deep).
@@ -575,7 +581,7 @@ export class TabbyEngine {
     tools?: any[];
     abortSignal?: AbortSignal;
     onThoughtDelta: (delta: string, elapsedMs: number, tokenCount: number) => void;
-    onTokenDelta: (delta: string, tokenCount: number) => void;
+    onTokenDelta: (delta: string, tokenCount: number, tokensPerSec?: number) => void;
     onToolCallRequest?: (toolName: string, args: Record<string, any>) => Promise<void>;
   }): Promise<{
     content: string;
@@ -791,6 +797,8 @@ export class TabbyEngine {
                       thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
                       thinkingContent += delta.reasoning_content;
                       thinkingDurationMs = Math.round(performance.now() - startTime);
+                      const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
+                      this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
                       params.onThoughtDelta(
                         delta.reasoning_content,
                         thinkingDurationMs,
@@ -811,6 +819,8 @@ export class TabbyEngine {
                         thinkingTokens += Math.max(1, Math.ceil(thoughtPart.length / 4));
                         thinkingContent += thoughtPart;
                         thinkingDurationMs = Math.round(performance.now() - startTime);
+                        const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
+                        this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
                         params.onThoughtDelta(thoughtPart, thinkingDurationMs, thinkingTokens);
                       }
                       inThinkTag = false;
@@ -823,6 +833,8 @@ export class TabbyEngine {
                         thinkingTokens += Math.max(1, Math.ceil(textChunk.length / 4));
                         thinkingContent += textChunk;
                         thinkingDurationMs = Math.round(performance.now() - startTime);
+                        const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
+                        this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
                         params.onThoughtDelta(textChunk, thinkingDurationMs, thinkingTokens);
                       } else {
                         inThinkTag = false;
@@ -830,7 +842,9 @@ export class TabbyEngine {
                     } else if (textChunk) {
                       outputTokens += Math.max(1, Math.ceil(textChunk.length / 4));
                       content += textChunk;
-                      params.onTokenDelta(textChunk, outputTokens);
+                      const elapsedSec = Math.max(0.08, (performance.now() - startTime) / 1000);
+                      this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
+                      params.onTokenDelta(textChunk, outputTokens, this.tokensPerSec);
                     }
                   }
 

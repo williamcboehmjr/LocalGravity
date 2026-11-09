@@ -256,39 +256,6 @@ export class BuiltinToolExecutor {
           }
         }
 
-        case 'read_system_logs': {
-          const target = String(args.target || 'strata').toLowerCase();
-          const maxLines = Math.min(200, Math.max(1, Number(args.lines) || 50));
-          let logPath = '';
-          if (target === 'strata') {
-            const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
-            logPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.engine.log');
-          } else if (target === 'tray') {
-            logPath = path.resolve(ctx.workspaceRoot, '.runtime', 'tray.log');
-          } else {
-            logPath = path.resolve(ctx.workspaceRoot, '.runtime', 'tray.log');
-          }
-
-          if (!fs.existsSync(logPath)) {
-            return {
-              stdout: '',
-              stderr: `Log file not found at ${logPath}`,
-              exitCode: 1,
-              durationMs: Math.round(performance.now() - startMs),
-            };
-          }
-
-          const content = fs.readFileSync(logPath, 'utf-8');
-          const lines = content.split('\n');
-          const tail = lines.slice(-maxLines).join('\n');
-          return {
-            stdout: tail,
-            stderr: '',
-            exitCode: 0,
-            durationMs: Math.round(performance.now() - startMs),
-          };
-        }
-
         case 'manage_strata': {
           const action = String(args.action || 'status').toLowerCase();
           const inspectArgs: Record<string, any> = {
@@ -1551,56 +1518,6 @@ export class BuiltinToolExecutor {
             ),
             stderr: '',
             exitCode: 0,
-            durationMs: Math.round(performance.now() - startMs),
-          };
-        }
-
-        case 'list_skills': {
-          const list = this.skills?.listSkills() || [];
-          return {
-            stdout: JSON.stringify(list, null, 2),
-            stderr: '',
-            exitCode: 0,
-            durationMs: Math.round(performance.now() - startMs),
-          };
-        }
-
-        case 'read_skill': {
-          const name = String(args.name || '');
-          const skill = this.skills?.readSkill(name);
-          if (!skill) {
-            return {
-              stdout: '',
-              stderr: `Skill "${name}" not found. Available skills: ${(this.skills?.listSkills() || []).map((s) => s.name).join(', ')}`,
-              exitCode: 1,
-              durationMs: Math.round(performance.now() - startMs),
-            };
-          }
-          return {
-            stdout: `# Skill: ${skill.name} (${skill.path})\n\n${skill.content}`,
-            stderr: '',
-            exitCode: 0,
-            durationMs: Math.round(performance.now() - startMs),
-          };
-        }
-
-        case 'call_mcp_tool': {
-          if (!this.mcp) {
-            return {
-              stdout: '',
-              stderr: 'MCP Client Manager is not available on this server.',
-              exitCode: 1,
-              durationMs: Math.round(performance.now() - startMs),
-            };
-          }
-          const serverName = String(args.ServerName || '');
-          const tName = String(args.ToolName || '');
-          const tArgs = (args.Arguments || {}) as Record<string, any>;
-          const res = await this.mcp.callMcpTool(serverName, tName, tArgs);
-          return {
-            stdout: res.outputText,
-            stderr: res.isError ? res.outputText : '',
-            exitCode: res.isError ? 1 : 0,
             durationMs: Math.round(performance.now() - startMs),
           };
         }

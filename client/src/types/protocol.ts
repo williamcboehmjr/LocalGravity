@@ -63,6 +63,7 @@ export interface ThoughtStreamMessage extends BaseMessage<{
   chunk: string;
   elapsed_ms: number;
   token_count: number;
+  tokens_per_sec?: number;
   is_finished: boolean;
 }> {
   type: 'THOUGHT_STREAM';
@@ -72,6 +73,8 @@ export interface ThoughtStreamMessage extends BaseMessage<{
 export interface TokenStreamMessage extends BaseMessage<{
   session_id: string;
   chunk: string;
+  output_tokens?: number;
+  tokens_per_sec?: number;
   is_finished: boolean;
 }> {
   type: 'TOKEN_STREAM';

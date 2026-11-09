@@ -35,17 +35,25 @@ export function detectPrematureStop(
     };
   }
 
-  // 3. Output is a short promise or declaration of intent (< 180 chars)
-  if (trimmed.length < 180 && !trimmed.includes('\n\n')) {
-    const actionIntentRegex =
-      /^\s*(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
-    if (actionIntentRegex.test(trimmed)) {
-      return {
-        shouldContinue: true,
-        continuationPrompt:
-          '[ACTION REQUIRED]: Please execute the tool call for the action you planned now (e.g. read_file, list_directory, search_codebase, write_file, run_terminal). Do NOT stop with a promise.',
-      };
-    }
+  // 3. Output ends with or contains an unexecuted promise/declaration of intent
+  // Extract trailing non-empty line and trailing sentence so status summaries
+  // like "Batch 2 complete and green (EXIT=0). Let me verify the asExec() bridge..."
+  // correctly trigger autonomous continuation instead of stalling.
+  const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lastLine = lines.length > 0 ? lines[lines.length - 1] : trimmed;
+  const sentences = lastLine.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter(Boolean);
+  const trailingSentence = sentences.length > 0 ? sentences[sentences.length - 1] : lastLine;
+
+  const actionIntentRegex =
+    /(?:^|\b)(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
+
+  if (actionIntentRegex.test(trailingSentence) || (trimmed.length < 280 && actionIntentRegex.test(trimmed))) {
+    const matchedSnippet = trailingSentence.slice(0, 100);
+    return {
+      shouldContinue: true,
+      continuationPrompt:
+        `[ACTION REQUIRED]: You stated you would take an action ("${matchedSnippet}"), but stopped without executing a tool. Please execute the tool call for the planned action now (e.g. read_file, list_directory, search_codebase, write_file, run_terminal). Do NOT stop with a promise.`,
+    };
   }
 
   // 3b. UNGROUNDED "I CANNOT / AS AN AI / NO REAL-TIME ACCESS" GUARD:

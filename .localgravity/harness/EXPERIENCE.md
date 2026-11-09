@@ -186,3 +186,24 @@
 - **[PPC Auto-Tool Rule 2026-11-09T17:09:16.646Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `At line:1 char:58 + cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && `. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-09T19:09:47.992Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command 'Select-String -Path server/src/tools/builtinTools.ts -Pattern \"^\\s*case\\s+.\" | ForEach-Object { \"{0,5}: {1}\" -f $_.LineNumber, $_.Line.Trim() }'","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:100 + ... iltinTools.ts -Pattern ^\s*case\s+. | ForEach-Object { {0,5}: {1} -f  ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T19:09:47.992Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command 'Select-String -Path ser`) encountered error `At line:1 char:100 + ... iltinTools.ts -Pattern ^s*cases+. | ForEach-Object { {0`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T19:26:45.064Z]
+- **Failed Tool**: `run_terminal` (`bad-flag-cmd --fail`)
+- **Initial Failure Telemetry**: `Error: unrecognized flag --fail`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T19:26:45.064Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe fallback succeeded)
+
+### [PPC Composed Fix • 2026-11-09T19:28:04.195Z]
+- **Failed Tool**: `run_terminal` (`bad-flag-cmd --fail`)
+- **Initial Failure Telemetry**: `Error: unrecognized flag --fail`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T19:28:04.195Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe fallback succeeded)
+
