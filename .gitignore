@@ -37,3 +37,9 @@ Thumbs.db
 tray/*.exe
 # Refactor codemod scratch artifacts from server/scripts/build_refactor.mjs
 server/scripts/_*
+
+# Release binaries
+*.dmg
+*.msi
+*.sig
+*-setup.exe

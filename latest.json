@@ -1,15 +1,15 @@
 {
-  "version": "v2.0.0",
-  "notes": "LocalGravity v2.0.0 Release - Auto-Update enabled via GitHub Releases.\nIncludes anti-repetition sampling, collapsible agent activity, and instant model hot-swapping.",
-  "pub_date": "2026-11-06T23:47:00.111Z",
+  "version": "v2.1.0",
+  "notes": "LocalGravity v2.1.0 Release:\n- Universal File Attachments: send files of ANY sort (PDF, SQLite, CSV, DOCX, ZIP, code, audio, binaries).\n- Automatic Scanned Document Image Extraction: PDF photos (e.g. drink menus, receipts) automatically extracted to disk and streamed to Strata Multimodal Vision (port 8080).\n- New inspect_document tool for deep PDF/document parsing and image extraction.\n- Web Search Mandate: Autonomous search_web trigger whenever unsure or seeking real-world facts.\n- Fixed Stop button responsiveness on mobile & touch screens.\n- Fixed macOS / Safari DPI scaling and viewport clipping.",
+  "pub_date": "2026-11-09T08:18:00.000Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemR1K01mS0o4UmNYK2NNY3FWZ2dHTjNwcSs5bFJLQTZEZEVNcW4vQUE3UTB2dFczWGtFcDZ5WEl3R0lsNGQrbVI5cFRBeU1ybUR6aXQwb2t6c21YZlF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDA4ODExCWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMAp0R1ZaSkhEcTFjK1ZlcGN2cHFqOEFYKytwTmYxQlJONHJBRDhobEgyekdKclZWeGpScDhMQmxEWlN1QmJOdFdRN2dSbk1la1hrSk1MRXc4c21ER0xEdz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelhMNndaWGEwT0syeWxpamt1TllJTFl0K0hldDF3MENRWTBXOGpBMjZnZGxTTDN6TVljblFXWGRva1RENU0xVlBPQnB0OXRaOUphd3NYSGlOeWxvYVFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjQxMDc2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjEuMAplWjM0QzRTdWFLWEFRQ3cva21NL3phOENJSFUxdTlKZnJoZ2dzOG9wNVdOdjlURjVZc2NCc1ZmTnJ4ME1sUmIzWm52dWE1bW9UWkJ3Qmx3K0l1RXBEZz09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.0/LocalGravity_2.1.0_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemR1K01mS0o4UmNYK2NNY3FWZ2dHTjNwcSs5bFJLQTZEZEVNcW4vQUE3UTB2dFczWGtFcDZ5WEl3R0lsNGQrbVI5cFRBeU1ybUR6aXQwb2t6c21YZlF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MDA4ODExCWZpbGU6TG9jYWxHcmF2aXR5XzIuMC4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjAuMAp0R1ZaSkhEcTFjK1ZlcGN2cHFqOEFYKytwTmYxQlJONHJBRDhobEgyekdKclZWeGpScDhMQmxEWlN1QmJOdFdRN2dSbk1la1hrSk1MRXc4c21ER0xEdz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.0.0/LocalGravity_2.0.0_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhveldrWFExRjlxWnR4ekhzRHJkZW9oaDJCUENVWWw5OUtVb29SVEdIRnAzbWNwMDFMdkJINlc5cStNb2FhWk1NQU03SzVkQXVDb2NxM1k2L0R3aTliMHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjQxMTA3CWZpbGU6TG9jYWxHcmF2aXR5XzIuMS4wX2FhcmNoNjQuZG1nCXZlcnNpb246Mi4xLjAKN1B0V1FQZlRmeENZYlFzRXRDdjNrVjRJeG9QTk5CdmU4TE54QnBRRUFWRFFyWWhCSnc4b05ocDZqeld4SXcxZ1g3N20vdVA5Z216dTAvMGVZb05qRFE9PQo=",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.1.0/LocalGravity_2.1.0_aarch64.dmg"
     }
   }
 }
