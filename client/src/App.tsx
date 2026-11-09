@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Terminal,
   ListTodo,
@@ -126,6 +126,14 @@ export const App: React.FC = () => {
     secondsRemaining: number;
     idleTimeoutMinutes: number;
   }>({ gpuState: 'standby', secondsRemaining: 0, idleTimeoutMinutes: 15 });
+  const [reconnectCountdown, setReconnectCountdown] = useState<number>(0);
+  const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
+  const [reconnectKey, setReconnectKey] = useState<number>(0);
+
+  const handleManualReconnect = useCallback(() => {
+    setReconnectCountdown(0);
+    setReconnectKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
     const checkGpu = () => {
@@ -238,6 +246,8 @@ export const App: React.FC = () => {
             return;
           }
           setIsConnected(true);
+          setReconnectAttempt(0);
+          setReconnectCountdown(0);
           // Note: The server automatically sends full initial SYNC_STATE on `/ws/sync` connect.
           // Do not send fake placeholder IDs (`thread-default`) which would overwrite server state.
         };
@@ -245,7 +255,8 @@ export const App: React.FC = () => {
         ws.onclose = () => {
           if (isDisposed) return;
           setIsConnected(false);
-          reconnectTimeout = setTimeout(connect, 2500);
+          setReconnectAttempt((prev) => prev + 1);
+          setReconnectCountdown(3);
         };
 
         ws.onerror = () => {
@@ -378,7 +389,8 @@ export const App: React.FC = () => {
       } catch {
         if (!isDisposed) {
           setIsConnected(false);
-          reconnectTimeout = setTimeout(connect, 2500);
+          setReconnectAttempt((prev) => prev + 1);
+          setReconnectCountdown(3);
         }
       }
     };
@@ -398,7 +410,71 @@ export const App: React.FC = () => {
         } catch {}
       }
     };
-  }, [hostUrl]);
+  }, [hostUrl, reconnectKey]);
+
+  // Reconnection countdown timer (ticks every second when disconnected)
+  useEffect(() => {
+    if (isConnected) {
+      setReconnectCountdown(0);
+      setReconnectAttempt(0);
+      return;
+    }
+
+    if (reconnectCountdown <= 0) return;
+
+    const timer = setInterval(() => {
+      setReconnectCountdown((curr) => {
+        if (curr <= 1) {
+          handleManualReconnect();
+          return 0;
+        }
+        return curr - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isConnected, reconnectCountdown, handleManualReconnect]);
+
+  // Proactive HTTP health probe when disconnected: detects server recovery & auto-discovers port
+  useEffect(() => {
+    if (isConnected) return;
+    let isDisposed = false;
+
+    const probe = async () => {
+      const candidatePorts = [brainPort, '3390', '3391', '3392', '3393'].filter(
+        (v, i, a) => a.indexOf(v) === i
+      );
+
+      for (const p of candidatePorts) {
+        if (isDisposed) return;
+        try {
+          const res = await fetch(`http://${brainHost}:${p}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(900),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.status === 'ok') {
+              if (p !== brainPort) {
+                setBrainConnection(brainHost, p);
+              } else {
+                handleManualReconnect();
+              }
+              return;
+            }
+          }
+        } catch {}
+      }
+    };
+
+    const interval = setInterval(probe, 1500);
+    probe();
+
+    return () => {
+      isDisposed = true;
+      clearInterval(interval);
+    };
+  }, [isConnected, brainHost, brainPort, handleManualReconnect, setBrainConnection]);
 
   const handleSendPrompt = (
     text: string,
@@ -979,6 +1055,40 @@ export const App: React.FC = () => {
             </button>
           </div>
         </header>
+
+        {/* Reconnecting / Brain Offline Recovery Banner */}
+        {!isConnected && (
+          <div className="shrink-0 bg-gradient-to-r from-amber-950/90 via-amber-900/80 to-amber-950/90 border-b border-amber-600/40 px-4 py-2 flex items-center justify-between text-xs sm:text-sm text-amber-200 select-none z-20">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0" />
+              <span className="font-semibold text-amber-100">Brain is offline or restarting</span>
+              <span className="text-amber-400/60 hidden sm:inline">•</span>
+              <span className="text-amber-300 font-mono text-[11.5px] sm:text-xs">
+                {reconnectCountdown > 0
+                  ? `Reconnecting in ${reconnectCountdown}s...`
+                  : 'Probing connection...'}
+                {reconnectAttempt > 0 && ` (Attempt #${reconnectAttempt})`}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleManualReconnect}
+                className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-medium text-xs transition-colors cursor-pointer"
+              >
+                Reconnect Now
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className="px-2 py-1 rounded-md text-amber-300/80 hover:text-amber-100 text-xs transition-colors"
+                title="Configure host and port"
+              >
+                Settings
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Center Body */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
