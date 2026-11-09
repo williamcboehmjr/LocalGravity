@@ -42,6 +42,8 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
   }
 
   // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)
+  // Note: On macOS, Tauri v2 updater requires tar.gz bundles. If release uses DMG, native check may return an update
+  // whose downloadAndInstall fails because it is a DMG disk image. We extract downloadUrl from rawJson.
   if (isTauri) {
     try {
       const update = await check({
@@ -49,6 +51,16 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       });
 
       if (update) {
+        const isMac =
+          typeof navigator !== 'undefined' &&
+          /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
+        
+        let macDmgUrl: string | undefined;
+        if (isMac && update.rawJson) {
+          const platforms = (update.rawJson as any).platforms;
+          macDmgUrl = platforms?.['darwin-aarch64']?.url;
+        }
+
         return {
           available: true,
           version: update.version.replace(/^v/, ''),
@@ -56,6 +68,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           body: update.body || '',
           date: update.date,
           updateHandle: update,
+          downloadUrl: macDmgUrl,
         };
       }
     } catch (err: any) {
