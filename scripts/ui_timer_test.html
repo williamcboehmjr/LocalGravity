@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><title>ReconnectBadge timer test harness</title>
+<style>body{background:#0b1220;font-family:ui-monospace,monospace;color:#e5e7eb;padding:40px;}
+.badge{display:flex;align-items:center;gap:12px;border-radius:8px;border:1px solid rgba(56,189,248,.4);background:rgba(20,35,58,.95);padding:8px 12px;box-shadow:0 10px 25px rgba(0,0,0,.4);user-select:none;}
+.ring{position:relative;width:56px;height:56px;flex-shrink:0;}svg.ring-svg{transform:rotate(-90deg);}
+#num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:monospace;font-size:18px;font-weight:bold;color:#bae6fd;line-height:1;}
+.text{display:flex;flex-direction:column;line-height:1.25}#title{font-size:12px;font-weight:600;color:#e0f2fe}#attempt{font-family:monospace;font-size:11px;color:rgba(56,189,248,.7)}
+.pulse{height:8px;width:8px;border-radius:9999px;background:#38bdf8;animation:ping 1s infinite;}@keyframes ping{0%{transform:scale(1);opacity:.7}50%{transform:scale(1.6);opacity:.4}100%{transform:scale(1);opacity:.7}}</style>
+</head><body>
+<h3>ReconnectBadge - live timer + UI test harness (sky tone)</h3>
+<div id="log"></div>
+<div class="badge">
+  <div class="ring">
+    <svg width="56" height="56" viewBox="0 0 56 56" class="ring-svg">
+      <circle cx="28" cy="28" r="26" fill="none" stroke="#1c2d3a" stroke-width="4"/>
+      <circle id="arc" cx="28" cy="28" r="26" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-dasharray="163.363" stroke-dashoffset="0"/>
+    </svg>
+    <div id="num">5</div>
+  </div>
+  <div class="text"><span id="title">Reconnecting</span><span id="attempt">Attempt #1</span></div>
+  <span class="pulse"></span>
+</div>
+<script>
+// Exact mirror of ReconnectBadge.tsx ring math.
+var size=56, stroke=4, radius=(size-stroke)/2; // 26
+var circumference = 2*Math.PI*radius;          // 163.3628...
+document.getElementById('arc').setAttribute('stroke-dasharray', circumference);
+
+function ringOffset(secondsRemaining, totalSeconds){
+  var safeTotal=Math.max(totalSeconds,1);
+  var progress=Math.min(Math.max(secondsRemaining,0),safeTotal)/safeTotal;
+  return circumference*(1-progress);
+}
+
+var TOTAL=5, ATTEMPT=1, remaining=TOTAL;
+function render(){
+  document.getElementById('num').textContent = remaining>0 ? String(remaining) : '··';
+  var off = ringOffset(remaining, TOTAL);
+  var arc=document.getElementById('arc');
+  arc.style.transition='stroke-dashoffset 1s linear';
+  arc.setAttribute('stroke-dashoffset', off.toFixed(3));
+  document.getElementById('attempt').textContent = 'Attempt #'+ATTEMPT;
+  var p=Math.min(Math.max(remaining,0),TOTAL)/TOTAL;
+  document.getElementById('log').insertAdjacentHTML('beforeend','<div>t='+remaining+'s progress='+p.toFixed(3)+' dashoffset='+off.toFixed(3)+'</div>');
+}
+render(); // initial full ring (t=5)
+window.__test={ringOffset:ringOffset, setRemaining:function(v){remaining=v; render();}, getRemaining:function(){return remaining;}};
+
+// live countdown loop: tick once per second toward 0
+window.__timerDone=false;
+var iv=setInterval(function(){remaining-=1;render();if(remaining<=0){clearInterval(iv);window.__timerDone=true;}},1000);
+</script>
+</body></html>

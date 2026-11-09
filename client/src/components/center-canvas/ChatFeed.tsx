@@ -489,9 +489,15 @@ const AgentActivityBox: React.FC<{
   isCurrentlyGenerating: boolean;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
 }> = ({ toolCalls, stepNotes, isCurrentlyGenerating, onOpenInWorkbench }) => {
-  // Stay collapsed by default to keep the interface minimalist and clean
-  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  // Auto-open while actively generating so the user always sees live steps & tool outputs!
+  const [isExpanded, setIsExpanded] = useState<boolean>(isCurrentlyGenerating);
   const listScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isCurrentlyGenerating) {
+      setIsExpanded(true);
+    }
+  }, [isCurrentlyGenerating, toolCalls.length, stepNotes.length]);
 
   // Auto-scroll the list if the user has it open
   useEffect(() => {
@@ -907,6 +913,19 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                     <div className="flex items-center gap-2 text-[14px] text-[#9AA0A6] py-1 select-none">
                       <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin" />
                       <span>Working...</span>
+                    </div>
+                  )}
+
+                {isCurrentlyGenerating &&
+                  ((msg.toolCalls && msg.toolCalls.length > 0) || stepNotes.length > 0) &&
+                  !content && (
+                    <div className="flex items-center gap-2 text-[13.5px] text-[#8AB4F8] py-1.5 px-2 rounded-lg bg-[#8AB4F8]/8 border border-[#8AB4F8]/20 select-none animate-pulse">
+                      <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin shrink-0" />
+                      <span>
+                        {msg.toolCalls?.some((t) => t.status === 'running')
+                          ? `Executing tool: ${msg.toolCalls.find((t) => t.status === 'running')?.toolName || 'command'}...`
+                          : `Reasoning on Step ${(msg.toolCalls?.length || 0) + 1} (evaluating tool output)...`}
+                      </span>
                     </div>
                   )}
               </div>

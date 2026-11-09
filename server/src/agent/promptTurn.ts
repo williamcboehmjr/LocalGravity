@@ -141,11 +141,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       // Special fast-path for /compact command
       if (params.prompt.trim().toLowerCase().startsWith('/compact')) {
         const msgCount = history.length;
-        const mockMsgs = history.map((m) => ({ role: m.role, content: m.content }));
+        const mockMsgs = history.map((m) => ({
+          role: m.role,
+          content:
+            m.content +
+            (Array.isArray(m.tool_executions) && m.tool_executions.length > 0
+              ? "\n" + m.tool_executions.map((t) => `[Tool ${t.tool_name}]: ${(t.stdout_stream || t.stderr_stream || "").slice(0, 600)}`).join("\n")
+              : ""),
+        }));
         const cRes = autoCompactMessages(mockMsgs, 100, 4);
+        const prunedCount = db.compactThreadMessages(thread.id, 6, cRes.summary);
         const summaryNote =
           `✅ **Context Compacted (/compact)**\n\n` +
-          `Compacted ${msgCount} historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens).\n` +
+          `Compacted **${msgCount}** historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens, pruned ${prunedCount} older turns into Working Memory).\n` +
           `Older intermediate tool outputs and verbose turns have been distilled into a compact Working Memory Snapshot so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
         broadcastSync({
           type: 'CONTEXT_COMPACTED',
@@ -210,7 +218,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `   - Vision Grounding: capture_screen, inspect_window\n` +
         `4. EMPIRICAL VERIFICATION BEFORE CLAIMING: Before claiming any file, model, or vision feature is missing or broken, ALWAYS run inspect_models, find_files, or manage_files to check actual disk state and engine status. NEVER guess or hallucinate.\n` +
         `5. AUTONOMOUS INVESTIGATION: When asked to fix, configure, or enhance local models, vision, tools, or workstation services, DO NOT stall, ask for repo names, or ask the user for technical inputs that you can discover yourself. Autonomously research missing files or errors, inspect local configs, apply necessary edits or downloads, and verify end-to-end before delivering your response.\n\n` +
-        `=== AUTONOMOUS SELF-BUILDING & SELF-EVOLUTION PLAYBOOK ===\n` +
+        `=== NATIVE COUNTDOWN TIMERS, BACKGROUND TASKS, SUBAGENTS & ARTIFACTS (v2.2) ===\n` +
+    `- SCHEDULED TIMERS: When the user asks to test or set a timer or countdown, IMMEDIATELY call the "schedule" tool (e.g. schedule(durationSeconds=15, prompt="Timer test complete!", title="Test Timer")). NEVER try to spin up a Python HTTP server or write HTML to test a timer — the "schedule" tool automatically renders a live animated SVG countdown ring in the top header bar over WebSocket!\n` +
+    `- BACKGROUND TASKS: Use "manage_task" (action="start" | "list" | "status" | "kill") to run or inspect long-running background commands.\n` +
+    `- SUBAGENTS: Use "invoke_subagent" to delegate codebase research or file scanning to an isolated subagent worker.\n` +
+    `- ARTIFACTS: Use "write_artifact" (type="plan" | "walkthrough" | "report") to publish structured markdown directly into the Right Rail Artifacts drawer.\n\n` +
+    `=== AUTONOMOUS SELF-BUILDING & SELF-EVOLUTION PLAYBOOK ===\n` +
         `You are LocalGravity: an autonomous self-evolving AI engineering platform. You have FULL permission, capability, and tools to build new features, enhance UI/UX, fix bugs, and publish releases directly to GitHub so the user can hit "Check for Updates" to install your new features immediately!\n\n` +
         `1. THE LAW OF SELF-PRESERVATION (ZERO ENGINE DISRUPTION):\n` +
         `   - NEVER call "manage_strata" with restart or terminate ports 8080/3390 while writing or testing code. Strata is your active inference brain. Restarting it dumps 33GB of VRAM and halts your thought process. Only use manage_strata if the user explicitly asks to restart the engine.\n\n` +
@@ -428,6 +441,18 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             timestamp: Date.now(),
           },
         });
+        broadcastSync({
+          type: 'THOUGHT_STREAM',
+          payload: {
+            session_id: thread!.id,
+            thread_id: thread!.id,
+            message_id: assistantMsg.id,
+            chunk: step > 1 ? `\n\n[Step ${step} (${adaptiveCot.modeLabel})]: ` : '',
+            elapsed_ms: Date.now() - turnStartMs,
+            token_count: cumulativeThinkingTokens,
+            is_finished: false,
+          },
+        });
 
         const compactThreshold = params.tier === 'high' ? 38000 : 54000;
         const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
@@ -476,6 +501,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
             const liveTokPerSec = measuredTokPerSec || tabby.getTelemetry().tokensPerSec || Number((cumulativeOutputTokens / Math.max(0.08, (Date.now() - turnStartMs) / 1000)).toFixed(1));
             db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
+            // If this is step > 1 and no thoughts arrived yet, mark thinking as finished once text tokens start
             broadcastSync({
               type: 'TOKEN_STREAM',
               payload: {

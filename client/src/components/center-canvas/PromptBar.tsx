@@ -814,7 +814,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             <ImageIcon className="w-3.5 h-3.5" />
           </button>
 
-          {isGenerating && !hasContent ? (
+          {isGenerating && (
             <button
               type="button"
               onClick={(e) => {
@@ -822,13 +822,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 e.stopPropagation();
                 onStop?.();
               }}
-              className="w-8 h-8 rounded-full bg-[#DC2626] hover:bg-[#EF4444] active:bg-[#B91C1C] text-white flex items-center justify-center transition-colors shadow-md cursor-pointer select-none"
-              title="Stop Generation"
+              className="w-8 h-8 rounded-full bg-[#DC2626] hover:bg-[#EF4444] active:bg-[#B91C1C] text-white flex items-center justify-center transition-colors shadow-md cursor-pointer select-none animate-pulse"
+              title="Stop Generation Immediately"
               aria-label="Stop Generation"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
             </button>
-          ) : (
+          )}
+          {(!isGenerating || hasContent) && (
             <button
               type="button"
               onClick={handleSubmit}

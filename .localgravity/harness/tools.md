@@ -101,3 +101,9 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T21:03:40.063Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path 'C:`) encountered error `At line:1 char:253 + ... tatus-banner|TopBar' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T21:13:56.168Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/components/left-rail/NodeStatusBadge.tsx","target`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T22:10:29.859Z]**: Tool `mcp_playwright_puppeteer_navigate` (`mcp_playwright_puppeteer_navigate({"url":"file:///C:/Users/Sue/.gemini/antigravi`) encountered error `### Error Tool "puppeteer_navigate" not found`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T22:10:58.910Z]**: Tool `run_terminal` (`run_terminal({"command":"Start-Process python -ArgumentList '-m','http.server','`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:211 + `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T22:11:45.576Z]**: Tool `run_terminal` (`run_terminal({"command":"job = Start-Process python -ArgumentList '-m','http.ser`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.

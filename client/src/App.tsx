@@ -304,8 +304,17 @@ export const App: React.FC = () => {
               if (payload.messages) {
                 hydrateMessagesFromServer(payload.messages, payload.activeStreams || []);
               }
-              const hasActiveStream = Array.isArray(payload.activeStreams) && payload.activeStreams.length > 0;
-              if (!hasActiveStream && isGenerating) {
+              const activeThreadObj = Array.isArray(payload.threads)
+                ? payload.threads.find((t: any) => t.id === (payload.activeThreadId || sessionId))
+                : null;
+              const isServerThreadBusy =
+                activeThreadObj?.status === 'thinking' || activeThreadObj?.status === 'executing_tool';
+              const hasActiveStream =
+                (Array.isArray(payload.activeStreams) && payload.activeStreams.length > 0) ||
+                isServerThreadBusy;
+              if (hasActiveStream) {
+                setIsGenerating(true);
+              } else if (isGenerating) {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
               }
@@ -348,7 +357,10 @@ export const App: React.FC = () => {
                 ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
                 ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
               });
+            } else if (type === 'TURN_STARTED') {
+              setIsGenerating(true);
             } else if (type === 'THOUGHT_STREAM') {
+              setIsGenerating(true);
               if (payload.tokens_per_sec) {
                 setTelemetry({ tokensPerSec: payload.tokens_per_sec });
               }
@@ -366,22 +378,40 @@ export const App: React.FC = () => {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
               } else {
+                setIsGenerating(true);
                 updateLastAssistantMessage(payload.chunk, payload.output_tokens, payload.tokens_per_sec);
               }
             } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
               finalizeAssistantMessage();
               setIsGenerating(false);
             } else if (type === 'STEP_NOTE_COMMITTED') {
+              setIsGenerating(true);
               commitAssistantStepNote(payload.note, payload.committed_content);
             } else if (type === 'SUBAGENT_EVENT') {
+              if (payload?.status === 'running') {
+                setIsGenerating(true);
+              }
               upsertSubagentTask(payload);
             } else if (type === 'TOOL_EVENT') {
+              if (payload?.status === 'running') {
+                setIsGenerating(true);
+              }
               updateLastAssistantTool(payload.command, payload.output, payload.status, {
                 id: payload.tool_execution_id,
                 toolName: payload.tool_name,
                 durationMs: payload.duration_ms,
                 exitCode: payload.exit_code,
               });
+            } else if (type === 'TOOL_STREAM') {
+              setIsGenerating(true);
+              if (payload?.chunk) {
+                updateLastAssistantTool(
+                  payload.tool_name || '',
+                  payload.chunk,
+                  'running',
+                  { id: payload.tool_execution_id, appendOutput: true }
+                );
+              }
             } else if (type === 'CHECKPOINT_CREATED') {
               if (payload.checkpoint) {
                 setCheckpoints([payload.checkpoint, ...checkpoints]);
@@ -450,6 +480,7 @@ export const App: React.FC = () => {
                 compactedTokens: payload?.compactedTokens || 0,
               });
             } else if (type === 'ADAPTIVE_COT_STATE') {
+              setIsGenerating(true);
               setAdaptiveCotLabel(payload?.modeLabel || '');
             } else if (type === 'TELEMETRY') {
               setTelemetry({

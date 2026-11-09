@@ -166,7 +166,7 @@ interface SessionState {
     command: string,
     output?: string,
     status?: 'running' | 'success' | 'error',
-    meta?: { id?: string; toolName?: string; durationMs?: number; exitCode?: number | null }
+    meta?: { id?: string; toolName?: string; durationMs?: number; exitCode?: number | null; appendOutput?: boolean }
   ) => void;
   finalizeAssistantMessage: () => void;
   commitAssistantStepNote: (note: string, committedContent?: string) => void;
@@ -457,14 +457,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
 
       const activeStream = activeStreams[0];
+      const lastMsg = converted[converted.length - 1];
+      const hasRunningTool = Boolean(
+        lastMsg?.role === 'assistant' &&
+          lastMsg.toolCalls?.some((tc) => tc.status === 'running')
+      );
       return {
         messages: converted,
-        ...(activeStream
+        ...(activeStream || hasRunningTool
           ? {
               isGenerating: true,
-              currentStreamingThought: activeStream.thinkingContent || '',
-              currentThoughtElapsedMs: activeStream.thinkingDurationMs || 0,
-              currentThoughtTokens: activeStream.thinkingTokens || 0,
+              currentStreamingThought: activeStream?.thinkingContent || lastMsg?.thought || '',
+              currentThoughtElapsedMs: activeStream?.thinkingDurationMs || lastMsg?.thoughtElapsedMs || 0,
+              currentThoughtTokens: activeStream?.thinkingTokens || lastMsg?.thoughtTokenCount || 0,
               isThinkingFinished: false,
             }
           : {
@@ -565,9 +570,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           (c) => (meta?.id && c.id === meta.id) || c.command === command
         );
         if (matchIdx !== -1) {
+          const prevOut = existingCalls[matchIdx].output || '';
           existingCalls[matchIdx] = {
             ...existingCalls[matchIdx],
-            output: output !== undefined ? output : existingCalls[matchIdx].output,
+            output:
+              output !== undefined
+                ? meta?.appendOutput
+                  ? prevOut + output
+                  : output
+                : existingCalls[matchIdx].output,
             status,
             durationMs: meta?.durationMs ?? existingCalls[matchIdx].durationMs,
             exitCode: meta?.exitCode !== undefined ? meta.exitCode : existingCalls[matchIdx].exitCode,

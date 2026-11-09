@@ -277,3 +277,24 @@
 - **[PPC Auto-Tool Rule 2026-11-09T21:13:56.168Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/components/left-rail/NodeStatusBadge.tsx","target`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for apply_diff with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-09T22:10:29.859Z]
+- **Failed Tool**: `mcp_playwright_puppeteer_navigate` (`mcp_playwright_puppeteer_navigate({"url":"file:///C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/scripts/ui_timer_test.html"})`)
+- **Initial Failure Telemetry**: `### Error Tool "puppeteer_navigate" not found`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T22:10:29.859Z]**: Tool `mcp_playwright_puppeteer_navigate` (`mcp_playwright_puppeteer_navigate({"url":"file:///C:/Users/Sue/.gemini/antigravi`) encountered error `### Error Tool "puppeteer_navigate" not found`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for mcp_playwright_puppeteer_navigate with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T22:10:58.910Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"Start-Process python -ArgumentList '-m','http.server','8765','--bind','127.0.0.1' -WorkingDirectory 'C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/scripts' -WindowStyle Hidden; Start-Sleep -Seconds 2; (Invoke-WebRequest http://127.0.0.1:8765/ui_timer_test.html -UseBasicParsing).StatusCode","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/scripts"})`)
+- **Initial Failure Telemetry**: `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:211 + ... Seconds 2; (Invoke-WebRequest http://127.0.0.1:8765/ui_timer_test.htm ... + `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T22:10:58.910Z]**: Tool `run_terminal` (`run_terminal({"command":"Start-Process python -ArgumentList '-m','http.server','`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:211 + `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T22:11:45.576Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"$job = Start-Process python -ArgumentList '-m','http.server','8765' -WorkingDirectory 'C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/scripts' -PassThru; Write-Output \"PID=$($job.Id)\"; $ok=$false; for($i=0;$i -lt 12;$i++){ Start-Sleep -Milliseconds 500; try { $r=(Invoke-WebRequest 'http://localhost:8765/ui_timer_test.html' -UseBasicParsing).StatusCode; Write-Output \"HTTP=$r after $($i*500)ms\"; $ok=$true; break } catch {} }; Write-Output \"OK=$ok PID_ALIVE=$(!$job.HasExited)\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/scripts"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T22:11:45.576Z]**: Tool `run_terminal` (`run_terminal({"command":"job = Start-Process python -ArgumentList '-m','http.ser`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

@@ -451,6 +451,41 @@ export class LocalGravityDB {
     this.updateThread(threadId, { status: 'idle' });
   }
 
+  public compactThreadMessages(threadId: string, keepRecentCount = 4, summaryContent = ''): number {
+    const msgs = this.db
+      .prepare('SELECT id, role, content FROM messages WHERE thread_id = ? ORDER BY created_at ASC')
+      .all(threadId) as Array<{ id: string; role: string; content: string }>;
+
+    if (msgs.length <= keepRecentCount) {
+      return 0;
+    }
+
+    const toPrune = msgs.slice(0, msgs.length - keepRecentCount);
+    const pruneIds = toPrune.map((m) => m.id);
+
+    const tx = this.db.transaction(() => {
+      const delMsg = this.db.prepare('DELETE FROM messages WHERE id = ?');
+      const delTools = this.db.prepare('DELETE FROM tool_executions WHERE message_id = ?');
+      for (const id of pruneIds) {
+        delTools.run(id);
+        delMsg.run(id);
+      }
+      if (summaryContent) {
+        const now = new Date(Date.now() - 60000).toISOString();
+        this.db
+          .prepare(
+            `INSERT INTO messages (
+              id, thread_id, role, content, thinking_content, thinking_duration_ms,
+              thinking_tokens, output_tokens, attachments, created_at
+            ) VALUES (?, ?, 'system', ?, '', 0, 0, 0, '[]', ?)`
+          )
+          .run(crypto.randomUUID(), threadId, summaryContent, now);
+      }
+    });
+    tx();
+    return pruneIds.length;
+  }
+
   // ==================== MESSAGES ====================
   public listMessages(threadId: string): Array<MessageRecord & { tool_executions: ToolExecutionRecord[] }> {
     const msgs = this.db

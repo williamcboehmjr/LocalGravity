@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - heading "ReconnectBadge - live timer + UI test harness (sky tone)" [level=3] [ref=e2]
+  - generic [ref=e3]: t=5s progress=1.000 dashoffset=0.000
+  - generic [ref=e5]:
+    - generic [ref=e6]: "5"
+    - generic [ref=e11]:
+      - generic [ref=e12]: Reconnecting
+      - generic [ref=e13]: "Attempt #1"
