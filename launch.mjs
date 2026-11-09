@@ -113,7 +113,7 @@ async function ensureStrataRunning() {
   console.log('  [Strata Engine]         : Not detected on port 8080. Starting Strata Engine...');
 
   const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
-  const configPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.json');
+  const configPath = path.join(localAppData, 'Strata', 'install', 'strata-swift-iq2_xs.json');
   const pythonExe = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'python', 'python.exe');
   const serverPy = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'serve', 'server.py');
 

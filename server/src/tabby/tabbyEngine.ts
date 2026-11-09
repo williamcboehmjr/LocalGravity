@@ -4,6 +4,7 @@ import os from 'node:os';
 import YAML from 'yaml';
 import { LlamaMoESidecar } from './llamaSidecar.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
+import { computeAdaptiveThinkingConfig } from '../agent/adaptiveCot.js';
 
 // Pure text-normalization helpers extracted to a side-effect-free module.
 export { hasConsecutiveRepetition, deduplicateRepeatedSequences } from './textNormalizers.js';
@@ -700,16 +701,20 @@ export class TabbyEngine {
           // Qwen 3.8 Flash-Next needs its reasoning tokens to formulate and validate tool calls.
           // Disabling thinking entirely (enable_thinking: false) forces the model's inner monologue
           // into user-facing text, causing it to simulate tool execution in prose instead of calling tools!
-          if (params.thinkingBudget === 'off') {
+          const adaptive = computeAdaptiveThinkingConfig(params.thinkingBudget, stepIdx);
+          if (!adaptive.enableThinking) {
             requestBody.chat_template_kwargs = { enable_thinking: false };
             requestBody.reasoning_effort = 'none';
-          } else if (params.thinkingBudget === 'deep') {
-            requestBody.chat_template_kwargs = { reasoning_effort: 'high' };
-            requestBody.reasoning_effort = 'high';
+            requestBody.reasoning_budget_tokens = 0;
+            requestBody.thinking_budget_tokens = 0;
           } else {
-            // 'fast' (default): brief 25-100 token internal chain-of-thought before immediate tool call
-            requestBody.chat_template_kwargs = { reasoning_effort: 'low' };
-            requestBody.reasoning_effort = 'low';
+            requestBody.chat_template_kwargs = {
+              enable_thinking: true,
+              reasoning_effort: adaptive.reasoningEffort,
+            };
+            requestBody.reasoning_effort = adaptive.reasoningEffort;
+            requestBody.reasoning_budget_tokens = adaptive.reasoningBudgetTokens;
+            requestBody.thinking_budget_tokens = adaptive.reasoningBudgetTokens;
           }
         }
         let response: Response;

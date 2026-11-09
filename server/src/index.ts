@@ -60,6 +60,9 @@ import {
   BuiltinToolExecutor,
   BUILTIN_TOOLS_SCHEMA,
 } from './tools/builtinTools.js';
+import { BackgroundTaskManager } from './tools/taskManager.js';
+import { SubagentManager } from './tools/subagentManager.js';
+import { ArtifactManager } from './tools/artifactManager.js';
 import {
   Harness2Manager,
   getClientAppDataDir,
@@ -168,12 +171,69 @@ export async function createDaemonServer(options?: {
     }
   });
 
+  // Wire Antigravity 6-Pillar Managers to real-time WebSocket broadcastSync
+  const taskMgr = BackgroundTaskManager.getInstance();
+  const subagentMgr = SubagentManager.getInstance();
+  const artifactMgr = ArtifactManager.getInstance();
+
+  taskMgr.onEvent((evt) => {
+    broadcastSync({
+      type: evt.type,
+      payload: evt.payload,
+    });
+  });
+
+  subagentMgr.onTaskUpdate((task) => {
+    broadcastSync({
+      type: 'SUBAGENT_EVENT',
+      payload: {
+        id: task.id,
+        thread_id: task.threadId,
+        message_id: task.id,
+        role: task.role,
+        command: 'invoke_subagent',
+        status: task.status === 'failed' ? 'error' : task.status,
+        step: task.step,
+        maxSteps: task.maxSteps,
+        summary: task.summary,
+        logs: task.resultText ? [task.resultText] : [task.summary],
+        timestamp: Date.now(),
+      },
+    });
+  });
+
+  artifactMgr.onArtifactUpdate((artifact, allArtifacts) => {
+    broadcastSync({
+      type: 'ARTIFACT_UPDATED',
+      payload: {
+        artifact,
+        artifacts: allArtifacts,
+      },
+    });
+    const mappedName =
+      artifact.type === 'plan'
+        ? 'plan.md'
+        : artifact.type === 'walkthrough'
+        ? 'walkthrough.md'
+        : 'task.md';
+    broadcastSync({
+      type: 'ARTIFACT_SYNC',
+      payload: {
+        session_id: artifact.threadId,
+        artifact_name: mappedName,
+        content: artifact.content,
+        title: artifact.title,
+        version: artifact.updatedAt,
+      },
+    });
+  });
+
   // ==================== HEALTH & RUNTIME DISCOVERY ====================
   app.get('/health', async () => {
     const pragmas = db.getPragmas();
     return {
       status: 'ok',
-      version: '2.1.0',
+      version: '2.2.0',
       engine: 'Fastify Headless Core + TabbyAPI EXL2/EXL3 + Harness²',
       ports,
       sqlitePragmas: pragmas,
@@ -197,6 +257,23 @@ export async function createDaemonServer(options?: {
       nodeVersion: process.version,
       platform: process.platform,
       memoryUsageMb: heapUsedMb,
+      backgroundTasks: taskMgr.listTasks(),
+      subagentTasks: subagentMgr.listTasks(),
+      artifacts: artifactMgr.listArtifacts(),
+    };
+  });
+
+  app.get('/api/tasks', async () => {
+    return {
+      tasks: taskMgr.listTasks(),
+      subagents: subagentMgr.listTasks(),
+    };
+  });
+
+  app.get('/api/artifacts', async (req) => {
+    const { thread_id } = (req.query || {}) as { thread_id?: string };
+    return {
+      artifacts: artifactMgr.listArtifacts(thread_id),
     };
   });
 
@@ -1126,6 +1203,8 @@ export async function createDaemonServer(options?: {
           telemetry: hw,
           harnessComponents: harness.listHarnessComponents(activeProject.root_path),
           ppcHistory: harness.getPpcHistory(),
+          backgroundTasks: taskMgr.listTasks(),
+          artifacts: artifactMgr.listArtifacts(targetThreadId),
         },
       })
     );
@@ -1155,6 +1234,8 @@ export async function createDaemonServer(options?: {
                 telemetry: queryHostHardwareTelemetry(tabby.getTelemetry().activeTier),
                 harnessComponents: harness.listHarnessComponents(activeProject.root_path),
                 ppcHistory: harness.getPpcHistory(),
+                backgroundTasks: taskMgr.listTasks(),
+                artifacts: artifactMgr.listArtifacts(reqThreadId),
               },
             })
           );

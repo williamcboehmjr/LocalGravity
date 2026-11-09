@@ -7,6 +7,8 @@ import type { SharedTerminalManager } from '../terminal/terminalManager.js';
 import type { BuiltinToolExecutor } from '../tools/builtinTools.js';
 import type { Harness2Manager } from '../harness/harnessManager.js';
 import { pruneChatMessages } from '../utils/messagePruning.js';
+import { autoCompactMessages } from '../utils/autoCompactor.js';
+import { computeAdaptiveThinkingConfig } from './adaptiveCot.js';
 import { detectPrematureStop } from './prematureStop.js';
 import { parseAntigravitySlashCommand } from './slashCommands.js';
 import os from 'node:os';
@@ -139,10 +141,23 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       // Special fast-path for /compact command
       if (params.prompt.trim().toLowerCase().startsWith('/compact')) {
         const msgCount = history.length;
+        const mockMsgs = history.map((m) => ({ role: m.role, content: m.content }));
+        const cRes = autoCompactMessages(mockMsgs, 100, 4);
         const summaryNote =
           `✅ **Context Compacted (/compact)**\n\n` +
-          `Compacted ${msgCount} historical messages in thread **${thread.title}**. ` +
-          `Older intermediate tool outputs and verbose turns have been distilled so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
+          `Compacted ${msgCount} historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens).\n` +
+          `Older intermediate tool outputs and verbose turns have been distilled into a compact Working Memory Snapshot so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
+        broadcastSync({
+          type: 'CONTEXT_COMPACTED',
+          payload: {
+            threadId: thread.id,
+            previousTokens: cRes.previousTokens,
+            compactedTokens: cRes.compactedTokens,
+            compactedTurnCount: cRes.compactedTurnCount,
+            summary: cRes.summary,
+            timestamp: Date.now(),
+          },
+        });
         db.appendTokenDelta(assistantMsg.id, thread.id, summaryNote, Math.ceil(summaryNote.length / 4));
         broadcastSync({
           type: 'TOKEN_STREAM',
@@ -400,11 +415,42 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           };
         }
 
+        const adaptiveCot = computeAdaptiveThinkingConfig(effectiveThinkingBudget, step);
+        broadcastSync({
+          type: 'ADAPTIVE_COT_STATE',
+          payload: {
+            threadId: thread!.id,
+            stepIndex: step,
+            budget: effectiveThinkingBudget,
+            reasoningEffort: adaptiveCot.reasoningEffort,
+            reasoningBudgetTokens: adaptiveCot.reasoningBudgetTokens,
+            modeLabel: adaptiveCot.modeLabel,
+            timestamp: Date.now(),
+          },
+        });
+
+        const compactThreshold = params.tier === 'high' ? 38000 : 54000;
+        const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
+        if (compactRes.didCompact) {
+          chatMessages.splice(0, chatMessages.length, ...compactRes.messages);
+          broadcastSync({
+            type: 'CONTEXT_COMPACTED',
+            payload: {
+              threadId: thread!.id,
+              previousTokens: compactRes.previousTokens,
+              compactedTokens: compactRes.compactedTokens,
+              compactedTurnCount: compactRes.compactedTurnCount,
+              summary: compactRes.summary,
+              timestamp: Date.now(),
+            },
+          });
+        }
+
         const result = await tabby.streamChatCompletion({
           tier: params.tier,
           thinkingBudget: effectiveThinkingBudget,
           stepIndex: step,
-          messages: pruneChatMessages(chatMessages, params.tier === 'high' ? 58000 : 78000),
+          messages: compactRes.messages,
           tools: activeTools,
           abortSignal: abortController.signal,
           onThoughtDelta: (delta, elapsedMs, tokenCount) => {

@@ -228,3 +228,52 @@
 - **[PPC Auto-Tool Rule 2026-11-09T20:29:42.679Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/App.tsx","replacement":"              <ReconnectB`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for apply_diff with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-09T20:51:30.478Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"cd client && npx tsc --noEmit 2>&1 | Select-Object -First 30","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/client"})`)
+- **Initial Failure Telemetry**: `At line:1 char:11 + cd client && npx tsc --noEmit 2>&1 | Select-Object -First 30 +           ~~ The token '&&' is not a valid statement separator in this versio`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T20:51:30.478Z]**: Tool `run_terminal` (`run_terminal({"command":"cd client && npx tsc --noEmit 2>&1 | Select-Object -Fir`) encountered error `At line:1 char:11 + cd client && npx tsc --noEmit 2>&1 | Select-Object -First 30`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T20:52:44.947Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"(Invoke-WebRequest \"http://127.0.0.1:8097/timer_test.html\" -UseBasicParsing).StatusCode; (Invoke-WebRequest \"http://127.0.0.1:8097/timer_test.html\" -UseBasicParsing).Content.Substring(0,40)","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:2 + (Invoke-WebRequest "http://127.0.0.1:8097/timer_test.html" -UseBasicP ... +  ~~~~~`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T20:52:44.947Z]**: Tool `run_terminal` (`run_terminal({"command":"(Invoke-WebRequest "http://127.0.0.1:8097/timer_test.ht`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:2 + (I`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T20:53:07.293Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue/AppData/Local/Temp","command":"$env:PYTHONHOME=\"C:\\Program Files\\Python312\"; $env:PYTHONPATH=\"\"; Copy-Item \"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/timer_test.html\" .; Start-Process -FilePath \"python\" -ArgumentList \"-m\",\"http.server\",\"8097\",\"--bind\",\"127.0.0.1\" -WindowStyle Hidden; Start-Sleep 3; (Invoke-WebRequest \"http://127.0.0.1:8097/timer_test.html\" -UseBasicParsing).StatusCode"})`)
+- **Initial Failure Telemetry**: `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:283 + ... t-Sleep 3; (Invoke-WebRequest "http://127.0.0.1:8097/timer_test.html" ... + `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T20:53:07.293Z]**: Tool `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue/AppData/Local/Temp","command":"env:PYTHONHOME=`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:283 + `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T20:55:25.093Z]
+- **Failed Tool**: `call_mcp_tool` (`call_mcp_tool({"Arguments":{"function":"() => JSON.stringify({dl:document.getElementById('numD').textContent, recon:document.getElementById('numR').textContent})"},"ServerName":"playwright","ToolName":"browser_evaluate"})`)
+- **Initial Failure Telemetry**: `### Error TypeError: Cannot read properties of null (reading 'textContent')     at eval (eval at <anonymous> (eval at evaluate (:370:30)), <anonymous>:1:58)    `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T20:55:25.093Z]**: Tool `call_mcp_tool` (`call_mcp_tool({"Arguments":{"function":"() => JSON.stringify({dl:document.getEle`) encountered error `### Error TypeError: Cannot read properties of null (reading 'textContent')     `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for call_mcp_tool with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T21:00:29.361Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"for($i=15;$i -ge 0;$i--){ Write-Output ('[timer] ' + $i + ' s remaining'); Start-Sleep -Seconds 1 }; Write-Output '[timer] READY -> poll /health'; (Invoke-WebRequest -Uri 'http://localhost:8080/health' -TimeoutSec 5).StatusCode\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:18 + for(=15; -ge 0;--){ Write-Output ('[timer] ' +  + ' s remaining'); St ... +                  ~ Missing expression after unary operator '--'.`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T21:00:29.361Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "for(i=15;i -ge 0;i--){ `) encountered error `At line:1 char:18 + for(=15; -ge 0;--){ Write-Output ('[timer] ' +  + ' s remain`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T21:03:40.063Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"Select-String -Path 'C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/client/src/App.tsx' -Pattern 'isConnected|reconnectCountdown|reconnectAttempt|Reconnecting|NodeStatusBadge|<header|status-banner|TopBar' | ForEach-Object { $_.LineNumber.ToString() + ': ' + $_.Line.Trim() }\""})`)
+- **Initial Failure Telemetry**: `At line:1 char:253 + ... tatus-banner|TopBar' | ForEach-Object { .LineNumber.ToString() + ': ' ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T21:03:40.063Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path 'C:`) encountered error `At line:1 char:253 + ... tatus-banner|TopBar' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T21:13:56.168Z]
+- **Failed Tool**: `apply_diff` (`apply_diff({"path":"client/src/components/left-rail/NodeStatusBadge.tsx","target":"          <span>Settings</span>\n        </button>\n\n        <button\n          type=\"button\"\n          onClick={() => setIsExpanded(!isExpanded)}","replacement":"          <span>Settings</span>\n        </button>\n\n        {/* Generic countdown pill: live timer for any timed task (reconnect, download, deploy). */}\n        {!isConnected && (\n          <CountdownPill durationSeconds={15} label=\"Reconnecting\" tone=\"amber\" />\n        )}\n\n        <button\n          type=\"button\"\n          onClick={() => setIsExpanded(!isExpanded)}"})`)
+- **Initial Failure Telemetry**: `Target block not found in C:\Users\Sue\.gemini\antigravity\scratch\LocalGravity\client\src\components\left-rail\NodeStatusBadge.tsx`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T21:13:56.168Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/components/left-rail/NodeStatusBadge.tsx","target`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for apply_diff with updated tools.md)
+

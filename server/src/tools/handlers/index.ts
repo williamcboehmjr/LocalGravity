@@ -10,6 +10,10 @@ import * as listSkills from './listSkills.js';
 import * as readSkill from './readSkill.js';
 import * as callMcpTool from './callMcpTool.js';
 import * as publishRelease from './publishRelease.js';
+import * as manageTask from './manageTask.js';
+import * as scheduleTimer from './scheduleTimer.js';
+import * as invokeSubagent from './invokeSubagent.js';
+import * as writeArtifact from './writeArtifact.js';
 
 export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
   [restartBrain.name]: restartBrain.execute,
@@ -18,4 +22,8 @@ export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
   [readSkill.name]: readSkill.execute,
   [callMcpTool.name]: callMcpTool.execute,
   [publishRelease.name]: publishRelease.execute,
+  [manageTask.name]: manageTask.execute,
+  [scheduleTimer.name]: scheduleTimer.execute,
+  [invokeSubagent.name]: invokeSubagent.execute,
+  [writeArtifact.name]: writeArtifact.execute,
 };

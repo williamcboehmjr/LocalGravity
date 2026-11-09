@@ -87,3 +87,17 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T19:59:53.069Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "cd server; npx tsc --no`) encountered error `At line:1 char:51 + cd server; npx tsc --noEmit; Write-Host ('EXIT=' + ) +      `. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T20:29:42.679Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/App.tsx","replacement":"              <ReconnectB`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T20:51:30.478Z]**: Tool `run_terminal` (`run_terminal({"command":"cd client && npx tsc --noEmit 2>&1 | Select-Object -Fir`) encountered error `At line:1 char:11 + cd client && npx tsc --noEmit 2>&1 | Select-Object -First 30`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T20:52:44.947Z]**: Tool `run_terminal` (`run_terminal({"command":"(Invoke-WebRequest "http://127.0.0.1:8097/timer_test.ht`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:2 + (I`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T20:53:07.293Z]**: Tool `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue/AppData/Local/Temp","command":"env:PYTHONHOME=`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:283 + `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T20:55:25.093Z]**: Tool `call_mcp_tool` (`call_mcp_tool({"Arguments":{"function":"() => JSON.stringify({dl:document.getEle`) encountered error `### Error TypeError: Cannot read properties of null (reading 'textContent')     `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T21:00:29.361Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "for(i=15;i -ge 0;i--){ `) encountered error `At line:1 char:18 + for(=15; -ge 0;--){ Write-Output ('[timer] ' +  + ' s remain`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T21:03:40.063Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path 'C:`) encountered error `At line:1 char:253 + ... tatus-banner|TopBar' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T21:13:56.168Z]**: Tool `apply_diff` (`apply_diff({"path":"client/src/components/left-rail/NodeStatusBadge.tsx","target`) encountered error `Target block not found in C:UsersSue.geminiantigravityscratchLocalGravityclients`. Fallback to safe cross-platform invocation.

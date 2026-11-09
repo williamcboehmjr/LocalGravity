@@ -101,6 +101,8 @@ export const App: React.FC = () => {
     setActiveTab,
     setTaskMarkdown,
     setPlanMarkdown,
+    setWalkthroughMarkdown,
+    setActiveArtifactDoc,
     parsedTasks,
     checkpoints,
     setCheckpoints,
@@ -130,6 +132,25 @@ export const App: React.FC = () => {
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
   const [reconnectKey, setReconnectKey] = useState<number>(0);
+
+  // Antigravity 6-Pillar Live Sync State
+  const [timerCountdown, setTimerCountdown] = useState<number>(0);
+  const [timerTotal, setTimerTotal] = useState<number>(0);
+  const [timerLabel, setTimerLabel] = useState<string>('Timer');
+  const [lastCompaction, setLastCompaction] = useState<{
+    previousTokens: number;
+    compactedTokens: number;
+  } | null>(null);
+  const [adaptiveCotLabel, setAdaptiveCotLabel] = useState<string>('');
+  const [backgroundTasks, setBackgroundTasks] = useState<
+    Array<{
+      taskId: string;
+      type: 'command' | 'timer';
+      title: string;
+      status: string;
+      recentLogs: string[];
+    }>
+  >([]);
 
 
 
@@ -294,6 +315,9 @@ export const App: React.FC = () => {
               if (payload.mcpServers) {
                 setMcpServers(payload.mcpServers);
               }
+              if (Array.isArray(payload.backgroundTasks)) {
+                setBackgroundTasks(payload.backgroundTasks);
+              }
               if (payload.tabby || payload.telemetry) {
                 setTelemetry({
                   vramUsedGb: payload.telemetry?.vramUsedGb ?? 14.8,
@@ -369,14 +393,64 @@ export const App: React.FC = () => {
             } else if (type === 'ARTIFACT_SYNC') {
               if (payload.artifact_name === 'task.md') {
                 setTaskMarkdown(payload.content);
+              } else if (payload.artifact_name === 'walkthrough.md') {
+                setWalkthroughMarkdown(payload.content);
+                setActiveArtifactDoc('walkthrough.md');
+                setActiveTab('plan');
+                setShowRightDrawer(true);
               } else if (
                 payload.artifact_name === 'implementation_plan.md' ||
                 payload.artifact_name === 'plan.md'
               ) {
                 setPlanMarkdown(payload.content);
+                setActiveArtifactDoc('plan.md');
                 setActiveTab('plan');
                 setShowRightDrawer(true);
               }
+            } else if (type === 'ARTIFACT_UPDATED') {
+              const art = payload?.artifact;
+              if (art) {
+                if (art.type === 'plan') {
+                  setPlanMarkdown(art.content);
+                  setActiveArtifactDoc('plan.md');
+                  setActiveTab('plan');
+                  setShowRightDrawer(true);
+                } else if (art.type === 'walkthrough') {
+                  setWalkthroughMarkdown(art.content);
+                  setActiveArtifactDoc('walkthrough.md');
+                  setActiveTab('plan');
+                  setShowRightDrawer(true);
+                } else {
+                  setTaskMarkdown(art.content);
+                }
+              }
+            } else if (type === 'COUNTDOWN') {
+              const rem = Number(payload?.secondsRemaining || 0);
+              const tot = Number(payload?.totalSeconds || rem || 10);
+              setTimerCountdown(rem);
+              setTimerTotal(tot);
+              setTimerLabel(payload?.label || 'Timer');
+            } else if (type === 'TIMER_FIRED') {
+              setTimerCountdown(0);
+              if (payload?.prompt) {
+                addMessage({
+                  id: 'sys-timer-' + Date.now(),
+                  role: 'system',
+                  content: `⏰ **Scheduled Timer Fired:** ${payload.prompt}`,
+                  timestamp: Date.now(),
+                });
+              }
+            } else if (type === 'BACKGROUND_TASK_UPDATED') {
+              if (Array.isArray(payload?.allTasks)) {
+                setBackgroundTasks(payload.allTasks);
+              }
+            } else if (type === 'CONTEXT_COMPACTED') {
+              setLastCompaction({
+                previousTokens: payload?.previousTokens || 0,
+                compactedTokens: payload?.compactedTokens || 0,
+              });
+            } else if (type === 'ADAPTIVE_COT_STATE') {
+              setAdaptiveCotLabel(payload?.modeLabel || '');
             } else if (type === 'TELEMETRY') {
               setTelemetry({
                 vramUsedGb: payload.vram_used_gb,
@@ -443,6 +517,15 @@ export const App: React.FC = () => {
 
     return () => clearInterval(timer);
   }, [isConnected, reconnectCountdown, handleManualReconnect]);
+
+  // Scheduled Timer live countdown effect
+  useEffect(() => {
+    if (timerCountdown <= 0) return;
+    const t = setInterval(() => {
+      setTimerCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [timerCountdown]);
 
 
 
@@ -766,6 +849,7 @@ export const App: React.FC = () => {
     hasSubmenu?: boolean;
   }> = [
     { id: 'tasks', label: 'Review', icon: <RotateCcw className="w-3.5 h-3.5" /> },
+    { id: 'plan', label: 'Artifacts', icon: <FileText className="w-3.5 h-3.5" /> },
     { id: 'editor', label: 'Files', icon: <FileText className="w-3.5 h-3.5" /> },
     { id: 'terminal', label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> },
     {
@@ -930,6 +1014,27 @@ export const App: React.FC = () => {
 
           {/* Right Top Controls matching Screenshot 1 */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Live Scheduled Timer Ring Badge */}
+            {timerCountdown > 0 && (
+              <ReconnectBadge
+                tone="sky"
+                label={timerLabel.length > 18 ? timerLabel.slice(0, 18) + '…' : timerLabel}
+                secondsRemaining={timerCountdown}
+                totalSeconds={Math.max(1, timerTotal)}
+                attempt={0}
+              />
+            )}
+
+            {/* Auto-Compacted Working Memory Pill */}
+            {lastCompaction && (
+              <span
+                className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-700/40 text-emerald-300 font-mono text-[10.5px]"
+                title={`Auto-Compactor distilled working memory from ${lastCompaction.previousTokens} to ${lastCompaction.compactedTokens} tokens`}
+              >
+                ⚡ Compacted {lastCompaction.previousTokens}→{lastCompaction.compactedTokens} tok
+              </span>
+            )}
+
             {/* DPI / UI Scale Control Pill (+ / -) */}
             <DpiScaleControl />
 
@@ -1155,7 +1260,7 @@ export const App: React.FC = () => {
                   {isGenerating && (
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#8AB4F8] bg-[#8AB4F8]/10 border border-[#8AB4F8]/20">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#8AB4F8] animate-ping" />
-                      <span>Reasoning active</span>
+                      <span>{adaptiveCotLabel || 'Reasoning active'}</span>
                     </div>
                   )}
                 </div>
@@ -1265,12 +1370,38 @@ export const App: React.FC = () => {
                   )}
                 </div>
                 <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
-                  {subagentTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec > 0 ? tokensPerSec.toFixed(1) : '—'} tok/s
+                  {subagentTasks.filter((t) => t.status === 'running').length + backgroundTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec > 0 ? tokensPerSec.toFixed(1) : '—'} tok/s
                 </span>
               </button>
 
-              {(showSubagentDrawer || isGenerating) && subagentTasks.length > 0 && (
+              {(showSubagentDrawer || isGenerating || backgroundTasks.some((b) => b.status === 'running')) &&
+                (subagentTasks.length > 0 || backgroundTasks.length > 0) && (
                 <div className="mt-1.5 space-y-1.5 max-h-48 overflow-y-auto px-1 pt-1">
+                  {backgroundTasks.slice(-3).map((bg) => (
+                    <div
+                      key={bg.taskId}
+                      className="p-2 rounded-lg bg-[#131316] border border-[#242429] text-[11px] space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              bg.status === 'running' ? 'bg-sky-400 animate-pulse' : 'bg-emerald-400'
+                            }`}
+                          />
+                          <span className="font-medium text-[#E3E3E3] truncate">{bg.title}</span>
+                        </div>
+                        <span className="font-mono text-[9.5px] text-sky-400 shrink-0 uppercase">
+                          {bg.type} • {bg.status}
+                        </span>
+                      </div>
+                      {bg.recentLogs.length > 0 && (
+                        <div className="font-mono text-[10px] text-[#8E8E93] truncate">
+                          {bg.recentLogs[bg.recentLogs.length - 1]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                   {subagentTasks.slice(0, 4).map((task) => (
                     <div
                       key={task.id}

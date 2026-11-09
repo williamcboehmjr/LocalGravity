@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  .ring { transform: rotate(-90deg); }
+  .num { font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+</style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-4">
+
+<div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-sm px-5 py-6 max-w-[500px] mx-auto">
+
+  <div class="flex items-center gap-2 mb-1">
+    <span class="inline-block h-2 w-2 rounded-full bg-sky-400 animate-pulse"></span>
+    <h2 class="text-[var(--foreground)] font-semibold text-base leading-none">Live countdown pill</h2>
+  </div>
+  <p class="text-[var(--muted-foreground)] text-sm mb-5">One reusable component drives every timed task &mdash; reconnect, model download, deploy. Ticking live below.</p>
+
+  <div class="flex flex-wrap gap-6 justify-center items-start">
+
+    <!-- Reconnect / amber timer -->
+    <div class="w-[120px] text-center">
+      <div class="relative h-[96px] w-[96px] mx-auto">
+        <svg viewBox="0 0 100 100" class="h-full w-full ring">
+          <circle cx="50" cy="50" r="42" fill="none" stroke="var(--border)" stroke-width="7"/>
+          <circle id="arcA" cx="50" cy="50" r="42" fill="none" stroke="#f59e0b" stroke-width="7"
+                  stroke-linecap="round" stroke-dasharray="263.89 263.89"/>
+        </svg>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <span id="numA" class="num text-[34px] font-bold text-[var(--foreground)] leading-none">8</span>
+        </div>
+      </div>
+      <p class="mt-2 text-sm font-semibold text-amber-500">Reconnecting</p>
+      <p id="subA" class="text-xs text-[var(--muted-foreground)] leading-tight mt-1">Attempt #3 &middot; Strata :8080</p>
+    </div>
+
+    <!-- Download / sky timer -->
+    <div class="w-[120px] text-center">
+      <div class="relative h-[96px] w-[96px] mx-auto">
+        <svg viewBox="0 0 100 100" class="h-full w-full ring">
+          <circle cx="50" cy="50" r="42" fill="none" stroke="var(--border)" stroke-width="7"/>
+          <circle id="arcB" cx="50" cy="50" r="42" fill="none" stroke="#38bdf8" stroke-width="7"
+                  stroke-linecap="round" stroke-dasharray="263.89 263.89"/>
+        </svg>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <span id="numB" class="num text-[34px] font-bold text-[var(--foreground)] leading-none">15</span>
+        </div>
+      </div>
+      <p class="mt-2 text-sm font-semibold text-sky-500">Downloading model</p>
+      <p id="subB" class="text-xs text-[var(--muted-foreground)] leading-tight mt-1">E:/Models &middot; Qwen3.8</p>
+    </div>
+
+  </div>
+
+  <p class="text-center text-xs text-[var(--muted-foreground)] mt-5 pt-4 border-t border-[var(--border)]">
+    Ring drains as time elapses, number ticks each second, status flips to <span class="font-semibold text-emerald-500">READY</span> on completion &mdash; the same pattern you asked for: count down &rarr; poll &rarr; continue.
+  </p>
+
+</div>
+
+<script>
+const C = 263.89;
+function makeTimer(dur, arcEl, numEl, subEl, label){
+  const start = performance.now();
+  function tick(){
+    const t = (performance.now() - start) / 1000;
+    const phase = t % dur;
+    const remaining = dur - phase;
+    const frac = remaining / dur;
+    arcEl.setAttribute('stroke-dasharray', (C*frac).toFixed(2)+' '+C);
+    if (remaining < 0.6){
+      numEl.textContent = '✓';
+      subEl.innerHTML = label + ' &middot; <span class="font-semibold text-emerald-500">READY</span>';
+    } else {
+      numEl.textContent = Math.ceil(remaining);
+    }
+    requestAnimationFrame(tick);
+  }
+  tick();
+}
+makeTimer(8, document.getElementById('arcA'), document.getElementById('numA'), document.getElementById('subA'), 'Attempt #3 &middot; Strata :8080');
+makeTimer(15, document.getElementById('arcB'), document.getElementById('numB'), document.getElementById('subB'), 'E:/Models &middot; Qwen3.8');
+</script>
+
+</body>
+</html>

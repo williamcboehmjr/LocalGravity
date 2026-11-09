@@ -480,4 +480,119 @@ export const BUILTIN_TOOLS_SCHEMA = [
         required: ['notes'],
       },
     },
-  },];
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'manage_task',
+      description:
+        'Manage asynchronous background tasks: start a long-running build/command without blocking ("start"), list running tasks ("list"), inspect status and recent log output ("status"), or cancel a task ("kill").',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['start', 'list', 'status', 'kill'],
+            description: 'Action to perform on background tasks',
+          },
+          command: {
+            type: 'string',
+            description: 'Command line to run in the background (when action="start")',
+          },
+          title: {
+            type: 'string',
+            description: 'Optional human-readable title for the background task',
+          },
+          task_id: {
+            type: 'string',
+            description: 'Task ID for "status" or "kill" actions (e.g. "task-1")',
+          },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'schedule',
+      description:
+        'Schedule a non-blocking countdown timer that displays a live visual countdown badge in the GUI and fires a high-priority notification when completed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          duration_seconds: {
+            type: 'number',
+            description: 'Seconds to count down before triggering notification',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Message or instruction to trigger when the timer finishes',
+          },
+          title: {
+            type: 'string',
+            description: 'Optional short label for the GUI countdown badge',
+          },
+        },
+        required: ['duration_seconds', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'invoke_subagent',
+      description:
+        'Delegate codebase scanning, multi-file research, or targeted investigation to an isolated Subagent Worker. Returns a clean, distilled report without bloating your main conversation context window.',
+      parameters: {
+        type: 'object',
+        properties: {
+          role: {
+            type: 'string',
+            description: 'Job title for the subagent (e.g. "Codebase Researcher", "UI Component Scanner")',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Specific task or search query for the subagent to investigate and summarize',
+          },
+          directory: {
+            type: 'string',
+            description: 'Optional subdirectory to scope the scan (e.g. "client/src" or "server/src")',
+          },
+        },
+        required: ['role', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_artifact',
+      description:
+        'Create or update a structured Markdown, Plan, Walkthrough, or Diff Artifact displayed in the user Side-by-Side Artifacts Drawer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Title of the artifact (e.g. "Architecture Plan", "Release Walkthrough")',
+          },
+          type: {
+            type: 'string',
+            enum: ['plan', 'walkthrough', 'report', 'code', 'diff'],
+            description: 'Kind of artifact',
+          },
+          content: {
+            type: 'string',
+            description: 'Full Markdown content of the artifact',
+          },
+          summary: {
+            type: 'string',
+            description: 'Brief 1-sentence summary of the artifact',
+          },
+        },
+        required: ['title', 'content'],
+      },
+    },
+  },
+];

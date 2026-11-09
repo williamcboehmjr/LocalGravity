@@ -24,7 +24,7 @@ export class LlamaMoESidecar {
     this.port = config?.port || 8080;
     this.modelPath =
       config?.modelPath ||
-      'E:\\Models\\Qwen3.8-Flash-Next-IQ3_S\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf';
+      'E:\\Models\\Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS\\Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf';
   }
 
   public static getInstance(): LlamaMoESidecar {
@@ -97,13 +97,13 @@ export class LlamaMoESidecar {
     );
     const configPath = path.join(
       process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local',
-      'Strata', 'launch', 'iq3_s-64k.json'
+      'Strata', 'install', 'strata-swift-iq2_xs.json'
     );
     const pythonExe = path.join(terminalDir, 'python', 'python.exe');
     const serverPy = path.join(terminalDir, 'serve', 'server.py');
 
     if (fs.existsSync(configPath) && fs.existsSync(pythonExe) && fs.existsSync(serverPy)) {
-      console.log(`[LlamaMoE] Launching Strata Server on port ${this.port} with iq3_s-64k.json...`);
+      console.log(`[LlamaMoE] Launching Strata Server on port ${this.port} with strata-swift-iq2_xs.json...`);
       const args = [
         serverPy,
         '--engine', 'strata',

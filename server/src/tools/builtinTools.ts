@@ -11,6 +11,7 @@ import type { AttachmentManager } from '../files/attachmentManager.js';
 import { extractJpegsFromPdf } from '../files/attachmentManager.js';
 import { createRequire } from 'node:module';
 import { HANDLER_REGISTRY } from './handlers/index.js';
+import { applyFuzzyPatch } from '../utils/patchDoctor.js';
 const require = createRequire(import.meta.url);
 
 export interface ToolExecutionContext {
@@ -347,16 +348,17 @@ export class BuiltinToolExecutor {
           const targetStr = String(args.target ?? '');
           const replacementStr = String(args.replacement ?? '');
 
-          if (!previousContent.includes(targetStr)) {
+          const patchResult = applyFuzzyPatch(previousContent, targetStr, replacementStr);
+          if (!patchResult.ok) {
             return {
               stdout: '',
-              stderr: `Target block not found in ${targetPath}`,
+              stderr: `Target block not found in ${targetPath}. ${patchResult.diagnosticHint || ''}`,
               exitCode: 1,
               durationMs: Math.round(performance.now() - startMs),
             };
           }
 
-          const newContent = previousContent.replace(targetStr, replacementStr);
+          const newContent = patchResult.newContent;
           fs.writeFileSync(targetPath, newContent, 'utf-8');
 
           const checkpoint = this.db.createFileCheckpoint({
@@ -369,7 +371,7 @@ export class BuiltinToolExecutor {
           ctx.onFileCheckpointCreated?.(checkpoint);
 
           return {
-            stdout: `Applied diff to ${targetPath} (checkpoint ${checkpoint.id} saved)`,
+            stdout: `Applied diff to ${targetPath} via ${patchResult.strategy} match (lines ${patchResult.matchedLineStart}-${patchResult.matchedLineEnd}, checkpoint ${checkpoint.id} saved)`,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
