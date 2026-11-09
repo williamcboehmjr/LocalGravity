@@ -107,15 +107,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   };
 
   const handleApplyUpdate = async () => {
-    if (!availableUpdate?.updateHandle) {
-      if (availableUpdate?.downloadUrl) {
-        window.open(availableUpdate.downloadUrl, '_blank');
-      }
-      return;
-    }
+    if (!availableUpdate) return;
     setUpdateStatus('downloading');
+    setUpdateError(null);
     try {
-      await downloadAndApplyUpdate(availableUpdate.updateHandle, (p) => {
+      await downloadAndApplyUpdate(availableUpdate, (p) => {
         setDownloadProgress({
           percent: p.percent,
           statusText: p.statusText,

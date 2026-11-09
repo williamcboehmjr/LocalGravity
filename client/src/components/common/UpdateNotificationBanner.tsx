@@ -27,18 +27,11 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
   const isTauri = isTauriEnvironment();
 
   const handleStartUpdate = async () => {
-    if (!updateInfo.updateHandle) {
-      if (updateInfo.downloadUrl) {
-        window.open(updateInfo.downloadUrl, '_blank');
-      }
-      return;
-    }
-
     setIsUpdating(true);
     setErrorMessage(null);
 
     try {
-      await downloadAndApplyUpdate(updateInfo.updateHandle, (progress) => {
+      await downloadAndApplyUpdate(updateInfo, (progress) => {
         setProgressPercent(progress.percent);
         setProgressStatus(progress.statusText);
       });

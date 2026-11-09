@@ -26,6 +26,99 @@ fn init_workspace_harness(workspace_root: String) -> Result<String, String> {
     HarnessEngine::ensure_workspace_harness(&workspace_root)
 }
 
+#[tauri::command]
+async fn install_dmg_update(dmg_url: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        // 1. Download DMG using curl to /tmp/localgravity_update.dmg
+        let temp_dmg = "/tmp/localgravity_update.dmg";
+        let _ = std::fs::remove_file(temp_dmg);
+
+        let curl_out = Command::new("/usr/bin/curl")
+            .args(["-s", "-L", "-f", "-o", temp_dmg, &dmg_url])
+            .output()
+            .map_err(|e| format!("curl execution failed: {}", e))?;
+
+        if !curl_out.status.success() {
+            return Err(format!(
+                "Failed to download update from {}: {}",
+                dmg_url,
+                String::from_utf8_lossy(&curl_out.stderr)
+            ));
+        }
+
+        // 2. Attach DMG with nobrowse
+        let attach_out = Command::new("hdiutil")
+            .args(["attach", temp_dmg, "-nobrowse"])
+            .output()
+            .map_err(|e| format!("Failed to attach DMG: {}", e))?;
+
+        if !attach_out.status.success() {
+            return Err(format!(
+                "hdiutil attach failed: {}",
+                String::from_utf8_lossy(&attach_out.stderr)
+            ));
+        }
+
+        let attach_stdout = String::from_utf8_lossy(&attach_out.stdout);
+        let mut mount_path = String::new();
+        for line in attach_stdout.lines() {
+            if let Some(pos) = line.find("/Volumes/") {
+                mount_path = line[pos..].trim().to_string();
+                break;
+            }
+        }
+
+        if mount_path.is_empty() {
+            return Err("Failed to find /Volumes mount path from hdiutil output".to_string());
+        }
+
+        let source_app = format!("{}/LocalGravity.app", mount_path);
+        let target_app = "/Applications/LocalGravity.app";
+
+        // 3. Perform atomic copy via ditto
+        let ditto_out = Command::new("ditto")
+            .args([&source_app, target_app])
+            .output()
+            .map_err(|e| format!("Failed to copy application: {}", e))?;
+
+        // 4. Eject the DMG
+        let _ = Command::new("hdiutil")
+            .args(["detach", &mount_path, "-force"])
+            .output();
+
+        let _ = std::fs::remove_file(temp_dmg);
+
+        if !ditto_out.status.success() {
+            return Err(format!(
+                "ditto failed to copy app: {}",
+                String::from_utf8_lossy(&ditto_out.stderr)
+            ));
+        }
+
+        // 5. Clear quarantine flags
+        let _ = Command::new("xattr")
+            .args(["-cr", target_app])
+            .output();
+
+        // 6. Spawn relaunch script in detached background and exit
+        let relaunch_cmd = format!("sleep 1; open '{}'", target_app);
+        let _ = Command::new("/bin/sh")
+            .args(["-c", &relaunch_cmd])
+            .spawn();
+
+        std::process::exit(0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = dmg_url;
+        Err("install_dmg_update is only supported on macOS".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -37,7 +130,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_system_platform,
             init_client_appdata,
-            init_workspace_harness
+            init_workspace_harness,
+            install_dmg_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

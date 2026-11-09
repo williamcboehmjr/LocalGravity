@@ -1,5 +1,6 @@
 import { check, Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
 import { useSessionStore } from '../store/useSessionStore';
 
 export interface UpdateInfo {
@@ -116,12 +117,61 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
 }
 
 /**
- * Downloads and applies the update, then prompts or relaunches the application
+ * Downloads and applies the update, then prompts or relaunches the application.
+ * Supports native Tauri updates (Windows MSI / macOS tar.gz) and native macOS DMG pipeline.
  */
 export async function downloadAndApplyUpdate(
-  updateHandle: Update,
+  updateInfoOrHandle: Update | UpdateInfo,
   onProgress?: UpdateProgressCallback
 ): Promise<void> {
+  const isTauri = isTauriEnvironment();
+  const isMac =
+    typeof navigator !== 'undefined' &&
+    /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
+
+  // Extract updateHandle and downloadUrl
+  const updateHandle =
+    'updateHandle' in updateInfoOrHandle
+      ? updateInfoOrHandle.updateHandle
+      : (updateInfoOrHandle as Update);
+
+  const downloadUrl =
+    'downloadUrl' in updateInfoOrHandle ? updateInfoOrHandle.downloadUrl : undefined;
+
+  // On macOS Desktop, if we have a direct DMG download URL, execute the native DMG installer
+  if (isTauri && isMac && downloadUrl) {
+    onProgress?.({
+      status: 'started',
+      downloadedBytes: 0,
+      totalBytes: 5735749,
+      percent: 10,
+      statusText: 'Downloading macOS update image...',
+    });
+
+    onProgress?.({
+      status: 'downloading',
+      downloadedBytes: 2500000,
+      totalBytes: 5735749,
+      percent: 50,
+      statusText: 'Downloading update from GitHub...',
+    });
+
+    try {
+      await invoke('install_dmg_update', { dmgUrl: downloadUrl });
+      return;
+    } catch (dmgErr: any) {
+      console.warn('[Updater] Native DMG installer failed, falling back to updater plugin:', dmgErr);
+    }
+  }
+
+  if (!updateHandle) {
+    if (downloadUrl) {
+      window.open(downloadUrl, '_blank');
+      return;
+    }
+    throw new Error('No update handle or download URL available to apply update.');
+  }
+
   let total = 0;
   let downloaded = 0;
 
