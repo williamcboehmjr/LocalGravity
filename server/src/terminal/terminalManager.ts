@@ -101,7 +101,8 @@ export class SharedTerminalManager {
     command: string,
     cwd?: string,
     timeoutMs = 30000,
-    onLiveChunk?: (chunk: string, stream: 'stdout' | 'stderr') => void
+    onLiveChunk?: (chunk: string, stream: 'stdout' | 'stderr') => void,
+    abortSignal?: AbortSignal
   ): Promise<{
     stdout: string;
     stderr: string;
@@ -131,6 +132,32 @@ export class SharedTerminalManager {
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+
+      const onAbort = () => {
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          try {
+            if (isWin && child.pid) {
+              spawn('taskkill', ['/pid', String(child.pid), '/f', '/t']);
+            } else {
+              child.kill('SIGTERM');
+            }
+          } catch {}
+          resolve({
+            stdout,
+            stderr: (stderr ? stderr + '\n' : '') + '[Command aborted by user]',
+            exitCode: 130,
+            durationMs: Math.round(performance.now() - startMs),
+          });
+        }
+      };
+
+      if (abortSignal?.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
 
       const timer = setTimeout(() => {
         if (!finished) {
@@ -169,6 +196,7 @@ export class SharedTerminalManager {
       });
 
       child.on('close', (code) => {
+        abortSignal?.removeEventListener('abort', onAbort);
         if (!finished) {
           finished = true;
           clearTimeout(timer);

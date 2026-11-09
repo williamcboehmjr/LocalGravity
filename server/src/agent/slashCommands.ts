@@ -142,6 +142,17 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         maxAutoContinues: 2,
         subagentRole: 'Automation Scheduler',
       };
+    case 'vision':
+      return {
+        command: '/vision',
+        cleanPrompt: body || 'Verify Strata Qwen 3.8 Flash-Next multimodal vision pipeline and inspect the current desktop screen.',
+        modeDirective:
+          '=== SLASH COMMAND ACTIVE: /vision (STRATA MULTIMODAL VISION & SCREEN INSPECTOR) ===\n' +
+          'Call `inspect_models` with `{"action": "test_vision"}` or `capture_screen` to inspect the live visual state using Qwen 3.8 Flash-Next Vision on Strata port 8080, and report the exact visual findings.',
+        maxToolSteps: 15,
+        maxAutoContinues: 1,
+        subagentRole: 'Vision Specialist',
+      };
     default:
       return {
         command: null,

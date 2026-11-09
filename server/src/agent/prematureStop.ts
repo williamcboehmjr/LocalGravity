@@ -48,6 +48,17 @@ export function detectPrematureStop(
     }
   }
 
+  // 3b. UNGROUNDED "I CANNOT / AS AN AI / NO REAL-TIME ACCESS" GUARD:
+  const helplessClaimRegex =
+    /(i do not have access to real-time|i cannot browse the web|i don't have access to the internet|as an ai language model|as of my last update|i am not able to search|i don't have real-time information|i am unable to access the internet|i cannot search the web|i don't have access to current|i cannot view websites)/i;
+  if (helplessClaimRegex.test(trimmed)) {
+    return {
+      shouldContinue: true,
+      continuationPrompt:
+        '[ACTION REQUIRED]: You DO have full, unrestricted live web search access via the "search_web" tool! Immediately invoke search_web(query=...) to look up the exact information instead of claiming inability.',
+    };
+  }
+
   // 4. THEATRICAL SIMULATION / ZERO-TOOL HALLUCINATION GUARD:
   // If NO tools have been executed in this turn, check if the model is narrating/roleplaying tool actions in text!
   if (!hasExecutedTools) {

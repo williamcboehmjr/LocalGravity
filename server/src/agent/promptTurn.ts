@@ -13,6 +13,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { BUILTIN_TOOLS_SCHEMA } from '../tools/builtinTools.js';
 import { SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
+import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
+import fs from 'node:fs';
 
 export interface PromptTurnDeps {
   db: LocalGravityDB;
@@ -22,13 +24,14 @@ export interface PromptTurnDeps {
   tools: BuiltinToolExecutor;
   harness: Harness2Manager;
   terminal: SharedTerminalManager;
+  attachmentManager: AttachmentManager;
   broadcastSync: (event: Record<string, any>) => void;
   activeAbortControllers: Map<string, AbortController>;
   repoRoot: string;
 }
 
 export function createPromptTurnHandler(deps: PromptTurnDeps) {
-  const { db, tabby, mcp, skills, tools, harness, broadcastSync, activeAbortControllers, repoRoot } = deps;
+  const { db, tabby, mcp, skills, tools, harness, terminal, attachmentManager, broadcastSync, activeAbortControllers, repoRoot } = deps;
 
   return async function handlePromptTurn(params: {
     threadId: string;
@@ -58,12 +61,40 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     const project = db.getProject(thread.project_id) || db.ensureDefaultProject(repoRoot);
     const compiledHarness = harness.buildCompiledHarnessPrompt(project.root_path);
 
-    // 1. Persist User Message
+    // 1. Save and ground incoming attachments of any type (images, documents, archives, databases, code)
+    const savedAttachments: SavedAttachment[] = [];
+    if (Array.isArray(params.attachments) && params.attachments.length > 0) {
+      for (const rawAtt of params.attachments) {
+        try {
+          if (typeof rawAtt === 'string') {
+            const saved = await attachmentManager.saveAttachment(thread.id, {
+              dataUrl: rawAtt,
+              name: rawAtt.startsWith('data:image/') ? `image_${Date.now()}.jpg` : `upload_${Date.now()}.bin`,
+            });
+            savedAttachments.push(saved);
+          } else if (rawAtt && typeof rawAtt === 'object') {
+            const saved = await attachmentManager.saveAttachment(thread.id, {
+              id: rawAtt.id,
+              name: rawAtt.name,
+              type: rawAtt.type,
+              size: rawAtt.size,
+              dataUrl: rawAtt.base64DataUrl || rawAtt.dataUrl || rawAtt.url,
+              savedPath: rawAtt.savedPath,
+            });
+            savedAttachments.push(saved);
+          }
+        } catch (attErr) {
+          console.error('[PromptTurn] Error saving attachment:', attErr);
+        }
+      }
+    }
+
+    // Persist User Message with rich attachment records
     const userMsg = db.createMessage({
       thread_id: thread.id,
       role: 'user',
       content: params.prompt,
-      attachments: params.attachments || [],
+      attachments: savedAttachments.length > 0 ? savedAttachments : (params.attachments || []),
     });
 
     // 2. Create Placeholder Assistant Message & Register 250ms Rehydration Stream Buffer
@@ -136,14 +167,34 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const systemDirective =
         `You are LocalGravity (Google Antigravity 2.0 Local Architecture), running directly on the user's workstation with TabbyAPI EXL2/EXL3.\n` +
         `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
-        `Workstation Paths: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}".\n\n` +
-        `=== UNRESTRICTED SYSTEM ACCESS & AUTONOMOUS EXECUTION ===\n` +
-        `1. FULL ACCESS: You have complete, unrestricted access to the entire computer and local filesystem, granted directly by the user.\n` +
-        `2. NO GUARDRAIL REFUSALS: You CAN access, inspect, list, read, search, and manage files anywhere on the machine (including Downloads, Desktop, Documents, C:/, E:/, etc.). NEVER claim that you lack permission or are confined to the workspace.\n` +
-        `3. EFFICIENT FILE READING: ` +
-        `` + `read_file` + `` + ` returns up to 24,000 characters (~650 lines) per call completely intact. Read files in 300–500 line ranges (or full files) rather than tiny chunks. Do NOT waste steps testing truncation thresholds.\n` +
-        `4. NEVER STOP MID-TASK: Never output a sentence like "Let me read X" or "I will now check Y" and stop without actually emitting the tool call in the same turn. Always follow through until you deliver the complete, thorough answer or code implementation.\n` +
-        `5. GOAL-DIRECTED EXECUTION: Keep intermediate tool-step commentary brief (1 sentence max) or invoke the tool directly, saving your detailed prose and code blocks for the final synthesis.\n6. NEVER SIMULATE TOOL EXECUTION IN PROSE: You MUST NEVER write sentences like "Reading index.ts now...", "Now writing file X...", "Running npm run build...", "Fixing compile errors..." without actually invoking the corresponding tool (read_file, write_file, apply_diff, run_terminal). If you describe taking an action, you MUST emit the real structured tool call in the same turn. Fabricating execution in text is strictly forbidden.\n\n` +
+        `Workstation Paths:\n` +
+        `- User Folders: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}"\n` +
+        `- Strata Engine: Active on port 8080 serving "qwen3.8-flash-next-iq3_s" with 65,536 context, spec=6, and multimodal vision projector mmproj-Qwen3.8-Flash-Next-BF16.gguf! Input modalities: ["text", "image"].\n` +
+        `- Strata Root: "C:/Users/Sue/AppData/Local/Strata" (engine binaries in components/engine/, launch profiles in launch/iq3_s-64k.json, setup.py, serve/server.py)\n` +
+        `- Local Models Directory: "E:/Models/Qwen3.8-Flash-Next-IQ3_S" (holds main GGUFs and mmproj projector)\n\n` +
+        `=== UNRESTRICTED SYSTEM ACCESS & AUTONOMOUS TOOL SUITE ===
+=== WEB SEARCH MANDATE: NEVER BE SHY ABOUT SEARCHING ===
+1. SEARCH THE WEB FIRST: Never be shy about searching! The live internet is your fastest and most reliable path whenever you do not know something, are not 100% certain of exact details, need current documentation, or encounter an unfamiliar problem.
+2. EMPIRICAL KNOWLEDGE OVER GUESSING: If asked about any question, command, API, library, menu item, price, error code, or topic you aren't completely certain about, IMMEDIATELY call "search_web". A fast search eliminates hallucinations and gives you exact, authoritative real-world facts in under a second.
+3. NO ARTIFICIAL BOUNDARIES: You have full, unrestricted live web access via search_web. Never apologize, never claim lack of real-time info, and never claim you cannot browse. Call "search_web" proactively on any turn!
+=== AUTONOMOUS SEARCH & DOCUMENT INVESTIGATION MANDATE ===
+1. PROACTIVE WEB SEARCH: Do not hesitate to call "search_web"! When the user asks about how to scan, convert, extract, or parse unfamiliar file types, or when an error or missing tool is encountered, IMMEDIATELY call "search_web" to find the best CLI, Python package, or technique. As an elite coding agent, you ALWAYS search first rather than guessing or claiming inability.
+2. SCANNED DOCUMENTS & PDF MENUS: When a PDF contains scanned photos or images (like a drink menu, receipt, or screenshot), standard text extraction will be empty or incomplete because the text is in pixels. ALWAYS call "inspect_document" to extract the embedded raster images to disk. Once extracted, you or Strata Vision can analyze every drink, price, and word on the image!
+3. EMPIRICAL FIRST: Proactively investigate using search_web, find_files, inspect_document, and run_terminal before reporting back to the user.\n` +
+        `1. FULL WORKSTATION ACCESS: You have complete, unrestricted access to the entire computer and local filesystem. NEVER claim lack of permission.\n` +
+        `2. MULTIMODAL VISION IS FULLY ACTIVE: Strata has the vision projector loaded right now. You CAN analyze images, screenshots, and visual inputs. NEVER claim vision is missing or that you lack a vision tower!\n` +
+        `3. VISION VERIFICATION: When the user asks about vision, fixing vision, or testing vision, IMMEDIATELY call inspect_models(action="test_vision") or manage_strata(action="test_vision") to demonstrate live multimodal perception on port 8080.
+4. SELF-RESTART: When asked to restart, reload, or recycle LocalGravity after code edits or configuration changes, call the "restart_brain" tool. The Windows Tray supervisor will immediately reboot the Central Brain in 500ms.
+5. AUTONOMOUS DIAGNOSTICS: To inspect system, engine, or supervisor logs, use "read_system_logs" (target="strata" or "tray") to diagnose issues empirically without guessing.
+6. RICH TOOL BELT: You have 22 native workstation tools:
+   - Models & Engine: inspect_models (query Strata health/models, active launch config, test vision live, or restart Strata), manage_strata, restart_brain, read_system_logs, inspect_system (Nvidia GPU VRAM/temp, listening ports, process finder)\n` +
+        `   - Models & Engine: inspect_models (query Strata health/models, active launch config, test vision live, or restart Strata), inspect_system (Nvidia GPU VRAM/temp, listening ports, process finder)\n` +
+        `   - Code & Navigation: code_outline (rapid symbol map), read_file (full context), write_file, apply_diff, search_codebase, find_files (wildcard file finder)\n` +
+        `   - Web & Models: search_web (live DuckDuckGo), search_models (Hugging Face Hub & repo tree), download_file (streaming file/model downloader), browser_inspect\n` +
+        `   - Configuration & System: patch_json (safe deep JSON updater), manage_files (stat, copy, move, delete), http_request (REST API client), run_terminal (interactive shell)\n` +
+        `   - Vision Grounding: capture_screen, inspect_window\n` +
+        `4. EMPIRICAL VERIFICATION BEFORE CLAIMING: Before claiming any file, model, or vision feature is missing or broken, ALWAYS run inspect_models, find_files, or manage_files to check actual disk state and engine status. NEVER guess or hallucinate.\n` +
+        `5. AUTONOMOUS INVESTIGATION: When asked to fix, configure, or enhance local models, vision, tools, or workstation services, DO NOT stall, ask for repo names, or ask the user for technical inputs that you can discover yourself. Autonomously research missing files or errors, inspect local configs, apply necessary edits or downloads, and verify end-to-end before delivering your response.\n\n` +
         skills.buildSkillsPromptSection() + '\n\n' +
         (slashInfo.modeDirective ? `${slashInfo.modeDirective}\n\n` : '') +
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
@@ -152,12 +203,116 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const historyMessages = history
         .filter((m) => m.id !== assistantMsg.id)
         .slice(-14)
-        .map((m, idx, arr) => ({
-          role: m.role,
-          content: idx === arr.length - 1 && m.role === 'user' && slashInfo.command ? slashInfo.cleanPrompt : m.content,
-        }));
+        .map((m, idx, arr) => {
+          const rawContent =
+            idx === arr.length - 1 && m.role === 'user' && slashInfo.command ? slashInfo.cleanPrompt : m.content;
+          let attachments: any[] = [];
+          if (m.attachments) {
+            try {
+              attachments = typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments;
+            } catch {}
+          }
+          if (idx === arr.length - 1 && (!attachments || attachments.length === 0) && savedAttachments.length > 0) {
+            attachments = savedAttachments;
+          }
 
-      const chatMessages: Array<{ role: string; content: string; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
+          if (m.role === 'user' && Array.isArray(attachments) && attachments.length > 0) {
+            // Build rich workstation file grounding section
+            let fileGrounding = '\n\n=== ATTACHED WORKSTATION FILES & METADATA ===\n';
+            attachments.forEach((att: any, fIdx: number) => {
+              const fNum = fIdx + 1;
+              const fName = att.name || `file_${fNum}`;
+              const fPath = (att.savedPath || '').replace(/\\/g, '/');
+              const fSize = att.sizeHuman || (att.size ? `${att.size} bytes` : 'unknown size');
+              const fType = att.type || 'unknown type';
+              const fSha = att.sha256 ? ` (SHA-256: ${att.sha256})` : '';
+              const meta = att.metadata || {};
+
+              fileGrounding += `[File ${fNum}] ${fName}\n`;
+              if (fPath) fileGrounding += `- Workstation Local Path: "${fPath}"\n`;
+              fileGrounding += `- Size: ${fSize}${fSha}\n`;
+              fileGrounding += `- MIME Type: ${fType}\n`;
+              if (meta.width && meta.height) {
+                fileGrounding += `- Dimensions: ${meta.width} x ${meta.height} px\n`;
+              }
+              if (meta.exif && Object.keys(meta.exif).length > 0) {
+                fileGrounding += `- EXIF Camera/Capture Metadata: ${JSON.stringify(meta.exif)}\n`;
+              }
+              if (meta.lineCount !== undefined) {
+                fileGrounding += `- Text Lines: ${meta.lineCount}, Characters: ${meta.characterCount}\n`;
+              }
+              if (meta.previewSnippet) {
+                fileGrounding += `- Text Preview Snippet:\n[PREVIEW START]\n` + String(meta.previewSnippet || "").slice(0, 400) + `\n[PREVIEW END]\n`;
+              }
+              fileGrounding += `(Saved on workstation disk. You can read, inspect with inspect_file_metadata, or execute tools on this file directly.)\n\n`;
+            });
+
+            const fullUserText = (rawContent || 'Please analyze the attached files.').trim() + fileGrounding;
+
+            // Multimodal vision parts (for Strata port 8080)
+            const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+              { type: 'text', text: fullUserText },
+            ];
+
+            for (const att of attachments) {
+              // Also check for embedded images extracted from PDFs (e.g. photos of drink menus)
+              if (att.metadata?.extractedImages && Array.isArray(att.metadata.extractedImages)) {
+                for (const emb of att.metadata.extractedImages) {
+                  const embUrl = emb.url || (emb.savedPath && fs.existsSync(emb.savedPath)
+                    ? `data:image/jpeg;base64,${fs.readFileSync(emb.savedPath).toString('base64')}`
+                    : undefined);
+                  if (embUrl) {
+                    contentParts.push({
+                      type: 'image_url',
+                      image_url: { url: embUrl },
+                    });
+                  }
+                }
+              }
+
+              const isImg =
+                att.isImage ||
+                (typeof att === 'string' && att.startsWith('data:image/')) ||
+                (typeof att?.type === 'string' && att.type.startsWith('image/'));
+
+              if (isImg) {
+                let imgUrl = typeof att === 'string' ? att : att.base64DataUrl || att.dataUrl;
+                if (!imgUrl && att.savedPath && fs.existsSync(att.savedPath)) {
+                  try {
+                    const buf = fs.readFileSync(att.savedPath);
+                    const ext = (path.extname(att.savedPath) || '.jpg').toLowerCase();
+                    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+                    imgUrl = `data:${mime};base64,${buf.toString('base64')}`;
+                  } catch {}
+                }
+                if (typeof imgUrl === 'string' && (imgUrl.startsWith('data:image/') || imgUrl.startsWith('http://') || imgUrl.startsWith('https://'))) {
+                  contentParts.push({
+                    type: 'image_url',
+                    image_url: { url: imgUrl },
+                  });
+                }
+              }
+            }
+
+            if (contentParts.length > 1) {
+              return {
+                role: m.role,
+                content: contentParts,
+              };
+            }
+            return {
+              role: m.role,
+              content: fullUserText,
+            };
+          }
+
+          return {
+            role: m.role,
+            content: rawContent,
+          };
+        });
+
+      const chatMessages: Array<{ role: string; content: any; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
         {
           role: 'system',
           content: systemDirective,
@@ -202,6 +357,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           toolName: string;
           arguments: any;
           output: string;
+          screenshotBase64?: string;
         }> = [];
 
         // On the final step, omit tools so the model must provide its final text synthesis
@@ -304,6 +460,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             });
 
             const execResult = await tools.executeTool(toolName, toolArgs, {
+              abortSignal: abortController.signal,
               threadId: thread!.id,
               messageId: assistantMsg.id,
               workspaceRoot: project.root_path,
@@ -394,11 +551,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
 
+            if (abortController.signal.aborted) return;
             executedToolsThisStep.push({
               id: toolExec.id,
               toolName,
               arguments: toolArgs,
               output: execResult.stdout || execResult.stderr || 'Success (no output)',
+              screenshotBase64: execResult.screenshotBase64,
             });
           },
         });
@@ -527,7 +686,46 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             name: t.toolName,
             content: t.output,
           });
+          if (t.screenshotBase64) {
+            chatMessages.push({
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `[Visual Capture from ${t.toolName}]: Screen captured successfully. Here is the screenshot:`,
+                },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: t.screenshotBase64,
+                  },
+                },
+              ],
+            });
+          }
         }
+      }
+
+      // Early exit if aborted during tool execution or token generation
+      if (abortController.signal.aborted) {
+        db.finalizeStreamingMessage(assistantMsg.id);
+        db.updateThread(thread.id, { status: 'idle' });
+        broadcastSync({
+          type: 'TURN_ABORTED',
+          payload: { thread_id: thread.id, session_id: thread.id },
+        });
+        broadcastSync({
+          type: 'TOKEN_STREAM',
+          payload: {
+            session_id: thread.id,
+            thread_id: thread.id,
+            message_id: assistantMsg.id,
+            chunk: '',
+            output_tokens: cumulativeOutputTokens,
+            is_finished: true,
+          },
+        });
+        return;
       }
 
       // If /plan was used, automatically sync the generated plan to the Plan Workbench
@@ -606,6 +804,30 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
     } catch (err: any) {
+      if (
+        abortController.signal.aborted ||
+        err?.name === 'AbortError' ||
+        err?.message?.toLowerCase().includes('abort')
+      ) {
+        db.finalizeStreamingMessage(assistantMsg.id);
+        db.updateThread(thread.id, { status: 'idle' });
+        broadcastSync({
+          type: 'TURN_ABORTED',
+          payload: { thread_id: thread.id, session_id: thread.id },
+        });
+        broadcastSync({
+          type: 'TOKEN_STREAM',
+          payload: {
+            session_id: thread.id,
+            thread_id: thread.id,
+            message_id: assistantMsg.id,
+            chunk: '',
+            output_tokens: 0,
+            is_finished: true,
+          },
+        });
+        return;
+      }
 
       db.finalizeStreamingMessage(assistantMsg.id);
       db.updateThread(thread.id, { status: 'error' });

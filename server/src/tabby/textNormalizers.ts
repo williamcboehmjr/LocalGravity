@@ -12,7 +12,18 @@ export function hasConsecutiveRepetition(buffer: string): boolean {
   return !!match;
 }
 
-export function deduplicateRepeatedSequences(text: string): string {
+export function deduplicateRepeatedSequences(text: any): any {
+  if (typeof text !== 'string') {
+    if (Array.isArray(text)) {
+      return text.map((part) => {
+        if (part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string') {
+          return { ...part, text: deduplicateRepeatedSequences(part.text) };
+        }
+        return part;
+      });
+    }
+    return text;
+  }
   if (!text || text.length < 20) return text;
   const lines = text.split(/\r?\n/);
   const dedupLines: string[] = [];

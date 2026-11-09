@@ -13,6 +13,20 @@ export interface ToolCallItemData {
   status: 'running' | 'success' | 'error';
 }
 
+export interface FileAttachmentItem {
+  id?: string;
+  name: string;
+  type: string;
+  size: number;
+  sizeHuman?: string;
+  base64DataUrl?: string;
+  savedPath?: string;
+  url?: string;
+  isImage?: boolean;
+  sha256?: string;
+  metadata?: Record<string, any>;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
@@ -26,6 +40,7 @@ export interface ChatMessage {
   modelName?: string;
   timestamp: number;
   images?: string[];
+  attachments?: FileAttachmentItem[];
   toolCommand?: string;
   toolOutput?: string;
   toolStatus?: 'running' | 'success' | 'error';
@@ -51,6 +66,7 @@ export interface QueuedMessage {
   id: string;
   text: string;
   images?: string[];
+  attachments?: FileAttachmentItem[];
   tier: ModelTier;
   thinkingBudget: ThinkingBudget;
   timestamp: number;
@@ -120,6 +136,8 @@ interface SessionState {
   isGenerating: boolean;
   subagentTasks: SubagentTaskItem[];
   dpiScale: number;
+  threadHistory: string[];
+  threadHistoryIndex: number;
 
   setProjects: (projects: ProjectItem[], activeId?: string) => void;
   setActiveProjectId: (projectId: string) => void;
@@ -139,6 +157,8 @@ interface SessionState {
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
+  goBackThread: () => string | null;
+  goForwardThread: () => string | null;
   addMessage: (msg: ChatMessage) => void;
   updateLastAssistantMessage: (contentDelta: string, outputTokens?: number) => void;
   updateLastAssistantTool: (
@@ -176,10 +196,25 @@ export function applyDpiScaleToDom(scale: number) {
   const root = document.getElementById('root');
   if (root) {
     root.style.setProperty('--dpi-scale', String(clamped));
+    if (clamped === 1) {
+      root.style.zoom = '';
+      root.style.width = '100%';
+      root.style.height = '100%';
+      root.style.maxHeight = '100%';
+      return;
+    }
+    const isMac = typeof navigator !== 'undefined' && /Macintosh|Mac OS X|iPad|iPhone/.test(navigator.userAgent);
     root.style.zoom = String(clamped);
-    root.style.width = `calc(100vw / ${clamped})`;
-    root.style.height = `calc(100dvh / ${clamped})`;
-    root.style.maxHeight = `calc(100dvh / ${clamped})`;
+    if (isMac) {
+      // In Safari / WKWebView on macOS, zoom already scales coordinates, avoid 100vw/dvh divide which causes horizontal overflow
+      root.style.width = '100%';
+      root.style.height = '100%';
+      root.style.maxHeight = '100%';
+    } else {
+      root.style.width = `calc(100vw / ${clamped})`;
+      root.style.height = `calc(100dvh / ${clamped})`;
+      root.style.maxHeight = `calc(100dvh / ${clamped})`;
+    }
   }
 }
 
@@ -246,8 +281,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   thinkingBudget: 'fast',
   executionPolicy: 'always_proceed',
   modelStatus: 'ready',
-  modelStatusText: 'TabbyAPI Ready (Q4 KV • SysRAM Warm)',
-  activeModelName: 'Qwen3.8-27B-EXL3-11.5GB',
+  modelStatusText: 'Strata Ready (Qwen 3.8 Flash-Next • IQ3_S + Vision • 64k)',
+  activeModelName: 'qwen3.8-flash-next-iq3_s',
   messages: [],
   messageQueue: [],
   currentStreamingThought: '',
@@ -257,6 +292,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isGenerating: false,
   subagentTasks: [],
   dpiScale: getInitialDpiScale(),
+  threadHistory: [initialSessionId],
+  threadHistoryIndex: 0,
+
+  goBackThread: () => {
+    const state = get();
+    if (state.threadHistoryIndex > 0) {
+      const nextIdx = state.threadHistoryIndex - 1;
+      const targetId = state.threadHistory[nextIdx];
+      set({
+        threadHistoryIndex: nextIdx,
+        sessionId: targetId,
+        messages: [],
+        currentStreamingThought: '',
+        isGenerating: false,
+      });
+      return targetId;
+    }
+    return null;
+  },
+  goForwardThread: () => {
+    const state = get();
+    if (state.threadHistoryIndex < state.threadHistory.length - 1) {
+      const nextIdx = state.threadHistoryIndex + 1;
+      const targetId = state.threadHistory[nextIdx];
+      set({
+        threadHistoryIndex: nextIdx,
+        sessionId: targetId,
+        messages: [],
+        currentStreamingThought: '',
+        isGenerating: false,
+      });
+      return targetId;
+    }
+    return null;
+  },
 
   setDpiScale: (scale: number) => {
     const clamped = Math.max(0.75, Math.min(1.75, Math.round(scale * 100) / 100));
@@ -332,11 +402,33 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hydrateMessagesFromServer: (serverMsgs, activeStreams = []) =>
     set(() => {
       const converted: ChatMessage[] = serverMsgs.map((m: any) => {
-        let attachments: string[] = [];
+        let rawAtts: any[] = [];
         try {
-          attachments =
+          rawAtts =
             typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments || [];
         } catch {}
+        const imageStrings: string[] = [];
+        const fileAttachments: FileAttachmentItem[] = [];
+        for (const a of rawAtts) {
+          if (typeof a === 'string') {
+            if (a.startsWith('data:image/') || a.startsWith('http://') || a.startsWith('https://')) {
+              imageStrings.push(a);
+            }
+            fileAttachments.push({
+              name: 'attachment',
+              type: 'application/octet-stream',
+              size: 0,
+              url: a,
+              base64DataUrl: a.startsWith('data:') ? a : undefined,
+            });
+          } else if (a && typeof a === 'object') {
+            fileAttachments.push(a);
+            if (a.isImage || (a.type && a.type.startsWith('image/')) || (a.savedPath && /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath))) {
+              if (a.url) imageStrings.push(a.url);
+              else if (a.base64DataUrl) imageStrings.push(a.base64DataUrl);
+            }
+          }
+        }
         const toolCalls: ToolCallItemData[] = (m.tool_executions || []).map((te: any) => ({
           id: te.id,
           toolName: te.tool_name,
@@ -357,7 +449,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           thoughtTokenCount: m.thinking_tokens || 0,
           outputTokens: m.output_tokens || 0,
           timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
-          images: attachments.length > 0 ? attachments : undefined,
+          images: imageStrings.length > 0 ? imageStrings : undefined,
+          attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         };
       });
@@ -373,7 +466,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               currentThoughtTokens: activeStream.thinkingTokens || 0,
               isThinkingFinished: false,
             }
-          : {}),
+          : {
+              isGenerating: false,
+              currentStreamingThought: '',
+              isThinkingFinished: true,
+            }),
       };
     }),
 
@@ -627,25 +724,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       messages: [],
       messageQueue: [],
     };
-    set((state) => ({
-      sessionId: newId,
-      messages: [],
-      messageQueue: [],
-      sessions: [newSession, ...state.sessions],
-      currentStreamingThought: '',
-      isGenerating: false,
-    }));
+    set((state) => {
+      const nextHist = [...state.threadHistory.slice(0, state.threadHistoryIndex + 1), newId];
+      return {
+        sessionId: newId,
+        messages: [],
+        messageQueue: [],
+        sessions: [newSession, ...state.sessions],
+        currentStreamingThought: '',
+        isGenerating: false,
+        threadHistory: nextHist,
+        threadHistoryIndex: nextHist.length - 1,
+      };
+    });
     return newId;
   },
 
   switchSession: (targetSessionId: string) => {
     const state = get();
     if (state.sessionId === targetSessionId) return;
+    const nextHist = [
+      ...state.threadHistory.slice(0, state.threadHistoryIndex + 1),
+      targetSessionId,
+    ];
     set({
       sessionId: targetSessionId,
       messages: [],
       currentStreamingThought: '',
       isGenerating: false,
+      threadHistory: nextHist,
+      threadHistoryIndex: nextHist.length - 1,
     });
   },
 

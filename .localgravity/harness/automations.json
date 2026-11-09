@@ -1,0 +1,20 @@
+[
+  {
+    "id": "auto-strata-health",
+    "name": "Strata & Vision Health Check",
+    "cron": "0 */6 * * *",
+    "prompt": "/vision Inspect Strata Qwen 3.8 Flash-Next health and verify vision readiness.",
+    "tier": "high",
+    "enabled": true,
+    "lastRunAt": null
+  },
+  {
+    "id": "auto-harness-compact",
+    "name": "Harness² Experience Compaction",
+    "cron": "0 3 * * *",
+    "prompt": "/learn Summarize recent tool lessons into .localgravity/harness/EXPERIENCE.md",
+    "tier": "high",
+    "enabled": false,
+    "lastRunAt": null
+  }
+]

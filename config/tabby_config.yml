@@ -11,8 +11,8 @@ network:
   sse_ping_interval: 15
 model:
   model_dir: C:\Users\Sue\Documents\GitHub\tabbyAPI\models
-  model_name: Qwen3.8-Flash-Next-IQ3_XXS
-  max_seq_len: 32768
+  model_name: qwen3.8-flash-next-iq3_s
+  max_seq_len: 65536
   cache_mode: Q4
   autosplit_reserve:
     - 256

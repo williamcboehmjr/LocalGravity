@@ -30,10 +30,20 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const { brainHost, brainPort, setBrainConnection, dpiScale, setDpiScale } = useSessionStore();
+  const {
+    brainHost,
+    brainPort,
+    setBrainConnection,
+    dpiScale,
+    setDpiScale,
+    executionPolicy,
+    setExecutionPolicy,
+    apiBaseUrl,
+  } = useSessionStore();
 
   const [inputHost, setInputHost] = useState(brainHost || '127.0.0.1');
   const [inputPort, setInputPort] = useState(brainPort || '3390');
+  const [gpuActionStatus, setGpuActionStatus] = useState<string | null>(null);
 
   const [testState, setTestState] = useState<{
     status: 'idle' | 'testing' | 'success' | 'error';
@@ -41,9 +51,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     latency?: number;
   }>({ status: 'idle' });
 
-  const [lowModel, setLowModel] = useState('qwen3.5:4b');
-  const [medModel, setMedModel] = useState('qwen3.5:9b');
-  const [highModel, setHighModel] = useState('qwen3.8-27b-vl:latest');
+  const [lowModel, setLowModel] = useState('Qwen3.5-4B-EXL3-4.0bpw');
+  const [medModel, setMedModel] = useState('Qwen3.8-27B-EXL3-11.5GB');
+  const [highModel, setHighModel] = useState('qwen3.8-flash-next-iq3_s (Strata + Vision • 64k)');
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
@@ -409,16 +419,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           <div className="space-y-2 pt-3 border-t border-border-subtle/50">
             <label className="flex items-center gap-1.5 font-medium text-text-primary">
               <Cpu className="w-3.5 h-3.5 text-purple-400" />
-              <span>Tiered Model Mappings (TabbyAPI EXL3)</span>
+              <span>Strata & Tiered Model Mappings (Main: Qwen 3.8 Flash-Next)</span>
             </label>
 
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="w-16 font-mono text-blue-400">Low:</span>
+                <span className="w-16 font-mono text-rose-400 font-semibold">High:</span>
                 <input
                   type="text"
-                  value={lowModel}
-                  onChange={(e) => setLowModel(e.target.value)}
+                  value={highModel}
+                  onChange={(e) => setHighModel(e.target.value)}
                   className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue"
                 />
               </div>
@@ -434,14 +444,99 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="w-16 font-mono text-rose-400">High:</span>
+                <span className="w-16 font-mono text-blue-400">Low:</span>
                 <input
                   type="text"
-                  value={highModel}
-                  onChange={(e) => setHighModel(e.target.value)}
+                  value={lowModel}
+                  onChange={(e) => setLowModel(e.target.value)}
                   className="flex-1 bg-canvas border border-border-subtle rounded px-2 py-1 font-mono text-text-primary outline-none focus:border-accent-blue"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Antigravity 2.0 Agent Permissions & Smart GPU Controls */}
+          <div className="space-y-2.5 pt-3 border-t border-border-subtle/50">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 font-medium text-text-primary">
+                <Server className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Agent Execution Policy & Strata GPU Lifecycle</span>
+              </label>
+              {gpuActionStatus && (
+                <span className="text-[11px] font-mono text-emerald-400">{gpuActionStatus}</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setExecutionPolicy('always_proceed')}
+                className={`flex-1 py-1.5 px-2.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                  executionPolicy === 'always_proceed'
+                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
+                    : 'bg-canvas border-border-subtle text-text-muted hover:text-text-primary'
+                }`}
+              >
+                ⚡ Turbo (Always Proceed)
+              </button>
+              <button
+                type="button"
+                onClick={() => setExecutionPolicy('request_review')}
+                className={`flex-1 py-1.5 px-2.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                  executionPolicy === 'request_review'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'bg-canvas border-border-subtle text-text-muted hover:text-text-primary'
+                }`}
+              >
+                🛡️ Review Mode
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={async () => {
+                  setGpuActionStatus('Waking GPU...');
+                  try {
+                    await fetch(`${apiBaseUrl}/api/gpu/wake`, { method: 'POST' });
+                    setGpuActionStatus('Strata GPU Active!');
+                  } catch {
+                    setGpuActionStatus('Failed to wake');
+                  }
+                  setTimeout(() => setGpuActionStatus(null), 2500);
+                }}
+                className="py-1.5 px-2 rounded-lg bg-canvas hover:bg-surface border border-border-subtle text-text-primary text-[11px] font-medium transition-colors cursor-pointer"
+              >
+                🔥 Wake Strata GPU
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setGpuActionStatus('Offloading...');
+                  try {
+                    await fetch(`${apiBaseUrl}/api/gpu/offload`, { method: 'POST' });
+                    setGpuActionStatus('Offloaded (0 MB VRAM)');
+                  } catch {
+                    setGpuActionStatus('Offload error');
+                  }
+                  setTimeout(() => setGpuActionStatus(null), 2500);
+                }}
+                className="py-1.5 px-2 rounded-lg bg-canvas hover:bg-surface border border-border-subtle text-text-primary text-[11px] font-medium transition-colors cursor-pointer"
+              >
+                💤 Offload GPU Now
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setGpuActionStatus('Restarting Brain...');
+                  try {
+                    await fetch(`${apiBaseUrl}/api/system/restart`, { method: 'POST' });
+                  } catch {}
+                }}
+                className="py-1.5 px-2 rounded-lg bg-canvas hover:bg-rose-950/40 border border-border-subtle hover:border-rose-700/50 text-text-primary hover:text-rose-300 text-[11px] font-medium transition-colors cursor-pointer"
+              >
+                🔄 Restart Brain
+              </button>
             </div>
           </div>
 

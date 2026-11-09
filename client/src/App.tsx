@@ -21,7 +21,8 @@ import {
   X,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSessionStore, QueuedMessage } from './store/useSessionStore';
+import { useSessionStore,
+  FileAttachmentItem, QueuedMessage } from './store/useSessionStore';
 import { useArtifactStore, WorkbenchTab } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
 import { SessionList } from './components/left-rail/SessionList';
@@ -29,6 +30,7 @@ import { SkillsDrawer } from './components/left-rail/SkillsDrawer';
 import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
 import { SettingsModal } from './components/left-rail/SettingsModal';
 import { MobileRemoteModal } from './components/left-rail/MobileRemoteModal';
+import { AutomationsModal } from './components/left-rail/AutomationsModal';
 import { ChatFeed } from './components/center-canvas/ChatFeed';
 import { PromptBar } from './components/center-canvas/PromptBar';
 import { WorkbenchEditor } from './components/right-canvas/WorkbenchEditor';
@@ -87,6 +89,10 @@ export const App: React.FC = () => {
     zoomIn,
     zoomOut,
     resetZoom,
+    threadHistory,
+    threadHistoryIndex,
+    goBackThread,
+    goForwardThread,
   } = useSessionStore();
 
   const {
@@ -108,6 +114,7 @@ export const App: React.FC = () => {
   const [showRightDrawer, setShowRightDrawer] = useState(window.innerWidth > 1100);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteOpen, setIsRemoteOpen] = useState(false);
+  const [isAutomationsOpen, setIsAutomationsOpen] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
@@ -270,21 +277,21 @@ export const App: React.FC = () => {
               }
               if (payload.tabby || payload.telemetry) {
                 setTelemetry({
-                  vramUsedGb: payload.telemetry?.vramUsedGb ?? 6.8,
+                  vramUsedGb: payload.telemetry?.vramUsedGb ?? 14.8,
                   vramTotalGb: payload.telemetry?.vramTotalGb ?? 16.0,
-                  vramPercent: payload.telemetry?.vramPercent ?? 42,
+                  vramPercent: payload.telemetry?.vramPercent ?? 92,
                   hostRamUsedGb: payload.telemetry?.hostRamUsedGb ?? 24.0,
                   hostRamTotalGb: payload.telemetry?.hostRamTotalGb ?? 128.0,
                   hostRamPercent: payload.telemetry?.hostRamPercent ?? 19,
                   gpuUtilization: payload.telemetry?.gpuUtilization ?? 12,
                   cpuUtilization: payload.telemetry?.cpuUtilization ?? 8,
-                  activeTier: payload.tabby?.activeTier || 'medium',
-                  activeModel: payload.tabby?.activeModel || 'Qwen3.5-9B-EXL3-4.0bpw',
+                  activeTier: payload.tabby?.activeTier || 'high',
+                  activeModel: payload.tabby?.activeModel || 'qwen3.8-flash-next-iq3_s',
                   tokensPerSec: payload.tabby?.tokensPerSec ?? 74.2,
                   lastSwapDurationMs: payload.tabby?.lastSwapDurationMs ?? 840,
                   sysramCache: payload.tabby?.sysramCache,
                   daemonPort: payload.ports?.daemonPort ?? 3390,
-                  tabbyPort: payload.ports?.tabbyPort ?? 3450,
+                  tabbyPort: payload.ports?.tabbyPort ?? 8080,
                   lanUrl: payload.ports?.lanUrl ?? window.location.origin,
                 });
               }
@@ -312,6 +319,9 @@ export const App: React.FC = () => {
               } else {
                 updateLastAssistantMessage(payload.chunk, payload.output_tokens);
               }
+            } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
+              finalizeAssistantMessage();
+              setIsGenerating(false);
             } else if (type === 'STEP_NOTE_COMMITTED') {
               commitAssistantStepNote(payload.note, payload.committed_content);
             } else if (type === 'SUBAGENT_EVENT') {
@@ -389,7 +399,8 @@ export const App: React.FC = () => {
     text: string,
     images?: string[],
     tierOverride?: ModelTier,
-    thinkingBudgetOverride?: ThinkingBudget
+    thinkingBudgetOverride?: ThinkingBudget,
+    attachments?: FileAttachmentItem[]
   ) => {
     const tier = tierOverride || selectedTier;
     const budget = thinkingBudgetOverride || thinkingBudget;
@@ -399,6 +410,7 @@ export const App: React.FC = () => {
       role: 'user',
       content: text,
       images,
+      attachments,
       timestamp: Date.now(),
     });
 
@@ -413,10 +425,10 @@ export const App: React.FC = () => {
       thinkingBudget: budget,
       modelName:
         tier === 'low'
-          ? 'Qwen3.5-4B-EXL3-4.5bpw'
+          ? 'Qwen3.5-4B-EXL3-4.0bpw'
           : tier === 'medium'
-          ? 'Qwen3.5-9B-EXL3-4.0bpw'
-          : 'Qwen3.8-27B-VL-EXL3-3.5bpw',
+          ? 'Qwen3.8-27B-EXL3-11.5GB'
+          : 'Qwen 3.8 Flash-Next (Strata IQ3_S + Vision)',
       timestamp: Date.now(),
       toolCalls: [],
     });
@@ -433,6 +445,7 @@ export const App: React.FC = () => {
             session_id: sessionId,
             prompt: text,
             images,
+            attachments,
             tier,
             thinking_budget: budget,
           },
@@ -465,29 +478,51 @@ export const App: React.FC = () => {
     if (!isGenerating && messageQueue.length > 0) {
       const next = dequeueMessage();
       if (next) {
-        handleSendPrompt(next.text, next.images, next.tier, next.thinkingBudget);
+        handleSendPrompt(next.text, next.images, next.tier, next.thinkingBudget, next.attachments);
       }
     }
   }, [isGenerating, messageQueue.length]);
 
   const handleStopGeneration = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          id: 'cancel-' + Date.now(),
-          type: 'CANCEL_GENERATION',
-          payload: { thread_id: sessionId, session_id: sessionId },
-        })
-      );
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            id: 'stop-' + Date.now(),
+            type: 'STOP_GENERATION',
+            payload: { thread_id: sessionId, session_id: sessionId },
+          })
+        );
+        wsRef.current.send(
+          JSON.stringify({
+            id: 'cancel-' + Date.now(),
+            type: 'CANCEL_GENERATION',
+            payload: { thread_id: sessionId, session_id: sessionId },
+          })
+        );
+      }
+    } catch (e) {
+      console.warn('[App] WebSocket stop error:', e);
     }
+
+    // HTTP Stop Fallback - fire both thread and universal endpoints immediately
+    const stopUrl = `${apiBaseUrl}/api/threads/${sessionId}/stop`;
+    fetch(stopUrl, { method: 'POST' }).catch(() => {});
+    fetch(`${apiBaseUrl}/api/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: sessionId, session_id: sessionId }),
+    }).catch(() => {});
+
     finalizeAssistantMessage();
     setIsGenerating(false);
   };
 
-  const handleQueuePrompt = (text: string, images?: string[]) => {
+  const handleQueuePrompt = (text: string, images?: string[], attachments?: FileAttachmentItem[]) => {
     enqueueMessage({
       text,
       images,
+      attachments,
       tier: selectedTier,
       thinkingBudget,
     });
@@ -497,7 +532,7 @@ export const App: React.FC = () => {
     removeQueuedMessage(item.id);
     handleStopGeneration();
     setTimeout(() => {
-      handleSendPrompt(item.text, item.images, item.tier, item.thinkingBudget);
+      handleSendPrompt(item.text, item.images, item.tier, item.thinkingBudget, item.attachments);
     }, 80);
   };
 
@@ -677,15 +712,25 @@ export const App: React.FC = () => {
               </button>
               <button
                 type="button"
-                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] transition-colors"
-                title="Back"
+                disabled={threadHistoryIndex <= 0}
+                onClick={() => {
+                  const target = goBackThread();
+                  if (target) handleSelectThread(target);
+                }}
+                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                title="Back in Conversation History"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
-                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] transition-colors"
-                title="Forward"
+                disabled={threadHistoryIndex >= threadHistory.length - 1}
+                onClick={() => {
+                  const target = goForwardThread();
+                  if (target) handleSelectThread(target);
+                }}
+                className="p-1 rounded-md text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20] disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                title="Forward in Conversation History"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
@@ -738,10 +783,7 @@ export const App: React.FC = () => {
             onSelectThread={handleSelectThread}
             onDeleteThread={handleDeleteThread}
             onSelectProject={handleSelectProject}
-            onOpenAutomations={() => {
-              setActiveTab('harness');
-              setShowRightDrawer(true);
-            }}
+            onOpenAutomations={() => setIsAutomationsOpen(true)}
             onOpenCustomizations={() => setShowSkillsDrawer(!showSkillsDrawer)}
             searchFilter={searchFilter}
           />
@@ -960,7 +1002,7 @@ export const App: React.FC = () => {
               mobileTab === 'chat' ? 'flex' : 'hidden md:flex'
             }`}
           >
-            <ChatFeed />
+            <ChatFeed onQuickSend={(p) => handleSendPrompt(p)} />
             <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
               {/* Antigravity Floating Pills (Review & Status) */}
               {(totalTasks > 0 || isGenerating) && (
@@ -968,8 +1010,15 @@ export const App: React.FC = () => {
                   {totalTasks > 0 && (
                     <button
                       type="button"
-                      onClick={() => setMobileTab('tasks')}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#1C1D20] border border-[#2B2C30] hover:bg-[#25262B] transition-colors shadow-sm"
+                      onClick={() => {
+                        if (window.innerWidth < 768) {
+                          setMobileTab('tasks');
+                        } else {
+                          setActiveTab('tasks');
+                          setShowRightDrawer(true);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#1C1D20] border border-[#2B2C30] hover:bg-[#25262B] transition-colors shadow-sm cursor-pointer"
                     >
                       <span>{totalTasks} tasks ({completedTasks} completed)</span>
                       <ChevronRight className="w-3 h-3 text-[#9AA0A6]" />
@@ -1146,7 +1195,7 @@ export const App: React.FC = () => {
               {activeTab === 'preview' && <VisionPreviewTab />}
               {activeTab === 'harness' && <HarnessWorkbenchTab />}
               {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
-              {activeTab === 'plan' && <PlanViewer />}
+              {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
               {activeTab === 'evidence' && <EvidenceDrawer />}
             </div>
           )}
@@ -1158,6 +1207,11 @@ export const App: React.FC = () => {
       {/* Modals */}
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <MobileRemoteModal isOpen={isRemoteOpen} onClose={() => setIsRemoteOpen(false)} />
+      <AutomationsModal
+        isOpen={isAutomationsOpen}
+        onClose={() => setIsAutomationsOpen(false)}
+        onRunAutomationNow={(prompt, tier) => handleSendPrompt(prompt, undefined, tier)}
+      />
     </div>
   );
 };

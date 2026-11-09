@@ -1,3 +1,14 @@
+process.on('unhandledRejection', (reason: any) => {
+  if (
+    reason?.name === 'AbortError' ||
+    reason?.message?.toLowerCase().includes('abort') ||
+    reason?.code === 'ABORT_ERR'
+  ) {
+    return;
+  }
+  console.error('[CentralBrain] Unhandled Rejection:', reason);
+});
+
 import Fastify, { FastifyInstance } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
@@ -13,6 +24,7 @@ import { pruneChatMessages } from './utils/messagePruning.js';
 import { detectPrematureStop } from './agent/prematureStop.js';
 import { parseAntigravitySlashCommand } from './agent/slashCommands.js';
 import { createPromptTurnHandler } from './agent/promptTurn.js';
+import { AttachmentManager, RawAttachmentInput } from './files/attachmentManager.js';
 
 import {
   allocateRuntimePorts,
@@ -98,10 +110,11 @@ export async function createDaemonServer(options?: {
   // Trigger non-blocking SysRAM pre-warming of inactive EXL2/EXL3 tiers
   void tabby.prewarmInactiveTiersInSysRam();
 
+  const attachmentManager = new AttachmentManager(REPO_ROOT);
   const mcp = new McpClientManager(REPO_ROOT);
   const skills = new SkillManager(REPO_ROOT);
   const terminal = new SharedTerminalManager(REPO_ROOT);
-  const tools = new BuiltinToolExecutor(db, terminal, mcp, skills);
+  const tools = new BuiltinToolExecutor(db, terminal, mcp, skills, attachmentManager);
 
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024 });
   await app.register(fastifyCors, { origin: '*' });
@@ -147,7 +160,7 @@ export async function createDaemonServer(options?: {
     const pragmas = db.getPragmas();
     return {
       status: 'ok',
-      version: '2.0.0',
+      version: '2.1.0',
       engine: 'Fastify Headless Core + TabbyAPI EXL2/EXL3 + Harness²',
       ports,
       sqlitePragmas: pragmas,
@@ -512,6 +525,63 @@ export async function createDaemonServer(options?: {
     return { cleared: true };
   });
 
+  const stopGenerationHandler = async (threadId?: string) => {
+    let abortedCount = 0;
+    if (threadId) {
+      const ctrl = activeAbortControllers.get(threadId);
+      if (ctrl) {
+        try { ctrl.abort(); } catch {}
+        activeAbortControllers.delete(threadId);
+        abortedCount++;
+      }
+      for (const s of db.getActiveStreamsForThread(threadId)) {
+        db.finalizeStreamingMessage(s.messageId);
+      }
+      db.updateThread(threadId, { status: 'idle' });
+    }
+    // Abort all active controllers if threadId not specifically mapped or if threadId is omitted
+    if (abortedCount === 0 || !threadId) {
+      for (const [id, c] of activeAbortControllers.entries()) {
+        try { c.abort(); } catch {}
+        activeAbortControllers.delete(id);
+        if (id) {
+          for (const s of db.getActiveStreamsForThread(id)) {
+            db.finalizeStreamingMessage(s.messageId);
+          }
+          db.updateThread(id, { status: 'idle' });
+        }
+        abortedCount++;
+      }
+    }
+    broadcastSync({
+      type: 'TURN_ABORTED',
+      payload: { thread_id: threadId, session_id: threadId },
+    });
+    broadcastSync({
+      type: 'TOKEN_STREAM',
+      payload: {
+        thread_id: threadId,
+        session_id: threadId,
+        chunk: '',
+        is_finished: true,
+      },
+    });
+    return { stopped: true, abortedCount, threadId };
+  };
+
+  app.post('/api/threads/:id/stop', async (req) => {
+    const { id } = req.params as { id: string };
+    return await stopGenerationHandler(id);
+  });
+  app.post('/api/threads/:id/cancel', async (req) => {
+    const { id } = req.params as { id: string };
+    return await stopGenerationHandler(id);
+  });
+  app.post('/api/stop', async (req) => {
+    const body = (req.body || {}) as { thread_id?: string; session_id?: string };
+    return await stopGenerationHandler(body.thread_id || body.session_id);
+  });
+
   // ==================== MESSAGES, TOOLS & CHECKPOINTS API ====================
   app.get('/api/threads/:id/messages', async (req) => {
     const { id } = req.params as { id: string };
@@ -715,9 +785,134 @@ export async function createDaemonServer(options?: {
     return snap;
   });
 
+  // ==================== SCHEDULED TASKS & AUTOMATIONS API (ANTIGRAVITY 2.0) ====================
+  const automationsFilePath = path.join(REPO_ROOT, '.localgravity', 'harness', 'automations.json');
+  const readAutomations = (): Array<{
+    id: string;
+    name: string;
+    cron: string;
+    prompt: string;
+    tier: ModelTier;
+    enabled: boolean;
+    lastRunAt: string | null;
+  }> => {
+    try {
+      if (fs.existsSync(automationsFilePath)) {
+        return JSON.parse(fs.readFileSync(automationsFilePath, 'utf-8'));
+      }
+    } catch {}
+    const defaults = [
+      {
+        id: 'auto-strata-health',
+        name: 'Strata & Vision Health Check',
+        cron: '0 */6 * * *',
+        prompt: '/vision Inspect Strata Qwen 3.8 Flash-Next health and verify vision readiness.',
+        tier: 'high' as ModelTier,
+        enabled: true,
+        lastRunAt: null,
+      },
+      {
+        id: 'auto-harness-compact',
+        name: 'Harness² Experience Compaction',
+        cron: '0 3 * * *',
+        prompt: '/learn Summarize recent tool lessons into .localgravity/harness/EXPERIENCE.md',
+        tier: 'high' as ModelTier,
+        enabled: false,
+        lastRunAt: null,
+      },
+    ];
+    try {
+      fs.mkdirSync(path.dirname(automationsFilePath), { recursive: true });
+      fs.writeFileSync(automationsFilePath, JSON.stringify(defaults, null, 2), 'utf-8');
+    } catch {}
+    return defaults;
+  };
+
+  const writeAutomations = (items: any[]) => {
+    try {
+      fs.mkdirSync(path.dirname(automationsFilePath), { recursive: true });
+      fs.writeFileSync(automationsFilePath, JSON.stringify(items, null, 2), 'utf-8');
+    } catch {}
+  };
+
+  app.get('/api/automations', async () => {
+    return { automations: readAutomations() };
+  });
+
+  app.post('/api/automations', async (req) => {
+    const body = (req.body || {}) as any;
+    const list = readAutomations();
+    const item = {
+      id: 'auto-' + Date.now().toString(36),
+      name: body.name || 'Scheduled Task',
+      cron: body.cron || '0 9 * * *',
+      prompt: body.prompt || '/goal Check project status',
+      tier: (body.tier || 'high') as ModelTier,
+      enabled: body.enabled ?? true,
+      lastRunAt: null,
+    };
+    const next = [item, ...list];
+    writeAutomations(next);
+    return { automation: item, automations: next };
+  });
+
+  app.patch('/api/automations/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as any;
+    const list = readAutomations().map((a) => (a.id === id ? { ...a, ...body } : a));
+    writeAutomations(list);
+    return { automations: list };
+  });
+
+  app.delete('/api/automations/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const list = readAutomations().filter((a) => a.id !== id);
+    writeAutomations(list);
+    return { automations: list };
+  });
+
+  // ==================== UPLOADED FILES SERVING & UPLOAD API ====================
+  app.get('/api/uploads/:threadId/:filename', async (req, reply) => {
+    const { threadId, filename } = req.params as { threadId: string; filename: string };
+    const safeThread = threadId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeFile = path.basename(decodeURIComponent(filename));
+    const filePath = path.join(attachmentManager.getUploadsRoot(), safeThread, safeFile);
+    if (!fs.existsSync(filePath)) {
+      return reply.code(404).send({ error: 'File not found' });
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.bmp': 'image/bmp',
+      '.pdf': 'application/pdf',
+      '.json': 'application/json',
+      '.csv': 'text/csv',
+      '.txt': 'text/plain',
+      '.mp3': 'audio/mpeg',
+      '.mp4': 'video/mp4',
+      '.zip': 'application/zip',
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+    reply.header('Content-Type', contentType);
+    const stream = fs.createReadStream(filePath);
+    return reply.send(stream);
+  });
+
+  app.post('/api/threads/:id/upload', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as RawAttachmentInput;
+    const saved = await attachmentManager.saveAttachment(id, body);
+    return saved;
+  });
+
   // ==================== TURN EXECUTION ENGINE (WITH HARNESS² + PROPOSE-PROBE-COMPOSE) ====================
-    const handlePromptTurn = createPromptTurnHandler({
-    db, tabby, mcp, skills, tools, harness, terminal,
+  const handlePromptTurn = createPromptTurnHandler({
+    db, tabby, mcp, skills, tools, harness, terminal, attachmentManager,
     broadcastSync, activeAbortControllers, repoRoot: REPO_ROOT,
   });
 
@@ -820,6 +1015,9 @@ export async function createDaemonServer(options?: {
             tier,
             thinkingBudget: budget,
             attachments: payload.images || payload.attachments || [],
+          }).catch((err) => {
+            if (err?.name === 'AbortError' || err?.message?.toLowerCase().includes('abort')) return;
+            console.error('[CentralBrain] Error in prompt turn:', err);
           });
         } else if (type === 'TIER_SWITCH') {
           const newTier: ModelTier = payload.new_tier || payload.tier || 'high';
@@ -863,16 +1061,9 @@ export async function createDaemonServer(options?: {
               stderr: pending.stderr || payload.error || '',
             });
           }
-        } else if (type === 'STOP_GENERATION') {
+        } else if (type === 'STOP_GENERATION' || type === 'CANCEL_GENERATION') {
           const threadId = payload?.thread_id || payload?.session_id || targetThreadId;
-          const ctrl = activeAbortControllers.get(threadId);
-          if (ctrl) {
-            ctrl.abort();
-            activeAbortControllers.delete(threadId);
-          }
-          if (threadId) {
-            db.updateThread(threadId, { status: 'idle' });
-          }
+          await stopGenerationHandler(threadId);
         } else if (type === 'ARTIFACT_SYNC') {
           broadcastSync({
             type: 'ARTIFACT_SYNC',

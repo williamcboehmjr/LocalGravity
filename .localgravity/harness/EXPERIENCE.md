@@ -88,3 +88,94 @@
 - **Decision logged:** deliberately did NOT invent new refactors or commit the 50-file WIP unattended — that would violate "don't do crazy" + checkpoint discipline. Left working tree untouched for user to review on waking.
 - **[PowerShell rule held in practice]**: used pure cmdlets (`Get-ChildItem -Recurse | Sort LastWriteTime`, `Test-Path`) with no bash-isms — zero errors, validating the new tools.md rules.
 
+### [PPC Composed Fix • 2026-11-08T15:48:11.777Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -Command \"Get-ChildItem -Recurse server/src -Include *.ts | Select-String -Pattern 'image|vision|base64|multimodal' | Select-Object Filename,LineNumber,@{n='L';e={$_.Line.Trim()}} | Format-Table -AutoSize\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:165 + ... l' | Select-Object Filename,LineNumber,@{n='L';e={.Line.Trim()}} | Fo ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T15:48:11.777Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -Command "Get-ChildItem -Recu`) encountered error `At line:1 char:165 + ... l' | Select-Object Filename,LineNumber,@{n='L';e={.Line`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:03:26.393Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Sue\\.gemini\\antigravity\\scratch\\LocalGravity\\tools\\vision_probe.ps1\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:03:26.393Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -ExecutionPolicy Bypass -File "C:`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:09:35.064Z]
+- **Failed Tool**: `mcp_fetch_fetch` (`mcp_fetch_fetch({"url":"https://duckduckgo.com/html/?q=strata+llama.cpp+%22--mmproj%22+vision+flag+launch+config","max_length":4000})`)
+- **Initial Failure Telemetry**: `Error executing tool fetch: The sites robots.txt (https://duckduckgo.com/robots.txt), specifies that autonomous fetching of this page is not allowed, <useragent`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:09:35.064Z]**: Tool `mcp_fetch_fetch` (`mcp_fetch_fetch({"url":"https://duckduckgo.com/html/?q=strata+llama.cpp+%22--mmp`) encountered error `Error executing tool fetch: The sites robots.txt (https://duckduckgo.com/robots.`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for mcp_fetch_fetch with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:12:28.479Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Get-ChildItem -Path C:\\Users\\Sue -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'mmproj|vision|projector' } | Select-Object FullName, @{n='MB';e={[math]::Round($_.Length/1MB)}} | Format-Table -AutoSize\"","cwd":"C:/Users/Sue"})`)
+- **Initial Failure Telemetry**: `At line:1 char:189 + ... ector' } | Select-Object FullName, @{n='MB';e={[math]::Round(.Length/ ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:12:28.479Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Comm`) encountered error `At line:1 char:189 + ... ector' } | Select-Object FullName, @{n='MB';e={[math]::`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:13:24.501Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\Sue\\find_mmproj.ps1","cwd":"C:/Users/Sue"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:13:24.501Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:13:46.876Z]
+- **Failed Tool**: `mcp_context7_invoke` (`mcp_context7_invoke({"action":"search","payload":{"query":"llama.cpp server multimodal vision mmproj image input flags","libraryId":"/ggml-org/llama.cpp"}})`)
+- **Initial Failure Telemetry**: `MCP Error (-32602): Tool invoke not found`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:13:46.876Z]**: Tool `mcp_context7_invoke` (`mcp_context7_invoke({"action":"search","payload":{"query":"llama.cpp server mult`) encountered error `MCP Error (-32602): Tool invoke not found`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for mcp_context7_invoke with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:14:08.959Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\Sue\\strata_vision.ps1 2>&1 | Select-Object -First 60","cwd":"C:/Users/Sue"})`)
+- **Initial Failure Telemetry**: `Exit code 1`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:14:08.959Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error `Exit code 1`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:15:28.537Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Write-Output '=== F:\\Models\\Qwen3.8-Flash-Next-IQ3_S ==='; Get-ChildItem 'F:\\Models\\Qwen3.8-Flash-Next-IQ3_S' -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Output ('{0,7} MB  {1}' -f [math]::Round($_.Length/1MB), $_.Name) }; Write-Output ''; Write-Output '=== F:\\packs\\iq3_s (recursive) ==='; Get-ChildItem 'F:\\packs\\iq3_s' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Output ('{0,7} MB  {1}' -f [math]::Round($_.Length/1MB), $_.FullName) }\"","cwd":"C:/Users/Sue"})`)
+- **Initial Failure Telemetry**: `At line:1 char:213 + ... Each-Object { Write-Output ('{0,7} MB  {1}' -f [math]::Round(.Length/ ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:15:28.537Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Comm`) encountered error `At line:1 char:213 + ... Each-Object { Write-Output ('{0,7} MB  {1}' -f [math]::`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:50:12.400Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"Write-Output \"=== PROCESS PATH ===\"; Get-CimInstance Win32_Process -Filter \"Name like '%trata%' or Name like '%server llama%' or Name like '%llama%'\" | Select-Object ProcessId,Name,ExecutablePath; Write-Output \"=== PORT 8080 OWNER ===\"; $c=Get-NetTCPConnection -LocalPort 8080 -State Listen -EA SilentlyContinue; if($c){(Get-Process -Id $c.OwningProcess).Path}"})`)
+- **Initial Failure Telemetry**: `Exit code 1`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:50:12.400Z]**: Tool `run_terminal` (`run_terminal({"command":"Write-Output "=== PROCESS PATH ==="; Get-CimInstance Wi`) encountered error `Exit code 1`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:51:49.214Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/Sue/vision_probe.ps1\"","cwd":"C:/Users/Sue"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:51:49.214Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-08T16:53:01.576Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue","command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/Sue/vision_probe.ps1\" 2>$null"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-08T16:53:01.576Z]**: Tool `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue","command":"powershell.exe -NoProfile -Executi`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T15:22:15.111Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"node .runtime/pdf_extract4.js \".runtime/uploads/908b4fae-7138-463b-9374-3e69d07a39e8/Untitled document.pdf\"; Write-Output '--- TEXT ---'; Get-Content .runtime/pdf_text.txt","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T15:22:15.111Z]**: Tool `run_terminal` (`run_terminal({"command":"node .runtime/pdf_extract4.js ".runtime/uploads/908b4fa`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-09T15:24:53.612Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"$env:NODE_OPTIONS=''; & \"C:\\Program Files\\nodejs\\node.exe\" --stack-size=2000 -e \"console.log('node ok')\" 2>&1; Write-Output '---'; node .runtime/pdf_extract5.js \".runtime/uploads/908b4fae-7138-463b-9374-3e69d07a39e8/Untitled document.pdf\" 2>&1 | Select-Object -First 3","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: ` [Command timed out after 30000ms]`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-09T15:24:53.612Z]**: Tool `run_terminal` (`run_terminal({"command":"env:NODE_OPTIONS=''; & "C:Program Filesnodejsnode.exe" `) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

@@ -706,12 +706,33 @@ export class TabbyEngine {
             requestBody.reasoning_effort = 'low';
           }
         }
-        const response = await fetch(endpointUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestBody),
-          signal: params.abortSignal,
-        });
+        let response: Response;
+        try {
+          response = await fetch(endpointUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestBody),
+            signal: params.abortSignal,
+          });
+        } catch (fetchErr: any) {
+          if (
+            params.abortSignal?.aborted ||
+            fetchErr?.name === 'AbortError' ||
+            fetchErr?.message?.toLowerCase().includes('abort') ||
+            fetchErr?.code === 'ABORT_ERR'
+          ) {
+            this.swapStatus = 'ready';
+            this.resetIdleTimer();
+            return {
+              content,
+              thinkingContent: '',
+              thinkingDurationMs: 0,
+              thinkingTokens: 0,
+              outputTokens: 0,
+            };
+          }
+          throw fetchErr;
+        }
 
         if (!response.ok) {
           const errText = await response.text().catch(() => '');
@@ -737,93 +758,106 @@ export class TabbyEngine {
           let rawBuffer = '';
           const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            rawBuffer += decoder.decode(value, { stream: true });
-            const lines = rawBuffer.split('\n');
-            rawBuffer = lines.pop() || '';
+          const abortHandler = () => {
+            try { void reader.cancel(); } catch {}
+          };
+          params.abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith('data:')) continue;
-              const dataStr = trimmed.slice(5).trim();
-              if (dataStr === '[DONE]') break;
+          try {
+            while (true) {
+              if (params.abortSignal?.aborted) {
+                try { await reader.cancel(); } catch {}
+                break;
+              }
+              const { done, value } = await reader.read();
+              if (done || params.abortSignal?.aborted) break;
+              rawBuffer += decoder.decode(value, { stream: true });
+              const lines = rawBuffer.split('\n');
+              rawBuffer = lines.pop() || '';
 
-              try {
-                const parsed = JSON.parse(dataStr);
-                const delta = parsed.choices?.[0]?.delta;
-                if (!delta) continue;
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const dataStr = trimmed.slice(5).trim();
+                if (dataStr === '[DONE]') break;
 
-                if (delta.reasoning_content) {
-                  if (params.thinkingBudget !== 'off') {
-                    thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
-                    thinkingContent += delta.reasoning_content;
-                    thinkingDurationMs = Math.round(performance.now() - startTime);
-                    params.onThoughtDelta(
-                      delta.reasoning_content,
-                      thinkingDurationMs,
-                      thinkingTokens
-                    );
-                  }
-                }
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  const delta = parsed.choices?.[0]?.delta;
+                  if (!delta) continue;
 
-                if (delta.content) {
-                  let textChunk: string = delta.content;
-                  if (textChunk.includes('<think>')) {
-                    inThinkTag = true;
-                    textChunk = textChunk.replace('<think>', '');
-                  }
-                  if (textChunk.includes('</think>')) {
-                    const [thoughtPart, answerPart] = textChunk.split('</think>');
-                    if (thoughtPart && params.thinkingBudget !== 'off') {
-                      thinkingTokens += Math.max(1, Math.ceil(thoughtPart.length / 4));
-                      thinkingContent += thoughtPart;
+                  if (delta.reasoning_content) {
+                    if (params.thinkingBudget !== 'off') {
+                      thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
+                      thinkingContent += delta.reasoning_content;
                       thinkingDurationMs = Math.round(performance.now() - startTime);
-                      params.onThoughtDelta(thoughtPart, thinkingDurationMs, thinkingTokens);
+                      params.onThoughtDelta(
+                        delta.reasoning_content,
+                        thinkingDurationMs,
+                        thinkingTokens
+                      );
                     }
-                    inThinkTag = false;
-                    textChunk = answerPart || '';
                   }
 
-                  if (inThinkTag && params.thinkingBudget !== 'off') {
-                    // Enforce ~250 token budget for 'fast'
-                    if (thinkingTokens < effectiveMaxThinkingTokens) {
-                      thinkingTokens += Math.max(1, Math.ceil(textChunk.length / 4));
-                      thinkingContent += textChunk;
-                      thinkingDurationMs = Math.round(performance.now() - startTime);
-                      params.onThoughtDelta(textChunk, thinkingDurationMs, thinkingTokens);
-                    } else {
+                  if (delta.content) {
+                    let textChunk: string = delta.content;
+                    if (textChunk.includes('<think>')) {
+                      inThinkTag = true;
+                      textChunk = textChunk.replace('<think>', '');
+                    }
+                    if (textChunk.includes('</think>')) {
+                      const [thoughtPart, answerPart] = textChunk.split('</think>');
+                      if (thoughtPart && params.thinkingBudget !== 'off') {
+                        thinkingTokens += Math.max(1, Math.ceil(thoughtPart.length / 4));
+                        thinkingContent += thoughtPart;
+                        thinkingDurationMs = Math.round(performance.now() - startTime);
+                        params.onThoughtDelta(thoughtPart, thinkingDurationMs, thinkingTokens);
+                      }
                       inThinkTag = false;
+                      textChunk = answerPart || '';
                     }
-                  } else if (textChunk) {
-                    outputTokens += Math.max(1, Math.ceil(textChunk.length / 4));
-                    content += textChunk;
-                    params.onTokenDelta(textChunk, outputTokens);
-                  }
-                }
 
-                if (delta.tool_calls) {
-                  for (const tc of delta.tool_calls) {
-                    const idx = tc.index ?? 0;
-                    if (!pendingToolCalls.has(idx)) {
-                      pendingToolCalls.set(idx, { id: tc.id, name: tc.function?.name || '', arguments: '' });
+                    if (inThinkTag && params.thinkingBudget !== 'off') {
+                      // Enforce ~250 token budget for 'fast'
+                      if (thinkingTokens < effectiveMaxThinkingTokens) {
+                        thinkingTokens += Math.max(1, Math.ceil(textChunk.length / 4));
+                        thinkingContent += textChunk;
+                        thinkingDurationMs = Math.round(performance.now() - startTime);
+                        params.onThoughtDelta(textChunk, thinkingDurationMs, thinkingTokens);
+                      } else {
+                        inThinkTag = false;
+                      }
+                    } else if (textChunk) {
+                      outputTokens += Math.max(1, Math.ceil(textChunk.length / 4));
+                      content += textChunk;
+                      params.onTokenDelta(textChunk, outputTokens);
                     }
-                    const item = pendingToolCalls.get(idx)!;
-                    if (tc.id) item.id = tc.id;
-                    if (tc.function?.name) item.name = tc.function.name;
-                    if (tc.function?.arguments) item.arguments += tc.function.arguments;
                   }
+
+                  if (delta.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                      const idx = tc.index ?? 0;
+                      if (!pendingToolCalls.has(idx)) {
+                        pendingToolCalls.set(idx, { id: tc.id, name: tc.function?.name || '', arguments: '' });
+                      }
+                      const item = pendingToolCalls.get(idx)!;
+                      if (tc.id) item.id = tc.id;
+                      if (tc.function?.name) item.name = tc.function.name;
+                      if (tc.function?.arguments) item.arguments += tc.function.arguments;
+                    }
+                  }
+                } catch {
+                  // Ignore malformed SSE line
                 }
-              } catch {
-                // Ignore malformed SSE line
               }
             }
+          } finally {
+            params.abortSignal?.removeEventListener('abort', abortHandler);
           }
 
-          if (params.onToolCallRequest && pendingToolCalls.size > 0) {
+          if (params.onToolCallRequest && pendingToolCalls.size > 0 && !params.abortSignal?.aborted) {
             for (const [, call] of pendingToolCalls) {
-              if (call.name) {
+              if (call.name && !params.abortSignal?.aborted) {
                 try {
                   const parsed = call.arguments ? JSON.parse(call.arguments) : {};
                   await params.onToolCallRequest(call.name, parsed);
@@ -835,7 +869,7 @@ export class TabbyEngine {
           }
 
           // Also check for XML or JSON <tool_call> blocks inside content (and strip them from displayed content)
-          if (params.onToolCallRequest && content.includes('<tool_call>')) {
+          if (params.onToolCallRequest && content.includes('<tool_call>') && !params.abortSignal?.aborted) {
             // Pattern 1: XML <tool_call><function=name><parameter=k>v</parameter></function></tool_call>
             const xmlToolRegex = /<tool_call>[\s\S]*?<function=([a-zA-Z0-9_-]+)>([\s\S]*?)<\/function>[\s\S]*?<\/tool_call>/g;
             let match;
@@ -892,7 +926,12 @@ export class TabbyEngine {
           };
         }
       } catch (err: any) {
-        if (err?.name === 'AbortError') {
+        if (
+          err?.name === 'AbortError' ||
+          params.abortSignal?.aborted ||
+          err?.message?.toLowerCase().includes('abort') ||
+          err?.cause?.name === 'AbortError'
+        ) {
           this.swapStatus = 'ready';
           this.resetIdleTimer();
           return { content, thinkingContent, thinkingDurationMs, thinkingTokens, outputTokens };
@@ -901,7 +940,13 @@ export class TabbyEngine {
       }
     }
 
-        // TabbyAPI / Strata Unreachable Fallback Handler:
+        if (params.abortSignal?.aborted) {
+      this.swapStatus = 'ready';
+      this.resetIdleTimer();
+      return { content, thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens: 0 };
+    }
+
+    // TabbyAPI / Strata Unreachable Fallback Handler:
     const targetService = params.tier === 'high' ? 'Strata Engine (Qwen 3.8 Flash-Next High)' : 'TabbyAPI';
     const targetUrl = params.tier === 'high' ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
     const targetPort = '8080';

@@ -51,7 +51,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
 
       return {
         available: false,
-        currentVersion: '2.0.0',
+        currentVersion: '2.1.0',
       };
     } catch (err: any) {
       console.warn('[Updater] Tauri native check failed or offline:', err);
@@ -65,12 +65,12 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       headers: { Accept: 'application/vnd.github.v3+json' },
     });
     if (!res.ok) {
-      return { available: false, currentVersion: '2.0.0' };
+      return { available: false, currentVersion: '2.1.0' };
     }
 
     const data = await res.json();
     const latestTag = data.tag_name?.replace(/^v/, '') || '';
-    const currentVersion = '2.0.0';
+    const currentVersion = '2.1.0';
 
     const isNewer = compareSemver(latestTag, currentVersion) > 0;
 
@@ -84,7 +84,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
     };
   } catch (webErr) {
     console.warn('[Updater] Web GitHub release check failed:', webErr);
-    return { available: false, currentVersion: '2.0.0' };
+    return { available: false, currentVersion: '2.1.0' };
   }
 }
 

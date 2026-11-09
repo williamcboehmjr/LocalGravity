@@ -18,12 +18,15 @@ export interface FileCheckpointItem {
 }
 
 export type WorkbenchTab = 'none' | 'editor' | 'terminal' | 'preview' | 'harness' | 'tasks' | 'plan' | 'evidence';
+export type ArtifactDocType = 'plan.md' | 'walkthrough.md' | 'task.md';
 
 interface ArtifactState {
   activeTab: WorkbenchTab;
+  activeArtifactDoc: ArtifactDocType;
   taskMarkdown: string;
   parsedTasks: TaskItem[];
   planMarkdown: string;
+  walkthroughMarkdown: string;
   evidenceItems: Array<{
     id: string;
     type: 'screenshot' | 'log' | 'diff';
@@ -45,9 +48,11 @@ interface ArtifactState {
   previewUrl: string;
 
   setActiveTab: (tab: WorkbenchTab) => void;
+  setActiveArtifactDoc: (doc: ArtifactDocType) => void;
   setTaskMarkdown: (md: string) => void;
   toggleTask: (taskId: string) => string;
   setPlanMarkdown: (md: string) => void;
+  setWalkthroughMarkdown: (md: string) => void;
   addEvidence: (item: { type: 'screenshot' | 'log' | 'diff'; title: string; data: string }) => void;
   setWorkspaceFiles: (files: Array<{ path: string; name: string; type: 'file' | 'directory' }>) => void;
   setActiveFile: (path: string, content: string, diffOriginal?: string | null) => void;
@@ -88,13 +93,36 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
   return items;
 }
 
-const initialTaskMd = `# Antigravity 2.0 Hardening Checklist\n\n## Core Engine\n- [x] Dynamic Port Discovery (Never touch 5000/5001)\n- [x] TabbyAPI EXL2/EXL3 Integration (Q4 KV, N-gram x4)\n- [x] SysRAM Inactive Weight Pre-Warmer\n- [x] SQLite WAL Hierarchy (Projects -> Threads -> Messages -> Tools -> Checkpoints)\n- [x] 3-Pane Antigravity 2.0 Obsidian UI + Monaco Diff + xterm.js`;
+const initialTaskMd = `# Antigravity 2.0 Alignment & Hardening\n\n## Core Inference & Vision\n- [x] Strata Engine + Qwen 3.8 Flash-Next (IQ3_S + Vision • 64k Context)\n- [x] Multimodal Vision Grounding (--vision + mmproj-F16.gguf on Port 8080)\n- [x] Instant Stop Generation & AbortController Stream Cancellation\n- [x] Smart 15-Minute GPU Idle Offload & Taskbar Self-Restart Watchdog\n\n## Workstation & UX\n- [x] 19 Built-In Workstation Tools (including inspect_models & test_vision)\n- [x] 3-Pane Antigravity 2.0 Obsidian UI + Monaco Diff + xterm.js\n- [x] Dynamic Port Discovery (Ports 5000/5001 Strictly Untouched)`;
+
+const initialPlanMd = `# LocalGravity 2.0 (Antigravity Clone Architecture)
+
+> [!IMPORTANT]
+> **Main Inference Engine:** Strata (\`http://127.0.0.1:8080\`) running **Qwen 3.8 Flash-Next** (\`qwen3.8-flash-next-iq3_s\`, 64k context, \`--vision\` multimodal active).
+
+## System Architecture
+- **Central Brain**: Fastify Headless Core on port \`3390\` + WebSocket Multiplexer (\`/ws/sync\`, \`/ws/terminal\`)
+- **Primary Model**: **Qwen 3.8 Flash-Next High** (Strata IQ3_S Sparse MoE + Vision Tower + Speculative Decoding \`--spec 6\`)
+- **Persistence**: SQLite WAL Hierarchy (\`Projects -> Threads -> Messages -> Tool Executions -> File Checkpoints\`)
+- **19 Workstation Tools**: Full filesystem, AST symbol search, Git workflow, PowerShell terminal, Playwright browser, Windows screen capture, and \`inspect_models\` self-diagnostics.`;
+
+const initialWalkthroughMd = `# Verification & Walkthrough (walkthrough.md)
+
+> [!TIP]
+> All verification artifacts, live screenshots, and end-to-end test results are tracked here.
+
+## Verified Capabilities
+1. **Strata + Qwen 3.8 Flash-Next Vision**: Confirmed \`"images": true\` on \`http://127.0.0.1:8080/v1/models\` and round-trip RGB image recognition.
+2. **Instant Stop Button**: Halts token generation immediately across WebSocket, \`promptTurn.ts\`, and Strata \`fetch\` stream.
+3. **19 Autonomous Tools**: \`inspect_models\` allows the agent to self-diagnose and test vision without guessing.`;
 
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
   activeTab: 'none',
+  activeArtifactDoc: 'plan.md',
   taskMarkdown: initialTaskMd,
   parsedTasks: parseTasksFromMarkdown(initialTaskMd),
-  planMarkdown: `# LocalGravity 2.0 Architecture\n\n- **Backend**: Fastify Headless Core + WebSocket Multiplexer (\`/ws/sync\`, \`/ws/terminal\`)\n- **Inference**: TabbyAPI EXL2/EXL3 3-Tier Suite (\`Low 4B\`, \`Med 9B\`, \`High 27B VL\`) + 3x3 Thinking Matrix (\`Off\`, \`Fast\`, \`Deep\`)\n- **Persistence**: SQLite WAL with 250ms in-flight stream rehydration`,
+  planMarkdown: initialPlanMd,
+  walkthroughMarkdown: initialWalkthroughMd,
   evidenceItems: [],
   workspaceFiles: [],
   activeFilePath: '',
@@ -106,6 +134,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   previewUrl: '',
 
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveArtifactDoc: (doc) => set({ activeArtifactDoc: doc }),
   setTaskMarkdown: (md) =>
     set({
       taskMarkdown: md,
@@ -131,6 +160,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     return newMd;
   },
   setPlanMarkdown: (md) => set({ planMarkdown: md }),
+  setWalkthroughMarkdown: (md) => set({ walkthroughMarkdown: md }),
   addEvidence: (item) =>
     set((state) => ({
       evidenceItems: [

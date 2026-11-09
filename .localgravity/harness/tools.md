@@ -47,3 +47,29 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **playwright** (`browser_navigate`, `browser_snapshot`, …), **github**, **context7**, **time** added; puppeteer removed. New servers attach only after AGY restart / `/mcp reload` + next message. Use real tool names via `call_mcp_tool` when the injected schema advertises a stale name.
 
 - **[PPC Auto-Tool Rule 2026-11-08T09:03:47.979Z]**: Tool `mcp_time_invoke` (`mcp_time_invoke({"action":"get_current_time","payload":{"timezone":"America/Los_`) encountered error `MCP Error (-32602): Unknown tool: invoke`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T15:48:11.777Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -Command "Get-ChildItem -Recu`) encountered error `At line:1 char:165 + ... l' | Select-Object Filename,LineNumber,@{n='L';e={.Line`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:03:26.393Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -ExecutionPolicy Bypass -File "C:`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:09:35.064Z]**: Tool `mcp_fetch_fetch` (`mcp_fetch_fetch({"url":"https://duckduckgo.com/html/?q=strata+llama.cpp+%22--mmp`) encountered error `Error executing tool fetch: The sites robots.txt (https://duckduckgo.com/robots.`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:12:28.479Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Comm`) encountered error `At line:1 char:189 + ... ector' } | Select-Object FullName, @{n='MB';e={[math]::`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:13:24.501Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:13:46.876Z]**: Tool `mcp_context7_invoke` (`mcp_context7_invoke({"action":"search","payload":{"query":"llama.cpp server mult`) encountered error `MCP Error (-32602): Tool invoke not found`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:14:08.959Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error `Exit code 1`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:15:28.537Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -Comm`) encountered error `At line:1 char:213 + ... Each-Object { Write-Output ('{0,7} MB  {1}' -f [math]::`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:50:12.400Z]**: Tool `run_terminal` (`run_terminal({"command":"Write-Output "=== PROCESS PATH ==="; Get-CimInstance Wi`) encountered error `Exit code 1`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:51:49.214Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell.exe -NoProfile -ExecutionPolicy Bypass -File`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-08T16:53:01.576Z]**: Tool `run_terminal` (`run_terminal({"cwd":"C:/Users/Sue","command":"powershell.exe -NoProfile -Executi`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T15:22:15.111Z]**: Tool `run_terminal` (`run_terminal({"command":"node .runtime/pdf_extract4.js ".runtime/uploads/908b4fa`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-09T15:24:53.612Z]**: Tool `run_terminal` (`run_terminal({"command":"env:NODE_OPTIONS=''; & "C:Program Filesnodejsnode.exe" `) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.

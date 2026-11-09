@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Image as ImageIcon,
   X,
+  FileText,
   Zap,
   Square,
   Plus,
@@ -23,8 +24,12 @@ import {
   Clock,
   Trash2,
   Slash,
+  Eye,
+  RefreshCw,
+  Wrench,
+  ShieldCheck,
 } from 'lucide-react';
-import { useSessionStore, QueuedMessage } from '../../store/useSessionStore';
+import { useSessionStore, QueuedMessage, FileAttachmentItem } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { ModelTier, ThinkingBudget } from '../../types/protocol';
@@ -35,19 +40,20 @@ interface PromptBarProps {
     text: string,
     images?: string[],
     tierOverride?: ModelTier,
-    thinkingBudgetOverride?: ThinkingBudget
+    thinkingBudgetOverride?: ThinkingBudget,
+    attachments?: FileAttachmentItem[]
   ) => void;
   onTierChange?: (tier: ModelTier) => void;
   onStop?: () => void;
-  onQueue?: (text: string, images?: string[]) => void;
+  onQueue?: (text: string, images?: string[], attachments?: FileAttachmentItem[]) => void;
   onInterruptAndSend?: (item: QueuedMessage) => void;
   onClearContext?: () => void;
 }
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
-  low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM' },
-  medium: { name: 'Qwen 3.8 27B Medium', sub: 'Fast Workhorse (60+ tok/s)' },
-  high: { name: 'Qwen 3.8 Flash-Next High', sub: 'MoE 176B/6B active (High Horsepower)' },
+  low: { name: 'Qwen 3.5 4B Low', sub: 'Fast • Low VRAM (3.4 GB)' },
+  medium: { name: 'Qwen 3.8 27B Medium', sub: 'Fast Workhorse (EXL3 11.5 GB)' },
+  high: { name: 'Qwen 3.8 Flash-Next High', sub: 'Strata IQ3_S + Vision • 64k Context (Main)' },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -129,6 +135,20 @@ export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommandItem[] = [
     icon: <Clock className="w-3.5 h-3.5 text-orange-400 shrink-0" />,
   },
   {
+    command: '/vision',
+    title: 'Strata Multimodal Vision & Screen Check',
+    description: 'Inspect live desktop screen or verify Qwen 3.8 Flash-Next Vision on Strata port 8080',
+    badge: 'Vision',
+    icon: <Eye className="w-3.5 h-3.5 text-indigo-400 shrink-0" />,
+  },
+  {
+    command: '/restart',
+    title: 'Self-Restart Central Brain',
+    description: 'Signal Windows Taskbar Supervisor to gracefully restart the server & reload state',
+    badge: 'Watchdog',
+    icon: <RefreshCw className="w-3.5 h-3.5 text-emerald-400 shrink-0" />,
+  },
+  {
     command: '/clear',
     title: 'Clear Conversation Thread',
     description: 'Immediately wipe messages in the current conversation thread',
@@ -160,6 +180,15 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
   const [input, setInput] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<FileAttachmentItem[]>([]);
+
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  };
   const [showMentionPopover, setShowMentionPopover] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
   const [showSlashPopover, setShowSlashPopover] = useState(false);
@@ -168,6 +197,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showBudgetMenu, setShowBudgetMenu] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -238,19 +268,38 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     textareaRef.current?.focus();
   };
 
+  const addFile = (file: File) => {
+    const isImg = file.type.startsWith('image/');
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (!dataUrl) return;
+      const item: FileAttachmentItem = {
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+        sizeHuman: formatFileSize(file.size),
+        base64DataUrl: dataUrl,
+        isImage: isImg,
+      };
+      setAttachments((prev) => [...prev, item]);
+      if (isImg) {
+        setImages((prev) => [...prev, dataUrl]);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const addFiles = (files: FileList | File[]) => {
+    Array.from(files).forEach(addFile);
+  };
+
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
     for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
+      if (items[i].kind === 'file') {
         const file = items[i].getAsFile();
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const base64 = event.target?.result as string;
-            if (base64) setImages((prev) => [...prev, base64]);
-          };
-          reader.readAsDataURL(file);
-        }
+        if (file) addFile(file);
       }
     }
   };
@@ -259,31 +308,13 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     e.preventDefault();
     setIsDraggingOver(false);
     const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      Array.from(files).forEach((file) => {
-        if (file.type.startsWith('image/')) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const base64 = event.target?.result as string;
-            if (base64) setImages((prev) => [...prev, base64]);
-          };
-          reader.readAsDataURL(file);
-        }
-      });
-    }
+    if (files && files.length > 0) addFiles(files);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files) {
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const base64 = event.target?.result as string;
-          if (base64) setImages((prev) => [...prev, base64]);
-        };
-        reader.readAsDataURL(file);
-      });
+    if (e.target.files) {
+      addFiles(e.target.files);
+      e.target.value = ''; // allow re-attaching the same file later
     }
   };
 
@@ -295,11 +326,12 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
   const handleSubmit = () => {
     const trimmed = input.trim();
-    if (!trimmed && images.length === 0) return;
+    if (!trimmed && images.length === 0 && attachments.length === 0) return;
 
     if (trimmed.toLowerCase() === '/clear') {
       setInput('');
       setImages([]);
+      setAttachments([]);
       setShowSlashPopover(false);
       onClearContext?.();
       return;
@@ -307,9 +339,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
     if (isGenerating) {
       if (onQueue) {
-        onQueue(trimmed, images.length > 0 ? images : undefined);
+        onQueue(
+          trimmed,
+          images.length > 0 ? images : undefined,
+          attachments.length > 0 ? attachments : undefined
+        );
         setInput('');
         setImages([]);
+        setAttachments([]);
       }
       return;
     }
@@ -318,9 +355,16 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       ? 'deep'
       : thinkingBudget;
 
-    onSend(trimmed, images.length > 0 ? images : undefined, selectedTier, effectiveBudget);
+    onSend(
+      trimmed,
+      images.length > 0 ? images : undefined,
+      selectedTier,
+      effectiveBudget,
+      attachments.length > 0 ? attachments : undefined
+    );
     setInput('');
     setImages([]);
+    setAttachments([]);
     setShowMentionPopover(false);
     setShowSlashPopover(false);
   };
@@ -374,6 +418,12 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   };
 
   const mentionCandidates = [
+    { type: 'rule' as const, label: 'rule:RULES.md' },
+    { type: 'rule' as const, label: 'rule:ARCHITECTURE.md' },
+    { type: 'rule' as const, label: 'rule:EXPERIENCE.md' },
+    { type: 'skill' as const, label: 'skill:workspace_search' },
+    { type: 'skill' as const, label: 'skill:git_workflow' },
+    { type: 'skill' as const, label: 'skill:vision_grounding' },
     ...mcpServers.map((s) => ({ type: 'mcp' as const, label: `mcp:${s.name}` })),
     ...(workspaceFiles.length > 0
       ? workspaceFiles.slice(0, 25).map((f) => ({
@@ -382,7 +432,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         }))
       : [
           { type: 'file' as const, label: 'README.md' },
-          { type: 'file' as const, label: 'launch.py' },
+          { type: 'file' as const, label: 'launch.mjs' },
           { type: 'file' as const, label: 'mcp_config.json' },
           { type: 'folder' as const, label: 'server/src' },
           { type: 'folder' as const, label: 'client/src' },
@@ -395,7 +445,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       input.trim().toLowerCase() === c.command
   );
 
-  const hasContent = Boolean(input.trim() || images.length > 0);
+  const hasContent = Boolean(input.trim() || images.length > 0 || attachments.length > 0);
 
   return (
     <div
@@ -459,7 +509,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           <div className="text-[10px] font-medium uppercase tracking-wider text-[#6E6E73] px-2 py-1">
             Context Mentions
           </div>
-          {mentionCandidates.slice(0, 8).map((item, idx) => (
+          {mentionCandidates.slice(0, 10).map((item, idx) => (
             <button
               key={idx}
               type="button"
@@ -468,6 +518,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             >
               {item.type === 'mcp' ? (
                 <Plug className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />
+              ) : item.type === 'rule' ? (
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : item.type === 'skill' ? (
+                <Wrench className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               ) : item.type === 'folder' ? (
                 <Folder className="w-3.5 h-3.5 text-[#FBBF24] shrink-0" />
               ) : (
@@ -502,22 +556,48 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         </div>
       )}
 
-      {/* Attached Screenshots Tray */}
-      {images.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 select-none">
-          {images.map((img, idx) => (
+      {/* Attached Files & Screenshots Tray */}
+      {attachments.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1.5 select-none scrollbar-thin">
+          {attachments.map((att, idx) => (
             <div
               key={idx}
-              className="relative group shrink-0 w-14 h-14 rounded-lg overflow-hidden border border-[#2E2E32]"
+              className="relative group shrink-0 rounded-lg overflow-hidden border border-[#2E2E32] bg-[#1E1F23] flex items-center shadow-sm"
             >
-              <img src={img} alt="attachment" className="w-full h-full object-cover" />
-              <button
-                type="button"
-                onClick={() => setImages(images.filter((_, i) => i !== idx))}
-                className="absolute top-1 right-1 p-0.5 rounded-full bg-black/80 hover:bg-rose-600 text-white"
-              >
-                <X className="w-3 h-3" />
-              </button>
+              {att.isImage ? (
+                <div className="w-14 h-14 relative">
+                  <img src={att.base64DataUrl} alt={att.name} className="w-full h-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachments(attachments.filter((_, i) => i !== idx));
+                      setImages(images.filter((img) => img !== att.base64DataUrl));
+                    }}
+                    className="absolute top-1 right-1 p-0.5 rounded-full bg-black/80 hover:bg-rose-600 text-white transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-2 pr-7 max-w-[220px]">
+                  <FileText className="w-4 h-4 text-sky-400 shrink-0" />
+                  <div className="min-w-0 text-left">
+                    <div className="text-[12px] font-medium text-[#E8EAED] truncate" title={att.name}>
+                      {att.name}
+                    </div>
+                    <div className="text-[10px] text-[#9AA0A6]">
+                      {att.sizeHuman || formatFileSize(att.size)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAttachments(attachments.filter((_, i) => i !== idx))}
+                    className="absolute top-2 right-1.5 p-0.5 rounded-full bg-transparent hover:bg-[#3C4044] text-[#9AA0A6] hover:text-white transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -545,26 +625,62 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="*/*"
             multiple
             onChange={handleImageUpload}
             className="hidden"
           />
 
-          <button
-            type="button"
-            onClick={() => {
-              setInput((prev) => (prev.endsWith('@') ? prev : `${prev}@`));
-              setMentionFilter('');
-              setShowMentionPopover(true);
-              setShowSlashPopover(false);
-              textareaRef.current?.focus();
-            }}
-            className="p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors"
-            title="Add context (@file / @mcp)"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAttachMenu((v) => !v);
+                setShowMentionPopover(false);
+                setShowSlashPopover(false);
+              }}
+              className="p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors"
+              title="Add photos, files, or context (@file / @mcp)"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+
+            {showAttachMenu && (
+              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAttachMenu(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs text-[#E3E3E3] hover:bg-[#282A2E] transition-colors"
+                >
+                  <ImageIcon className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>Attach photos or files</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAttachMenu(false);
+                    setInput((prev) => (prev.endsWith('@') ? prev : `${prev}@`));
+                    setMentionFilter('');
+                    setShowMentionPopover(true);
+                    setShowSlashPopover(false);
+                    textareaRef.current?.focus();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs text-[#E3E3E3] hover:bg-[#282A2E] transition-colors"
+                >
+                  <FileCode2 className="w-4 h-4 text-violet-400 shrink-0" />
+                  <span>Mention context (@file / @mcp)</span>
+                </button>
+
+                <p className="px-2.5 py-1 text-[10px] leading-snug text-[#6E6E73]">
+                  Images go to vision; code &amp; text files are inlined into your prompt. Paste or drag-drop also works.
+                </p>
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
@@ -705,9 +821,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           {isGenerating && !hasContent ? (
             <button
               type="button"
-              onClick={onStop}
-              className="w-8 h-8 rounded-full bg-[#DC2626] hover:bg-[#EF4444] text-white flex items-center justify-center transition-colors shadow-sm"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onStop?.();
+              }}
+              className="w-8 h-8 rounded-full bg-[#DC2626] hover:bg-[#EF4444] active:bg-[#B91C1C] text-white flex items-center justify-center transition-colors shadow-md cursor-pointer select-none"
               title="Stop Generation"
+              aria-label="Stop Generation"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
             </button>

@@ -14,6 +14,13 @@ import {
   CheckCircle2,
   FolderOpen,
   Layers,
+  Copy,
+  Check,
+  RotateCcw,
+  Eye,
+  Target,
+  Map,
+  Cpu,
 } from 'lucide-react';
 import { useSessionStore, ToolCallItemData } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
@@ -104,12 +111,201 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     };
   }
 
-  if (toolName === 'browse_url' || rawCmd.toLowerCase().startsWith('browse_url')) {
+  if (toolName === 'search_web' || rawCmd.toLowerCase().startsWith('search_web')) {
+    const q = args?.query ? String(args.query) : rawCmd;
+    return {
+      prefix: 'Searched web',
+      target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (
+    toolName === 'search_models' ||
+    rawCmd.toLowerCase().startsWith('search_models')
+  ) {
+    const q = args?.repo || args?.query ? String(args.repo || args.query) : rawCmd;
+    return {
+      prefix: 'Searched models',
+      target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'find_files' || rawCmd.toLowerCase().startsWith('find_files')) {
+    const p = args?.pattern ? String(args.pattern) : rawCmd;
+    return {
+      prefix: 'Located files',
+      target: p,
+      isRead: false,
+      isEdit: false,
+      isDir: true,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'search_codebase' || rawCmd.toLowerCase().startsWith('search_codebase')) {
+    const q = args?.query ? `"${String(args.query)}"` : rawCmd;
+    return {
+      prefix: 'Searched',
+      target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'code_outline' || rawCmd.toLowerCase().startsWith('code_outline')) {
+    const p = args?.path ? shortenPath(String(args.path)) : rawCmd;
+    return {
+      prefix: 'Outlined',
+      target: p,
+      isRead: true,
+      isEdit: false,
+      isDir: false,
+      isSearch: false,
+    };
+  }
+
+  if (toolName === 'patch_json' || rawCmd.toLowerCase().startsWith('patch_json')) {
+    const p = args?.path ? shortenPath(String(args.path)) : rawCmd;
+    const act = args?.action ? String(args.action) : 'update';
+    const kp = args?.key_path ? `: ${args.key_path}` : '';
+    return {
+      prefix: act === 'read' ? 'Inspected config' : 'Configured',
+      target: `${p}${kp}`,
+      isRead: act === 'read',
+      isEdit: act !== 'read',
+      isDir: false,
+      isSearch: false,
+    };
+  }
+
+  if (toolName === 'download_file' || rawCmd.toLowerCase().startsWith('download_file')) {
+    const fn = args?.filename || (args?.url ? String(args.url).split('/').pop() : 'file');
+    return {
+      prefix: 'Downloaded',
+      target: String(fn).slice(0, 50),
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'http_request' || rawCmd.toLowerCase().startsWith('http_request')) {
+    const m = args?.method || 'GET';
     const u = args?.url ? String(args.url) : rawCmd;
     return {
-      prefix: 'Browsed',
+      prefix: `HTTP ${m}`,
+      target: u.length > 55 ? u.slice(0, 55) + '…' : u,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'manage_files' || rawCmd.toLowerCase().startsWith('manage_files')) {
+    const act = args?.action || 'File op';
+    const s = args?.source ? shortenPath(String(args.source)) : '';
+    return {
+      prefix: act.charAt(0).toUpperCase() + act.slice(1),
+      target: s,
+      isRead: act === 'stat',
+      isEdit: act === 'delete',
+      isDir: true,
+      isSearch: false,
+    };
+  }
+
+  if (toolName === 'inspect_system' || rawCmd.toLowerCase().startsWith('inspect_system')) {
+    const act = args?.action || 'hardware';
+    const label = act === 'gpu_stats' ? 'Nvidia GPU & VRAM' : act === 'list_ports' ? 'Active Listeners' : `Process: ${args?.filter || 'all'}`;
+    return {
+      prefix: 'Telemetry',
+      target: label,
+      isRead: true,
+      isEdit: false,
+      isDir: false,
+      isSearch: false,
+    };
+  }
+
+  if (toolName === 'capture_screen' || toolName === 'inspect_window') {
+    return {
+      prefix: 'Captured',
+      target: 'Workstation Screen Display',
+      isRead: true,
+      isEdit: false,
+      isDir: false,
+      isSearch: false,
+    };
+  }
+
+  if (
+    toolName === 'browse_url' ||
+    toolName === 'browser_inspect' ||
+    rawCmd.toLowerCase().startsWith('browse_url') ||
+    rawCmd.toLowerCase().startsWith('browser_inspect')
+  ) {
+    const u = args?.url ? String(args.url) : rawCmd;
+    return {
+      prefix: 'Inspected',
       target: u,
       isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'inspect_models' || rawCmd.toLowerCase().startsWith('inspect_models')) {
+    const act = args?.action ? String(args.action) : 'inspect';
+    return {
+      prefix: act === 'test_vision' ? 'Tested Vision' : act === 'restart' ? 'Restarted Engine' : 'Inspected Engine',
+      target: 'Strata • Qwen 3.8 Flash-Next (Port 8080)',
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'capture_screen' || rawCmd.toLowerCase().startsWith('capture_screen')) {
+    return {
+      prefix: 'Captured',
+      target: 'Windows Desktop Screenshot',
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'find_files' || rawCmd.toLowerCase().startsWith('find_files')) {
+    return {
+      prefix: 'Found Files',
+      target: String(args?.pattern || '*'),
+      isRead: false,
+      isEdit: false,
+      isDir: true,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'search_symbols' || rawCmd.toLowerCase().startsWith('search_symbols')) {
+    return {
+      prefix: 'Searched Symbols',
+      target: shortenPath(String(args?.path || '.')),
+      isRead: true,
       isEdit: false,
       isDir: false,
       isSearch: true,
@@ -438,7 +634,52 @@ const AgentActivityBox: React.FC<{
   );
 };
 
-export const ChatFeed: React.FC = () => {
+const CodeBlockWithCopy: React.FC<{ language: string; codeText: string; className?: string }> = ({
+  language,
+  codeText,
+  className,
+}) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText.replace(/\n$/, ''));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <div className="my-4 rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518]">
+      <div className="px-4 py-1.5 bg-[#1C1D20] border-b border-[#2D2F34] text-[12px] font-mono text-[#9AA0A6] flex items-center justify-between select-none">
+        <span className="uppercase tracking-wider text-[11px] text-[#8AB4F8]">{language || 'code'}</span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-[#282A2E] text-[#9AA0A6] hover:text-[#E8EAED] transition-colors cursor-pointer text-[11px] font-sans"
+          title="Copy code block"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3 h-3 text-emerald-400" />
+              <span className="text-emerald-400">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3 h-3" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="p-4 text-[14.5px] sm:text-[15px] font-mono overflow-x-auto text-[#E8EAED] leading-relaxed">
+        <code className={className}>{codeText}</code>
+      </pre>
+    </div>
+  );
+};
+
+interface ChatFeedProps {
+  onQuickSend?: (prompt: string) => void;
+}
+
+export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
   const {
     messages,
     currentStreamingThought,
@@ -447,6 +688,7 @@ export const ChatFeed: React.FC = () => {
     isThinkingFinished,
     isGenerating,
   } = useSessionStore();
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
   const { setActiveTab } = useArtifactStore();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -475,18 +717,78 @@ export const ChatFeed: React.FC = () => {
     >
       <div className="max-w-3xl mx-auto space-y-6 px-1 sm:px-4">
         {messages.length === 0 && (
-          <div className="min-h-[55vh] flex flex-col items-center justify-center text-center p-6 space-y-3 select-none">
-            <div className="w-11 h-11 rounded-2xl bg-[#1A1B1E] border border-[#2D2F34] flex items-center justify-center text-[#9AA0A6] shadow-sm">
-              <Sparkles className="w-5 h-5 text-[#8AB4F8]" />
+          <div className="min-h-[55vh] flex flex-col items-center justify-center text-center p-6 space-y-5 select-none">
+            <div className="w-12 h-12 rounded-2xl bg-[#1A1B1E] border border-[#2D2F34] flex items-center justify-center text-[#9AA0A6] shadow-md">
+              <Sparkles className="w-6 h-6 text-[#8AB4F8]" />
             </div>
             <div className="space-y-1.5">
-              <h2 className="text-[18px] font-medium text-[#E8EAED] tracking-tight">
+              <h2 className="text-[19px] font-medium text-[#E8EAED] tracking-tight">
                 What would you like to build?
               </h2>
               <p className="text-[14px] text-[#80868B] max-w-md leading-relaxed">
-                Ask anything, reference files with <code className="text-[#8AB4F8]">@</code>, or trigger autonomous workflows with <code className="text-[#8AB4F8]">/goal</code>, <code className="text-[#8AB4F8]">/plan</code>, <code className="text-[#8AB4F8]">/boost</code>.
+                Powered by <strong className="text-[#E8EAED]">Strata • Qwen 3.8 Flash-Next</strong> (IQ3_S + Vision • 64k). Reference context with <code className="text-[#8AB4F8]">@</code> or trigger workflows with <code className="text-[#8AB4F8]">/</code>.
               </p>
             </div>
+
+            {onQuickSend && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-lg pt-2 text-left">
+                <button
+                  type="button"
+                  onClick={() => onQuickSend('/plan Design an architectural implementation plan for our next feature')}
+                  className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                >
+                  <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-[#8AB4F8]">
+                    <Map className="w-3.5 h-3.5 text-[#60A5FA]" />
+                    <span>/plan Architecture & Specs</span>
+                  </div>
+                  <p className="text-[11px] text-[#6E6E73] leading-snug">
+                    Inspect codebase and generate a step-by-step plan in the Plan Workbench
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onQuickSend('/goal Audit the workspace, fix any issues, and verify the build end-to-end')}
+                  className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                >
+                  <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-emerald-400">
+                    <Target className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>/goal Autonomous Execution</span>
+                  </div>
+                  <p className="text-[11px] text-[#6E6E73] leading-snug">
+                    Multi-step autonomous execution with self-catching verification
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onQuickSend('/vision Run inspect_models with test_vision and verify Strata Qwen 3.8 Flash-Next vision status')}
+                  className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                >
+                  <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-indigo-400">
+                    <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>/vision Test Strata Vision</span>
+                  </div>
+                  <p className="text-[11px] text-[#6E6E73] leading-snug">
+                    Verify live multimodal vision on Strata port 8080 with Qwen 3.8 Flash-Next
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onQuickSend('/boost Perform a deep architectural & performance check of the current system and GPU state')}
+                  className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                >
+                  <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-[#C084FC]">
+                    <Cpu className="w-3.5 h-3.5 text-[#C084FC]" />
+                    <span>/boost Deep System Audit</span>
+                  </div>
+                  <p className="text-[11px] text-[#6E6E73] leading-snug">
+                    Engage Deep Thinking mode to inspect hardware, VRAM, and code quality
+                  </p>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -516,16 +818,55 @@ export const ChatFeed: React.FC = () => {
             return (
               <div key={msg.id} className="w-full">
                 <div className="w-full bg-[#1C1D20] border border-[#2B2C30] rounded-2xl px-5 py-4 text-[16px] sm:text-[17px] text-[#E8EAED] space-y-2.5 shadow-sm">
-                  {msg.images && msg.images.length > 0 && (
-                    <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
-                      {msg.images.map((img, i) => (
-                        <img
-                          key={i}
-                          src={img}
-                          alt="attachment"
-                          className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34]"
-                        />
-                      ))}
+                  {/* File & Image Attachments */}
+                  {((msg.images && msg.images.length > 0) || (msg.attachments && msg.attachments.length > 0)) && (
+                    <div className="flex flex-wrap items-center gap-2.5 overflow-x-auto pb-1">
+                      {/* Render images */}
+                      {msg.attachments
+                        ? msg.attachments
+                            .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')) || (a.savedPath && /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
+                            .map((att, i) => (
+                              <img
+                                key={i}
+                                src={att.url || att.base64DataUrl}
+                                alt={att.name || 'image'}
+                                className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34] shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
+                                onClick={() => att.url && window.open(att.url, '_blank')}
+                              />
+                            ))
+                        : msg.images?.map((img, i) => (
+                            <img
+                              key={i}
+                              src={img}
+                              alt="attachment"
+                              className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34]"
+                            />
+                          ))}
+
+                      {/* Render non-image files */}
+                      {msg.attachments
+                        ?.filter((a) => !a.isImage && (!a.type || !a.type.startsWith('image/')) && (!a.savedPath || !/\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
+                        .map((att, i) => (
+                          <div
+                            key={i}
+                            className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-[#2E2E32] bg-[#141518] hover:border-[#3E4046] transition-colors max-w-sm select-none"
+                          >
+                            <FileCode2 className="w-5 h-5 text-sky-400 shrink-0" />
+                            <div className="min-w-0 text-left">
+                              <div className="text-[13px] font-medium text-[#E8EAED] truncate" title={att.name}>
+                                {att.name}
+                              </div>
+                              <div className="text-[11px] text-[#9AA0A6] flex items-center gap-1.5 font-mono">
+                                <span>{att.sizeHuman || (att.size ? `${Math.round(att.size / 1024)} KB` : 'file')}</span>
+                                {att.savedPath && (
+                                  <span className="text-emerald-400/80 truncate max-w-[140px]" title={att.savedPath}>
+                                    • {shortenPath(att.savedPath)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                     </div>
                   )}
                   <div className="whitespace-pre-wrap leading-[1.7]">{msg.content}</div>
@@ -637,18 +978,14 @@ export const ChatFeed: React.FC = () => {
                       },
                       code({ className, children, ...props }: any) {
                         const match = /language-(\w+)/.exec(className || '');
-                        const isBlock = Boolean(match);
+                        const codeStr = String(children || '');
+                        const isBlock = Boolean(match) || codeStr.includes('\n');
                         return isBlock ? (
-                          <div className="my-4 rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518]">
-                            <div className="px-4 py-2 bg-[#1C1D20] border-b border-[#2D2F34] text-[13px] font-mono text-[#9AA0A6] flex items-center justify-between select-none">
-                              <span>{match?.[1]}</span>
-                            </div>
-                            <pre className="p-4 text-[14.5px] sm:text-[15px] font-mono overflow-x-auto text-[#E8EAED] leading-relaxed">
-                              <code className={className} {...props}>
-                                {children}
-                              </code>
-                            </pre>
-                          </div>
+                          <CodeBlockWithCopy
+                            language={match?.[1] || 'code'}
+                            codeText={codeStr}
+                            className={className}
+                          />
                         ) : (
                           <code
                             className="antigravity-code-badge"
@@ -665,7 +1002,59 @@ export const ChatFeed: React.FC = () => {
                 </div>
               )}
 
-              {isCurrentlyGenerating && content && (
+              {/* Antigravity 2.0 Assistant Message Footer Bar */}
+              {!isCurrentlyGenerating && content && (
+                <div className="flex items-center justify-between pt-1 text-[11.5px] text-[#6E6E73] select-none group">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(content);
+                        setCopiedMsgId(msg.id);
+                        setTimeout(() => setCopiedMsgId(null), 1800);
+                      }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
+                      title="Copy response"
+                    >
+                      {copiedMsgId === msg.id ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span className="text-emerald-400">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+
+                    {onQuickSend && index > 0 && messages[index - 1]?.role === 'user' && (
+                      <button
+                        type="button"
+                        onClick={() => onQuickSend(messages[index - 1].content)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
+                        title="Retry / Regenerate response"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Retry</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 font-mono text-[10.5px] text-[#5F6368]">
+                    <span>{msg.modelName || 'Qwen 3.8 Flash-Next (Strata IQ3_S + Vision)'}</span>
+                    {Boolean(msg.outputTokens && msg.outputTokens > 0) && (
+                      <>
+                        <span>•</span>
+                        <span>{msg.outputTokens} tok</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {isCurrentlyGenerating && content && isGenerating && (
                 <div className="flex items-center gap-2 text-[13px] text-[#80868B] pt-1.5 select-none">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8AB4F8]" />
                   <span>Synthesizing response…</span>
