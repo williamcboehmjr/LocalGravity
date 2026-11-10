@@ -135,13 +135,16 @@ export class SharedTerminalManager {
     const resolved = resolveDefaultShell();
     const shellBin = resolved.bin;
 
-    // Command normalization: If using Windows PowerShell 5.1 (not pwsh), convert `&&` syntax into safe pipeline execution
-    let normalizedCommand = command;
-    if (isWin && !resolved.isPwsh && command.includes('&&')) {
-      const parts = command.split('&&').map(p => p.trim());
-      normalizedCommand = parts.join('; if ($?) { ') + ' }'.repeat(parts.length - 1);
+    let shellArgs: string[];
+    if (isWin) {
+      // CRITICAL FIX: Use -EncodedCommand (Base64 UTF-16LE) on Windows (pwsh & powershell).
+      // Passing raw strings via `-Command` causes PowerShell to prematurely expand `$vars` as empty strings
+      // (e.g. `$t0 = Get-Date` became `= Get-Date`). `-EncodedCommand` preserves all variables and quotes byte-for-byte!
+      const b64 = Buffer.from(command, 'utf16le').toString('base64');
+      shellArgs = ['-NoProfile', '-EncodedCommand', b64];
+    } else {
+      shellArgs = ['-c', command];
     }
-    const shellArgs = isWin ? ['-NoProfile', '-Command', normalizedCommand] : ['-c', command];
 
     // Echo command banner into shared interactive terminal
     const echoBanner = `\r\n\x1b[38;2;138;180;248m❯ [Agent] ${command}\x1b[0m\r\n`;

@@ -1,15 +1,15 @@
 {
-  "version": "v2.2.5",
-  "notes": "v2.2.5: Bug hunt fixes - PowerShell 7 / && support in run_terminal, code_outline symbol parsing for React components, search_codebase glob extension matching, find_files substring matching, and edit_file tool aliases",
-  "pub_date": "2026-11-10T01:07:14.434Z",
+  "version": "v2.2.6",
+  "notes": "v2.2.6: Fixed PowerShell  stripping using -EncodedCommand Base64 execution, killed stale port 3392 zombie server, unified Central Brain on port 3390",
+  "pub_date": "2026-11-10T01:19:53.955Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelY4aTNxQ2htaDV0NVduMDVDZTJqOHdDWlk2eXpsZlVSbFNYcDREL3V4bUdWY3FyQlRQc2pyOVBFQ09URk1xR2JFcGIrUURVMC8rUmNDQVQxWmExUmdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjcyODMzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMi41X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjIuNQo0T3NxY3pFeUNHdG1oWU5BQm1BOFBBd1FGZFEwVThTVHNPUVpoN0V5SG5wRm9EZkJabUFyOUpzTWMrNWVGSm9yVURFQXVESWtES1FHVW9lcno5dGtEQT09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.2.5/LocalGravity_2.2.5_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelhoWGxERTJhVkgzZWxQWlNiUU5JdTZJczluMVdkTk9FWVh4bTh2TDBwd2FyMC9RanVSaDRjTFNRRUdVcTJ3d3NnSkRHeEk4N29vL01Gcjcyc2lFWlFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjczNTkzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMi42X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjIuNgp3MkdzRzYzN3NRV1NmZ2FyM2ZUc29rUzBjclJnNjViY2tWTzA4djhBTTZkTEJ6OVRPL0hNZDB6VFkwOHpySVR0MmpKalpydmxwellJVlRhdDNWNWVDZz09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.2.6/LocalGravity_2.2.6_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelVKcGdmZjNzYVJuOFdQdktmRmp5R3I5cG56QWJ1Z21RNDRqNktxeHo3Qmgxdkw4OGlObVJDckcvNDRYcEFCWlZWMFFQZm1oNEY4ai9zUXpoZS9Yb0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjcyODM0CWZpbGU6TG9jYWxHcmF2aXR5XzIuMi41X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4yLjUKRkh3M3FjWFQwOVF1eDZtUXdXWDlPUWtJNVFvT2JVdGdiZ1VSTWhsNkRnQ0s5dHZ2djFFejA0eWE2LzY3TDkrZ3MvU29aeU1sOUREektPeTZQMGtzQ2c9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.2.5/LocalGravity_2.2.5_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelovMGR5djNXRm9TbFkrcExnaDQrUHh0bExnUHNvdmEwek9KeU1iTzhqNjZTVXFwZisxNCszVXMvdU1qWExLZ3BMMWxTUXhVZE9BU1duK2VNRVkzbWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjczNTkzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMi42X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4yLjYKM3JTcVYya1FKY3RJZGw4QytDTkd5bjJZbmtzY0NobElPZ2Y4MllDWVhhcFVVc0I5NCtGMWhWM3RWekRKN244bUFWaWd5VE95MUNWd0xDVDdpWEhDQ3c9PQo=",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.2.6/LocalGravity_2.2.6_aarch64.dmg"
     }
   }
 }
