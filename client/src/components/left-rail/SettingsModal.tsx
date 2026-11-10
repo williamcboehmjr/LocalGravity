@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   X,
   Settings,
@@ -55,10 +56,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.2.3');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; statusText: string }>({ percent: 0, statusText: '' });
   const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isTauriEnvironment()) {
+      getVersion()
+        .then((v) => {
+          if (v) setCurrentAppVersion(v);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -94,10 +106,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     setUpdateError(null);
     try {
       const info = await checkForAppUpdates();
+      if (info.currentVersion) {
+        setCurrentAppVersion(info.currentVersion);
+      }
       if (info.available) {
         setAvailableUpdate(info);
         setUpdateStatus('found');
       } else {
+        setAvailableUpdate(info);
         setUpdateStatus('up-to-date');
       }
     } catch (err: any) {
@@ -325,7 +341,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <span>LocalGravity Auto-Updates</span>
               </label>
               <span className="text-[11px] font-mono text-text-muted">
-                v{availableUpdate?.currentVersion || '2.2.0'} ({isTauri ? 'Desktop Native' : 'Web Companion'})
+                v{availableUpdate?.currentVersion || currentAppVersion} ({isTauri ? 'Desktop Native' : 'Web Companion'})
               </span>
             </div>
 

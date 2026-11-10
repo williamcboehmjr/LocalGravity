@@ -109,6 +109,26 @@ async function main() {
   const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
   tauriConf.version = newVersion;
   fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n', 'utf8');
+
+  // Also sync fallback version strings in updaterService.ts and SettingsModal.tsx
+  const updaterSvcPath = path.join(clientDir, 'src', 'services', 'updaterService.ts');
+  if (fs.existsSync(updaterSvcPath)) {
+    const svcSrc = fs.readFileSync(updaterSvcPath, 'utf8');
+    fs.writeFileSync(
+      updaterSvcPath,
+      svcSrc.replace(/let currentVersion = '[^']+';/, `let currentVersion = '${newVersion}';`),
+      'utf8'
+    );
+  }
+  const settingsModalPath = path.join(clientDir, 'src', 'components', 'left-rail', 'SettingsModal.tsx');
+  if (fs.existsSync(settingsModalPath)) {
+    const modalSrc = fs.readFileSync(settingsModalPath, 'utf8');
+    fs.writeFileSync(
+      settingsModalPath,
+      modalSrc.replace(/useState<string>\('\d+\.\d+\.\d+'\)/, `useState<string>('${newVersion}')`),
+      'utf8'
+    );
+  }
   console.log(` Bumped version to ${newVersion} across all manifests.\n`);
 
   // Step 3: Build Windows MSI + Updater Signature
