@@ -76,9 +76,28 @@ export function pruneChatMessages(
 
   if (total <= maxTotalChars) return pruned;
 
-  // Stage 4: Drop oldest historical turns from index 1 while preserving valid assistant/tool pairs
-  while (pruned.length > 4 && total > maxTotalChars) {
+  // Stage 4: Drop oldest historical turns from index 1 while preserving valid assistant/tool pairs.
+  // CRITICAL: NEVER drop the last user query (or the only remaining user query), as OpenAI-compatible
+  // backends (like Strata / Qwen) strictly require at least one 'user' query in messages and throw HTTP 400 otherwise!
+  while (pruned.length > 3 && total > maxTotalChars) {
     const item = pruned[1];
+    const userCount = pruned.filter((m) => m.role === 'user').length;
+    if (item.role === 'user' && userCount <= 1) {
+      // Do NOT drop the sole remaining user message!
+      // Instead, look for older completed tool or intermediate assistant messages ahead to drop.
+      let droppedSomething = false;
+      for (let j = 2; j < pruned.length - 2; j++) {
+        if (pruned[j].role === 'tool' || pruned[j].role === 'assistant') {
+          const dropped = pruned.splice(j, 1)[0];
+          total -= (dropped.content?.length || 0);
+          droppedSomething = true;
+          break;
+        }
+      }
+      if (!droppedSomething) break;
+      continue;
+    }
+
     if (item.role === 'user' || (item.role === 'assistant' && !item.tool_calls)) {
       const dropped = pruned.splice(1, 1)[0];
       total -= (dropped.content?.length || 0);
@@ -93,6 +112,15 @@ export function pruneChatMessages(
       const dropped = pruned.splice(1, 1)[0];
       total -= (dropped.content?.length || 0);
     }
+  }
+
+  // Final Invariant Guard: Ensure at least one 'user' message exists in the returned array.
+  // If historical pruning ever left only system/assistant/tool messages, inject a valid user turn!
+  if (!pruned.some((m) => m.role === 'user')) {
+    pruned.splice(1, 0, {
+      role: 'user',
+      content: 'Please proceed with the current task and report your findings.',
+    });
   }
 
   return pruned;

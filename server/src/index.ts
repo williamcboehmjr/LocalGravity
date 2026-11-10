@@ -835,6 +835,12 @@ export async function createDaemonServer(options?: {
     return { sysramCache: cache };
   });
 
+  app.post('/api/engine/prewarm', async () => {
+    const cache = await tabby.prewarmInactiveTiersInSysRam();
+    broadcastSync({ type: 'SYSRAM_CACHE_UPDATED', payload: { sysramCache: cache } });
+    return { sysramCache: cache };
+  });
+
   app.get('/api/skills', async () => {
     return { skills: skills.listSkills() };
   });

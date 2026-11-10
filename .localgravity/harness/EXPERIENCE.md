@@ -298,3 +298,10 @@
 - **[PPC Auto-Tool Rule 2026-11-09T22:11:45.576Z]**: Tool `run_terminal` (`run_terminal({"command":"job = Start-Process python -ArgumentList '-m','http.ser`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-10T00:38:19.904Z]
+- **Failed Tool**: `code_outline` (`code_outline({"path":"client/src/components/center-canvas/ChatCanvas.tsx"})`)
+- **Initial Failure Telemetry**: `File not found: C:\Users\Sue\.gemini\antigravity\scratch\LocalGravity\client\src\components\center-canvas\ChatCanvas.tsx`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-10T00:38:19.904Z]**: Tool `code_outline` (`code_outline({"path":"client/src/components/center-canvas/ChatCanvas.tsx"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityclientsrccomponen`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for code_outline with updated tools.md)
+

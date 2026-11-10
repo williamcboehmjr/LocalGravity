@@ -19,6 +19,7 @@ import {
   Blocks,
   ChevronRight,
   X,
+  Clock,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSessionStore,
@@ -1045,15 +1046,18 @@ export const App: React.FC = () => {
 
           {/* Right Top Controls matching Screenshot 1 */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Live Scheduled Timer Ring Badge */}
+            {/* Antigravity Inline Scheduled Timer Pill */}
             {timerCountdown > 0 && (
-              <ReconnectBadge
-                tone="sky"
-                label={timerLabel.length > 18 ? timerLabel.slice(0, 18) + '…' : timerLabel}
-                secondsRemaining={timerCountdown}
-                totalSeconds={Math.max(1, timerTotal)}
-                attempt={0}
-              />
+              <div
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 border border-sky-600/40 text-sky-200 text-xs shadow-xs animate-in fade-in duration-150"
+                title={`Scheduled Timer active: "${timerLabel}". ${timerCountdown}s remaining of ${timerTotal || timerCountdown}s`}
+              >
+                <Clock className="w-3.5 h-3.5 text-sky-400 animate-spin" style={{ animationDuration: '6s' }} />
+                <span className="font-mono font-semibold text-sky-300 text-[11px]">{timerCountdown}s</span>
+                <span className="text-[11px] text-sky-100/80 truncate max-w-[130px] hidden sm:inline">
+                  {timerLabel}
+                </span>
+              </div>
             )}
 
             {/* Auto-Compacted Working Memory Pill */}

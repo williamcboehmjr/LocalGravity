@@ -107,3 +107,5 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-09T22:10:58.910Z]**: Tool `run_terminal` (`run_terminal({"command":"Start-Process python -ArgumentList '-m','http.server','`) encountered error `Invoke-WebRequest : Unable to connect to the remote server At line:1 char:211 + `. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-09T22:11:45.576Z]**: Tool `run_terminal` (`run_terminal({"command":"job = Start-Process python -ArgumentList '-m','http.ser`) encountered error ` [Command timed out after 30000ms]`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-10T00:38:19.904Z]**: Tool `code_outline` (`code_outline({"path":"client/src/components/center-canvas/ChatCanvas.tsx"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityclientsrccomponen`. Fallback to safe cross-platform invocation.

@@ -56,7 +56,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.2.3');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.2.4');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; statusText: string }>({ percent: 0, statusText: '' });
@@ -241,7 +241,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
 
             <p className="text-[11px] text-text-muted">
-              Connect this client to your Windows Central Brain over LAN. TabbyAPI EXL3 model generation streams over this bridge.
+              Connect this client to your Windows Central Brain over LAN. Strata neural model generation with Vision streams over this bridge.
             </p>
 
             <div className="grid grid-cols-4 gap-2 pt-1">
