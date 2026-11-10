@@ -68,10 +68,13 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   }
 
   if (toolName === 'read_file' || rawCmd.toLowerCase().startsWith('read_file')) {
-    const p = args?.path ? shortenPath(String(args.path)) : rawCmd.replace(/^read_file\s*/i, '');
+    const rawPath = args?.path || args?.Path;
+    const p = rawPath ? shortenPath(String(rawPath)) : rawCmd.replace(/^read_file\s*/i, '');
+    const sLine = args?.start_line || args?.StartLine;
+    const eLine = args?.end_line || args?.EndLine;
     const range =
-      args?.start_line || args?.end_line
-        ? ` (L${args.start_line || 1}–${args.end_line || 'end'})`
+      sLine || eLine
+        ? ` (L${sLine || 1}–${eLine || 'end'})`
         : '';
     return {
       prefix: 'Analyzed',
@@ -86,10 +89,13 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   if (
     toolName === 'write_file' ||
     toolName === 'apply_diff' ||
+    toolName === 'edit_file' ||
     rawCmd.toLowerCase().startsWith('write_file') ||
-    rawCmd.toLowerCase().startsWith('apply_diff')
+    rawCmd.toLowerCase().startsWith('apply_diff') ||
+    rawCmd.toLowerCase().startsWith('edit_file')
   ) {
-    const p = args?.path ? shortenPath(String(args.path)) : rawCmd;
+    const rawPath = args?.path || args?.Path;
+    const p = rawPath ? shortenPath(String(rawPath)) : rawCmd;
     return {
       prefix: 'Edited',
       target: p,

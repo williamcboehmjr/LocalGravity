@@ -284,7 +284,8 @@ export class BuiltinToolExecutor {
         }
 
         case 'read_file': {
-          const targetPath = this.resolveSafePath(ctx.workspaceRoot, args.path);
+          const rawFilePath = args.path || args.Path;
+          const targetPath = this.resolveSafePath(ctx.workspaceRoot, rawFilePath);
           if (!fs.existsSync(targetPath)) {
             return {
               stdout: '',
@@ -295,8 +296,8 @@ export class BuiltinToolExecutor {
           }
           const raw = fs.readFileSync(targetPath, 'utf-8');
           const lines = raw.split(/\r?\n/);
-          const sLine = args.start_line ? Math.max(1, Number(args.start_line)) : 1;
-          const eLine = args.end_line ? Math.min(lines.length, Number(args.end_line)) : lines.length;
+          const sLine = (args.start_line ?? args.StartLine) ? Math.max(1, Number(args.start_line ?? args.StartLine)) : 1;
+          const eLine = (args.end_line ?? args.EndLine) ? Math.min(lines.length, Number(args.end_line ?? args.EndLine)) : lines.length;
           const slice = lines.slice(sLine - 1, eLine).join('\n');
           return {
             stdout: truncateSafeOutput(slice, 24000),
@@ -307,11 +308,12 @@ export class BuiltinToolExecutor {
         }
 
         case 'write_file': {
-          const targetPath = this.resolveSafePath(ctx.workspaceRoot, args.path);
+          const rawFilePath = args.path || args.Path;
+          const targetPath = this.resolveSafePath(ctx.workspaceRoot, rawFilePath);
           const previousContent = fs.existsSync(targetPath)
             ? fs.readFileSync(targetPath, 'utf-8')
             : null;
-          const newContent = String(args.content ?? '');
+          const newContent = String(args.content ?? args.Content ?? '');
 
           fs.mkdirSync(path.dirname(targetPath), { recursive: true });
           fs.writeFileSync(targetPath, newContent, 'utf-8');
@@ -334,19 +336,21 @@ export class BuiltinToolExecutor {
           };
         }
 
+        case 'edit_file':
         case 'apply_diff': {
-          const targetPath = this.resolveSafePath(ctx.workspaceRoot, args.path);
+          const rawFilePath = args.path || args.Path;
+          const targetPath = this.resolveSafePath(ctx.workspaceRoot, rawFilePath);
           if (!fs.existsSync(targetPath)) {
             return {
               stdout: '',
-              stderr: `Cannot apply_diff: file ${targetPath} does not exist`,
+              stderr: `Cannot apply diff/edit: file ${targetPath} does not exist`,
               exitCode: 1,
               durationMs: Math.round(performance.now() - startMs),
             };
           }
           const previousContent = fs.readFileSync(targetPath, 'utf-8');
-          const targetStr = String(args.target ?? '');
-          const replacementStr = String(args.replacement ?? '');
+          const targetStr = String(args.target ?? args.Target ?? '');
+          const replacementStr = String(args.replacement ?? args.Replacement ?? '');
 
           const patchResult = applyFuzzyPatch(previousContent, targetStr, replacementStr);
           if (!patchResult.ok) {
@@ -371,7 +375,7 @@ export class BuiltinToolExecutor {
           ctx.onFileCheckpointCreated?.(checkpoint);
 
           return {
-            stdout: `Applied diff to ${targetPath} via ${patchResult.strategy} match (lines ${patchResult.matchedLineStart}-${patchResult.matchedLineEnd}, checkpoint ${checkpoint.id} saved)`,
+            stdout: `Applied edit/diff to ${targetPath} via ${patchResult.strategy} match (lines ${patchResult.matchedLineStart}-${patchResult.matchedLineEnd}, checkpoint ${checkpoint.id} saved)`,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
@@ -539,10 +543,11 @@ export class BuiltinToolExecutor {
             : ctx.workspaceRoot;
 
           const matches: Array<{ name: string; fullPath: string; size: number; isDirectory: boolean }> = [];
-          const rxPattern = new RegExp(
-            '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
-            'i'
-          );
+          const isExactPattern = pattern.includes('*') || pattern.includes('?') || pattern.includes('.');
+          const globRegex = isExactPattern
+            ? '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
+            : pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+          const rxPattern = new RegExp(globRegex, 'i');
 
           const walk = (dir: string, depth = 0) => {
             if (matches.length >= maxResults || depth > 8) return;
@@ -644,7 +649,7 @@ export class BuiltinToolExecutor {
               continue;
             }
             // Functions / async functions
-            m = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)/);
+            m = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)/);
             if (m) {
               outline.push({ line: i + 1, kind: 'function', name: m[1], signature: trimmed.split('{')[0].trim() });
               continue;
@@ -666,10 +671,10 @@ export class BuiltinToolExecutor {
               outline.push({ line: i + 1, kind: 'method', name: m[1], signature: trimmed.split('{')[0].trim() });
               continue;
             }
-            // Major exported constants
-            m = trimmed.match(/^export\s+const\s+([A-Za-z0-9_]+)\s*=/);
+            // Major exported constants / React components (including type annotations like `: React.FC`)
+            m = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+([A-Za-z0-9_]+)(?:\s*:[^=]+)?\s*=/);
             if (m) {
-              outline.push({ line: i + 1, kind: 'const', name: m[1], signature: trimmed.slice(0, 60) });
+              outline.push({ line: i + 1, kind: 'const', name: m[1], signature: trimmed.split('=>')[0].trim().slice(0, 75) });
               continue;
             }
           }
@@ -1378,7 +1383,9 @@ export class BuiltinToolExecutor {
         case 'search_codebase': {
           const query = String(args.query || '');
           const isRegex = Boolean(args.is_regex);
-          const extFilter = args.file_pattern ? String(args.file_pattern).toLowerCase() : '';
+          let extFilter = args.file_pattern ? String(args.file_pattern).toLowerCase().trim() : '';
+          if (extFilter.startsWith('*')) extFilter = extFilter.replace(/^\*+/, '');
+          if (extFilter && !extFilter.startsWith('.')) extFilter = '.' + extFilter;
           const matches: Array<{ file: string; line: number; text: string }> = [];
 
           let matcher: (line: string) => boolean;

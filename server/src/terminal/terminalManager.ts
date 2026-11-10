@@ -1,8 +1,27 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, ChildProcessWithoutNullStreams, execSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
 
 export interface TerminalOutputListener {
   (chunk: string, stream: 'stdout' | 'stderr'): void;
+}
+
+export function resolveDefaultShell(): { bin: string; isPwsh: boolean } {
+  if (os.platform() !== 'win32') {
+    return { bin: process.env.SHELL || '/bin/zsh', isPwsh: false };
+  }
+  const candidates = [
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    `${process.env.LOCALAPPDATA || ''}\\Microsoft\\PowerShell\\pwsh.exe`,
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return { bin: c, isPwsh: true };
+  }
+  try {
+    execSync('where pwsh', { stdio: 'ignore' });
+    return { bin: 'pwsh.exe', isPwsh: true };
+  } catch {}
+  return { bin: 'powershell.exe', isPwsh: false };
 }
 
 export class SharedTerminalManager {
@@ -23,7 +42,8 @@ export class SharedTerminalManager {
     }
 
     const isWin = os.platform() === 'win32';
-    const shellBin = isWin ? 'powershell.exe' : '/bin/zsh';
+    const resolved = resolveDefaultShell();
+    const shellBin = resolved.bin;
     const shellArgs = isWin ? ['-NoLogo', '-NoExit'] : ['-i'];
 
     this.shellProc = spawn(shellBin, shellArgs, {
@@ -112,8 +132,16 @@ export class SharedTerminalManager {
     const startMs = performance.now();
     const targetCwd = cwd || this.cwd;
     const isWin = os.platform() === 'win32';
-    const shellBin = isWin ? 'powershell.exe' : '/bin/zsh';
-    const shellArgs = isWin ? ['-NoProfile', '-Command', command] : ['-c', command];
+    const resolved = resolveDefaultShell();
+    const shellBin = resolved.bin;
+
+    // Command normalization: If using Windows PowerShell 5.1 (not pwsh), convert `&&` syntax into safe pipeline execution
+    let normalizedCommand = command;
+    if (isWin && !resolved.isPwsh && command.includes('&&')) {
+      const parts = command.split('&&').map(p => p.trim());
+      normalizedCommand = parts.join('; if ($?) { ') + ' }'.repeat(parts.length - 1);
+    }
+    const shellArgs = isWin ? ['-NoProfile', '-Command', normalizedCommand] : ['-c', command];
 
     // Echo command banner into shared interactive terminal
     const echoBanner = `\r\n\x1b[38;2;138;180;248m❯ [Agent] ${command}\x1b[0m\r\n`;

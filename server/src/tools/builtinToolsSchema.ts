@@ -52,6 +52,23 @@ export const BUILTIN_TOOLS_SCHEMA = [
   {
     type: 'function',
     function: {
+      name: 'edit_file',
+      description:
+        'Use this tool to edit an existing file. Replaces the exact Target string with the Replacement string, with automatic checkpoint rollback snapshot.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path or absolute file path to modify' },
+          target: { type: 'string', description: 'The exact character sequence to be replaced' },
+          replacement: { type: 'string', description: 'The content to replace the target with' },
+        },
+        required: ['path', 'target', 'replacement'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'apply_diff',
       description:
         'Apply a target/replacement edit to any file on the system or workspace with automatic pre-edit snapshot backup in file_checkpoints for 1-click undo/revert.',
