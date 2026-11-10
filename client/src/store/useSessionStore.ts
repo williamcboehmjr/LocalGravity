@@ -457,13 +457,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
 
       const activeStream = activeStreams[0];
-      const lastMsg = converted[converted.length - 1];
+      const normalized: ChatMessage[] = activeStream
+        ? converted
+        : converted.map((m) => {
+            if (m.toolCalls && m.toolCalls.some((tc) => tc.status === 'running')) {
+              return {
+                ...m,
+                toolCalls: m.toolCalls.map((tc): ToolCallItemData =>
+                  tc.status === 'running'
+                    ? { ...tc, status: tc.exitCode === 0 ? 'success' : 'error' }
+                    : tc
+                ),
+              };
+            }
+            return m;
+          });
+
+      const lastMsg = normalized[normalized.length - 1];
       const hasRunningTool = Boolean(
-        lastMsg?.role === 'assistant' &&
+        activeStream &&
+          lastMsg?.role === 'assistant' &&
           lastMsg.toolCalls?.some((tc) => tc.status === 'running')
       );
       return {
-        messages: converted,
+        messages: normalized,
         ...(activeStream || hasRunningTool
           ? {
               isGenerating: true,
@@ -668,16 +685,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           last.thoughtElapsedMs = state.currentThoughtElapsedMs;
           last.thoughtTokenCount = state.currentThoughtTokens;
         }
+        if (last.toolCalls && last.toolCalls.length > 0) {
+          last.toolCalls = last.toolCalls.map((tc): ToolCallItemData =>
+            tc.status === 'running'
+              ? { ...tc, status: tc.exitCode === 0 ? 'success' : 'error' }
+              : tc
+          );
+        }
         list[list.length - 1] = last;
         return {
           messages: list,
           currentStreamingThought: '',
           isThinkingFinished: true,
+          isGenerating: false,
         };
       }
       return {
         currentStreamingThought: '',
         isThinkingFinished: true,
+        isGenerating: false,
       };
     }),
 

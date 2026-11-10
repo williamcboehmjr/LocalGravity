@@ -315,9 +315,10 @@ export const App: React.FC = () => {
                 isServerThreadBusy;
               if (hasActiveStream) {
                 setIsGenerating(true);
-              } else if (isGenerating) {
+              } else {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
+                setAdaptiveCotLabel('');
               }
               if (payload.checkpoints) {
                 setCheckpoints(payload.checkpoints);
@@ -378,6 +379,7 @@ export const App: React.FC = () => {
               if (payload.is_finished) {
                 finalizeAssistantMessage();
                 setIsGenerating(false);
+                setAdaptiveCotLabel('');
               } else {
                 setIsGenerating(true);
                 updateLastAssistantMessage(payload.chunk, payload.output_tokens, payload.tokens_per_sec);
@@ -385,6 +387,7 @@ export const App: React.FC = () => {
             } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
               finalizeAssistantMessage();
               setIsGenerating(false);
+              setAdaptiveCotLabel('');
             } else if (type === 'STEP_NOTE_COMMITTED') {
               setIsGenerating(true);
               commitAssistantStepNote(payload.note, payload.committed_content);

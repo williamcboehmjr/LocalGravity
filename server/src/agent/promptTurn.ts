@@ -558,106 +558,139 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
 
-            const execResult = await tools.executeTool(toolName, toolArgs, {
-              abortSignal: abortController.signal,
-              threadId: thread!.id,
-              messageId: assistantMsg.id,
-              workspaceRoot: project.root_path,
-              onStdoutChunk: (chunk) => {
-                broadcastSync({
-                  type: 'TOOL_STREAM',
-                  payload: {
-                    thread_id: thread!.id,
-                    message_id: assistantMsg.id,
-                    tool_execution_id: toolExec.id,
-                    stream: 'stdout',
-                    chunk,
-                  },
-                });
-              },
-              onStderrChunk: (chunk) => {
-                broadcastSync({
-                  type: 'TOOL_STREAM',
-                  payload: {
-                    thread_id: thread!.id,
-                    message_id: assistantMsg.id,
-                    tool_execution_id: toolExec.id,
-                    stream: 'stderr',
-                    chunk,
-                  },
-                });
-              },
-              onFileCheckpointCreated: (checkpoint) => {
-                broadcastSync({
-                  type: 'CHECKPOINT_CREATED',
-                  payload: { thread_id: thread!.id, checkpoint },
-                });
-              },
-              onScreenCaptured: (base64Image, windowTitle) => {
-                broadcastSync({
-                  type: 'VISION_CAPTURE',
-                  payload: {
-                    base64DataUrl: base64Image,
-                    activeWindowTitle: windowTitle,
-                  },
-                });
-              },
-            });
-
-            // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
-            const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
-              workspaceRoot: project.root_path,
-              toolName,
-              command: cmdFormatted,
-              exitCode: execResult.exitCode,
-              stdout: execResult.stdout,
-              stderr: execResult.stderr,
-            });
-
-            if (ppcCycle) {
-              broadcastSync({
-                type: 'HARNESS_PPC_COMPLETED',
-                payload: {
-                  cycle: ppcCycle,
-                  components: harness.listHarnessComponents(project.root_path),
+            try {
+              const execResult = await tools.executeTool(toolName, toolArgs, {
+                abortSignal: abortController.signal,
+                threadId: thread!.id,
+                messageId: assistantMsg.id,
+                workspaceRoot: project.root_path,
+                onStdoutChunk: (chunk) => {
+                  broadcastSync({
+                    type: 'TOOL_STREAM',
+                    payload: {
+                      thread_id: thread!.id,
+                      message_id: assistantMsg.id,
+                      tool_execution_id: toolExec.id,
+                      stream: 'stdout',
+                      chunk,
+                    },
+                  });
+                },
+                onStderrChunk: (chunk) => {
+                  broadcastSync({
+                    type: 'TOOL_STREAM',
+                    payload: {
+                      thread_id: thread!.id,
+                      message_id: assistantMsg.id,
+                      tool_execution_id: toolExec.id,
+                      stream: 'stderr',
+                      chunk,
+                    },
+                  });
+                },
+                onFileCheckpointCreated: (checkpoint) => {
+                  broadcastSync({
+                    type: 'CHECKPOINT_CREATED',
+                    payload: { thread_id: thread!.id, checkpoint },
+                  });
+                },
+                onScreenCaptured: (base64Image, windowTitle) => {
+                  broadcastSync({
+                    type: 'VISION_CAPTURE',
+                    payload: {
+                      base64DataUrl: base64Image,
+                      activeWindowTitle: windowTitle,
+                    },
+                  });
                 },
               });
-            }
 
-            const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
-            db.updateToolExecution(toolExec.id, {
-              stdout_stream: execResult.stdout,
-              stderr_stream: execResult.stderr,
-              exit_code: execResult.exitCode,
-              status: finalStatus,
-              duration_ms: execResult.durationMs,
-            });
-
-            broadcastSync({
-              type: 'TOOL_EVENT',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                tool_execution_id: toolExec.id,
-                tool_name: toolName,
+              // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
+              const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
+                workspaceRoot: project.root_path,
+                toolName,
                 command: cmdFormatted,
-                arguments: toolArgs,
-                output: execResult.stdout || execResult.stderr,
-                exit_code: execResult.exitCode,
-                duration_ms: execResult.durationMs,
-                status: finalStatus,
-              },
-            });
+                exitCode: execResult.exitCode,
+                stdout: execResult.stdout,
+                stderr: execResult.stderr,
+              });
 
-            if (abortController.signal.aborted) return;
-            executedToolsThisStep.push({
-              id: toolExec.id,
-              toolName,
-              arguments: toolArgs,
-              output: execResult.stdout || execResult.stderr || 'Success (no output)',
-              screenshotBase64: execResult.screenshotBase64,
-            });
+              if (ppcCycle) {
+                broadcastSync({
+                  type: 'HARNESS_PPC_COMPLETED',
+                  payload: {
+                    cycle: ppcCycle,
+                    components: harness.listHarnessComponents(project.root_path),
+                  },
+                });
+              }
+
+              const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
+              db.updateToolExecution(toolExec.id, {
+                stdout_stream: execResult.stdout,
+                stderr_stream: execResult.stderr,
+                exit_code: execResult.exitCode,
+                status: finalStatus,
+                duration_ms: execResult.durationMs,
+              });
+
+              broadcastSync({
+                type: 'TOOL_EVENT',
+                payload: {
+                  session_id: thread!.id,
+                  thread_id: thread!.id,
+                  message_id: assistantMsg.id,
+                  tool_execution_id: toolExec.id,
+                  tool_name: toolName,
+                  command: cmdFormatted,
+                  arguments: toolArgs,
+                  output: execResult.stdout || execResult.stderr,
+                  exit_code: execResult.exitCode,
+                  duration_ms: execResult.durationMs,
+                  status: finalStatus,
+                },
+              });
+
+              if (abortController.signal.aborted) return;
+              executedToolsThisStep.push({
+                id: toolExec.id,
+                toolName,
+                arguments: toolArgs,
+                output: execResult.stdout || execResult.stderr || 'Success (no output)',
+                screenshotBase64: execResult.screenshotBase64,
+              });
+            } catch (toolErr: any) {
+              const errStr = toolErr?.message || String(toolErr);
+              db.updateToolExecution(toolExec.id, {
+                stdout_stream: '',
+                stderr_stream: `Tool execution failed: ${errStr}`,
+                exit_code: 1,
+                status: 'error',
+                duration_ms: 0,
+              });
+              broadcastSync({
+                type: 'TOOL_EVENT',
+                payload: {
+                  session_id: thread!.id,
+                  thread_id: thread!.id,
+                  message_id: assistantMsg.id,
+                  tool_execution_id: toolExec.id,
+                  tool_name: toolName,
+                  command: cmdFormatted,
+                  arguments: toolArgs,
+                  output: `Tool execution failed: ${errStr}`,
+                  exit_code: 1,
+                  duration_ms: 0,
+                  status: 'error',
+                },
+              });
+              executedToolsThisStep.push({
+                id: toolExec.id,
+                toolName,
+                arguments: toolArgs,
+                output: `Tool error: ${errStr}`,
+              });
+            }
           },
         });
 
@@ -866,6 +899,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
       }
 
+      db.finalizeRunningToolExecutions(assistantMsg.id);
       db.finalizeStreamingMessage(assistantMsg.id);
       const updatedThread = db.updateThread(thread.id, { status: 'idle' });
 
@@ -909,6 +943,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         err?.name === 'AbortError' ||
         err?.message?.toLowerCase().includes('abort')
       ) {
+        db.finalizeRunningToolExecutions(assistantMsg.id);
         db.finalizeStreamingMessage(assistantMsg.id);
         db.updateThread(thread.id, { status: 'idle' });
         broadcastSync({
@@ -929,6 +964,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
+      db.finalizeRunningToolExecutions(assistantMsg.id);
       db.finalizeStreamingMessage(assistantMsg.id);
       db.updateThread(thread.id, { status: 'error' });
       broadcastSync({

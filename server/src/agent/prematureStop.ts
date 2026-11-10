@@ -45,7 +45,7 @@ export function detectPrematureStop(
   const trailingSentence = sentences.length > 0 ? sentences[sentences.length - 1] : lastLine;
 
   const actionIntentRegex =
-    /(?:^|\b)(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
+    /(?:^|\b)(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|confirm|call|invoke|query|probe|execute|dispatch|try|validate|install|setup|proceed|continue|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build)\b/i;
 
   if (actionIntentRegex.test(trailingSentence) || (trimmed.length < 280 && actionIntentRegex.test(trimmed))) {
     const matchedSnippet = trailingSentence.slice(0, 100);

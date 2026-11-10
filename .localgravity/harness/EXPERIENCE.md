@@ -305,3 +305,10 @@
 - **[PPC Auto-Tool Rule 2026-11-10T00:38:19.904Z]**: Tool `code_outline` (`code_outline({"path":"client/src/components/center-canvas/ChatCanvas.tsx"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityclientsrccomponen`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for code_outline with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-10T01:23:03.669Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"$p='C:\\Users\\Sue\\.gemini\\antigravity\\mcp_config.json'; if(Test-Path $p){Write-Output ('EXISTS: '+$p); Get-Content $p} else {Write-Output 'NO GLOBAL mcp_config.json'}; Write-Output '--- workspace .agents ---'; Get-ChildItem -Path '.agents' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:94 + ... ty\mcp_config.json'; if(Test-Path ){Write-Output ('EXISTS: '+); Get-C ... +                                                             `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-10T01:23:03.669Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "p='C:UsersSue.geminiant`) encountered error `At line:1 char:94 + ... tymcp_config.json'; if(Test-Path ){Write-Output ('EXISTS`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

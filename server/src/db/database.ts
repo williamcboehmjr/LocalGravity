@@ -786,6 +786,20 @@ export class LocalGravityDB {
     return updated;
   }
 
+  public finalizeRunningToolExecutions(messageId: string): number {
+    const res = this.db
+      .prepare(
+        `UPDATE tool_executions 
+         SET status = 'error',
+             exit_code = COALESCE(exit_code, 1),
+             stdout_stream = COALESCE(stdout_stream, ''),
+             stderr_stream = COALESCE(stderr_stream, 'Interrupted or finalized before completion')
+         WHERE message_id = ? AND status = 'running'`
+      )
+      .run(messageId);
+    return res.changes;
+  }
+
   public listToolExecutions(threadId: string): ToolExecutionRecord[] {
     return this.db
       .prepare('SELECT * FROM tool_executions WHERE thread_id = ? ORDER BY rowid ASC')
