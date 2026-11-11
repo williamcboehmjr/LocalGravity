@@ -72,6 +72,46 @@ export interface FileCheckpointRecord {
   created_at: string;
 }
 
+export type SwarmMemberState = 'waiting' | 'working' | 'stopped' | 'killed';
+export type SwarmWorkspaceMode = 'inherit' | 'share' | 'branch';
+
+export interface SwarmSessionRecord {
+  id: string;
+  parent_thread_id: string;
+  title: string;
+  status: string;
+  created_at: number;
+}
+
+export interface SwarmMemberRecord {
+  id: string;
+  swarm_id: string;
+  name: string;
+  added_by: string;
+  thread_id: string;
+  model: string;
+  state: SwarmMemberState;
+  workspace_mode: SwarmWorkspaceMode;
+  workspace_path: string;
+  channels_json: string;
+  wait_since: number;
+  mentions_only: number;
+  last_read_seq: number;
+  last_post_seq: number;
+  brief: string;
+}
+
+export interface SwarmMessageRecord {
+  seq: number;
+  swarm_id: string;
+  channel: string;
+  agent: string;
+  text: string;
+  kind: string;
+  mentions_json: string;
+  created_at: number;
+}
+
 export interface InFlightStreamBuffer {
   messageId: string;
   threadId: string;
@@ -179,11 +219,52 @@ export class LocalGravityDB {
         FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS swarm_sessions (
+        id TEXT PRIMARY KEY,
+        parent_thread_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS swarm_members (
+        id TEXT PRIMARY KEY,
+        swarm_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        added_by TEXT NOT NULL DEFAULT 'coordinator',
+        thread_id TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'waiting',
+        workspace_mode TEXT NOT NULL DEFAULT 'inherit',
+        workspace_path TEXT NOT NULL DEFAULT '',
+        channels_json TEXT NOT NULL DEFAULT '["main"]',
+        wait_since INTEGER NOT NULL DEFAULT 0,
+        mentions_only INTEGER NOT NULL DEFAULT 1,
+        last_read_seq INTEGER NOT NULL DEFAULT 0,
+        last_post_seq INTEGER NOT NULL DEFAULT 0,
+        brief TEXT NOT NULL DEFAULT '',
+        UNIQUE(swarm_id, name)
+      );
+
+      CREATE TABLE IF NOT EXISTS swarm_messages (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        swarm_id TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'main',
+        agent TEXT NOT NULL,
+        text TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'message',
+        mentions_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_threads_project_id ON threads(project_id);
       CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
       CREATE INDEX IF NOT EXISTS idx_tool_executions_message_id ON tool_executions(message_id);
       CREATE INDEX IF NOT EXISTS idx_tool_executions_thread_id ON tool_executions(thread_id);
       CREATE INDEX IF NOT EXISTS idx_file_checkpoints_thread_id ON file_checkpoints(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_swarm_sessions_thread ON swarm_sessions(parent_thread_id);
+      CREATE INDEX IF NOT EXISTS idx_swarm_members_swarm ON swarm_members(swarm_id);
+      CREATE INDEX IF NOT EXISTS idx_swarm_messages_swarm_seq ON swarm_messages(swarm_id, seq);
     `);
   }
 
@@ -566,6 +647,12 @@ export class LocalGravityDB {
     return record;
   }
 
+  public updateMessageAttachments(messageId: string, attachments: unknown[]): void {
+    this.db
+      .prepare('UPDATE messages SET attachments = ? WHERE id = ?')
+      .run(JSON.stringify(attachments || []), messageId);
+  }
+
   // ==================== 250ms STREAM REHYDRATION ENGINE ====================
   public beginStreamingMessage(messageId: string, threadId: string): void {
     this.streamBuffers.set(messageId, {
@@ -875,6 +962,232 @@ export class LocalGravityDB {
         restoredContent: cp.previous_content_blob,
       };
     }
+  }
+
+  // ==================== SWARM SESSIONS, MEMBERS & BOARD ====================
+  public createOrGetSwarmSession(parentThreadId: string, title = 'Swarm Session'): SwarmSessionRecord {
+    const existing = this.getSwarmSessionByThread(parentThreadId);
+    if (existing) return existing;
+    const record: SwarmSessionRecord = {
+      id: `swarm-${crypto.randomUUID().slice(0, 8)}`,
+      parent_thread_id: parentThreadId,
+      title,
+      status: 'active',
+      created_at: Date.now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO swarm_sessions (id, parent_thread_id, title, status, created_at)
+         VALUES (@id, @parent_thread_id, @title, @status, @created_at)`
+      )
+      .run(record);
+    return record;
+  }
+
+  public getSwarmSessionByThread(parentThreadId: string): SwarmSessionRecord | undefined {
+    return this.db
+      .prepare('SELECT * FROM swarm_sessions WHERE parent_thread_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(parentThreadId) as SwarmSessionRecord | undefined;
+  }
+
+  public getSwarmSession(id: string): SwarmSessionRecord | undefined {
+    return this.db
+      .prepare('SELECT * FROM swarm_sessions WHERE id = ?')
+      .get(id) as SwarmSessionRecord | undefined;
+  }
+
+  public updateSwarmSession(id: string, patch: Partial<Pick<SwarmSessionRecord, 'title' | 'status'>>): SwarmSessionRecord | undefined {
+    const existing = this.getSwarmSession(id);
+    if (!existing) return undefined;
+    const next = {
+      id,
+      title: patch.title ?? existing.title,
+      status: patch.status ?? existing.status,
+    };
+    this.db
+      .prepare('UPDATE swarm_sessions SET title = @title, status = @status WHERE id = @id')
+      .run(next);
+    return this.getSwarmSession(id);
+  }
+
+  public upsertSwarmMember(input: {
+    id?: string;
+    swarm_id: string;
+    name: string;
+    added_by?: string;
+    thread_id: string;
+    model?: string;
+    state?: SwarmMemberState;
+    workspace_mode?: SwarmWorkspaceMode;
+    workspace_path?: string;
+    channels?: string[];
+    wait_since?: number;
+    mentions_only?: boolean;
+    last_read_seq?: number;
+    last_post_seq?: number;
+    brief?: string;
+  }): SwarmMemberRecord {
+    const existing = this.getSwarmMember(input.swarm_id, input.name);
+    const record: SwarmMemberRecord = {
+      id: existing?.id || input.id || `member-${crypto.randomUUID().slice(0, 8)}`,
+      swarm_id: input.swarm_id,
+      name: input.name,
+      added_by: input.added_by ?? existing?.added_by ?? 'coordinator',
+      thread_id: input.thread_id,
+      model: input.model ?? existing?.model ?? '',
+      state: input.state ?? existing?.state ?? 'waiting',
+      workspace_mode: input.workspace_mode ?? existing?.workspace_mode ?? 'inherit',
+      workspace_path: input.workspace_path ?? existing?.workspace_path ?? '',
+      channels_json: input.channels ? JSON.stringify(input.channels) : existing?.channels_json ?? '["main"]',
+      wait_since: input.wait_since ?? existing?.wait_since ?? 0,
+      mentions_only: input.mentions_only !== undefined ? (input.mentions_only ? 1 : 0) : existing?.mentions_only ?? 1,
+      last_read_seq: input.last_read_seq ?? existing?.last_read_seq ?? 0,
+      last_post_seq: input.last_post_seq ?? existing?.last_post_seq ?? 0,
+      brief: input.brief ?? existing?.brief ?? '',
+    };
+    this.db
+      .prepare(
+        `INSERT INTO swarm_members (
+          id, swarm_id, name, added_by, thread_id, model, state,
+          workspace_mode, workspace_path, channels_json, wait_since,
+          mentions_only, last_read_seq, last_post_seq, brief
+        ) VALUES (
+          @id, @swarm_id, @name, @added_by, @thread_id, @model, @state,
+          @workspace_mode, @workspace_path, @channels_json, @wait_since,
+          @mentions_only, @last_read_seq, @last_post_seq, @brief
+        )
+        ON CONFLICT(swarm_id, name) DO UPDATE SET
+          added_by = excluded.added_by,
+          thread_id = excluded.thread_id,
+          model = excluded.model,
+          state = excluded.state,
+          workspace_mode = excluded.workspace_mode,
+          workspace_path = excluded.workspace_path,
+          channels_json = excluded.channels_json,
+          wait_since = excluded.wait_since,
+          mentions_only = excluded.mentions_only,
+          last_read_seq = excluded.last_read_seq,
+          last_post_seq = excluded.last_post_seq,
+          brief = excluded.brief`
+      )
+      .run(record);
+    return this.getSwarmMember(input.swarm_id, input.name)!;
+  }
+
+  public getSwarmMember(swarmId: string, name: string): SwarmMemberRecord | undefined {
+    return this.db
+      .prepare('SELECT * FROM swarm_members WHERE swarm_id = ? AND name = ?')
+      .get(swarmId, name) as SwarmMemberRecord | undefined;
+  }
+
+  public listSwarmMembers(swarmId: string): SwarmMemberRecord[] {
+    return this.db
+      .prepare('SELECT * FROM swarm_members WHERE swarm_id = ? ORDER BY rowid ASC')
+      .all(swarmId) as SwarmMemberRecord[];
+  }
+
+  public updateSwarmMember(
+    swarmId: string,
+    name: string,
+    patch: Partial<{
+      model: string;
+      state: SwarmMemberState;
+      workspace_path: string;
+      wait_since: number;
+      mentions_only: boolean;
+      last_read_seq: number;
+      last_post_seq: number;
+      brief: string;
+    }>
+  ): SwarmMemberRecord | undefined {
+    const existing = this.getSwarmMember(swarmId, name);
+    if (!existing) return undefined;
+    const next = {
+      swarm_id: swarmId,
+      name,
+      model: patch.model ?? existing.model,
+      state: patch.state ?? existing.state,
+      workspace_path: patch.workspace_path ?? existing.workspace_path,
+      wait_since: patch.wait_since ?? existing.wait_since,
+      mentions_only: patch.mentions_only !== undefined ? (patch.mentions_only ? 1 : 0) : existing.mentions_only,
+      last_read_seq: patch.last_read_seq ?? existing.last_read_seq,
+      last_post_seq: patch.last_post_seq ?? existing.last_post_seq,
+      brief: patch.brief ?? existing.brief,
+    };
+    this.db
+      .prepare(
+        `UPDATE swarm_members SET
+          model = @model, state = @state, workspace_path = @workspace_path,
+          wait_since = @wait_since, mentions_only = @mentions_only,
+          last_read_seq = @last_read_seq, last_post_seq = @last_post_seq,
+          brief = @brief
+        WHERE swarm_id = @swarm_id AND name = @name`
+      )
+      .run(next);
+    return this.getSwarmMember(swarmId, name);
+  }
+
+  public appendSwarmMessage(input: {
+    swarm_id: string;
+    channel?: string;
+    agent: string;
+    text: string;
+    kind?: string;
+    mentions?: string[];
+  }): SwarmMessageRecord {
+    const info = this.db
+      .prepare(
+        `INSERT INTO swarm_messages (swarm_id, channel, agent, text, kind, mentions_json, created_at)
+         VALUES (@swarm_id, @channel, @agent, @text, @kind, @mentions_json, @created_at)`
+      )
+      .run({
+        swarm_id: input.swarm_id,
+        channel: input.channel || 'main',
+        agent: input.agent,
+        text: input.text,
+        kind: input.kind || 'message',
+        mentions_json: JSON.stringify(input.mentions || []),
+        created_at: Date.now(),
+      });
+    return this.db
+      .prepare('SELECT * FROM swarm_messages WHERE seq = ?')
+      .get(info.lastInsertRowid) as SwarmMessageRecord;
+  }
+
+  public readSwarmMessages(
+    swarmId: string,
+    opts: { since?: number; limit?: number; seqs?: number[]; channel?: string } = {}
+  ): SwarmMessageRecord[] {
+    if (Array.isArray(opts.seqs) && opts.seqs.length > 0) {
+      const cleanSeqs = opts.seqs.filter((n) => Number.isFinite(n));
+      if (cleanSeqs.length === 0) return [];
+      const placeholders = cleanSeqs.map(() => '?').join(',');
+      return this.db
+        .prepare(`SELECT * FROM swarm_messages WHERE swarm_id = ? AND seq IN (${placeholders}) ORDER BY seq ASC`)
+        .all(swarmId, ...cleanSeqs) as SwarmMessageRecord[];
+    }
+
+    const limit = Math.max(1, Math.min(200, opts.limit ?? 20));
+    const channelFilter = opts.channel ? ' AND channel = ?' : '';
+    const channelArgs = opts.channel ? [opts.channel] : [];
+
+    if (opts.since !== undefined) {
+      return this.db
+        .prepare(`SELECT * FROM swarm_messages WHERE swarm_id = ? AND seq > ?${channelFilter} ORDER BY seq ASC LIMIT ?`)
+        .all(swarmId, opts.since, ...channelArgs, limit) as SwarmMessageRecord[];
+    }
+
+    const latestDesc = this.db
+      .prepare(`SELECT * FROM swarm_messages WHERE swarm_id = ?${channelFilter} ORDER BY seq DESC LIMIT ?`)
+      .all(swarmId, ...channelArgs, limit) as SwarmMessageRecord[];
+    return latestDesc.reverse();
+  }
+
+  public getSwarmHead(swarmId: string): number {
+    const row = this.db
+      .prepare('SELECT COALESCE(MAX(seq), 0) AS head FROM swarm_messages WHERE swarm_id = ?')
+      .get(swarmId) as { head: number } | undefined;
+    return row?.head ?? 0;
   }
 
   public close(): void {

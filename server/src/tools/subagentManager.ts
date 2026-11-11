@@ -1,3 +1,5 @@
+import type { TabbyEngine } from '../tabby/tabbyEngine.js';
+
 export interface SubagentTaskRecord {
   id: string;
   threadId: string;
@@ -31,6 +33,15 @@ export class SubagentManager {
   private tasks = new Map<string, SubagentTaskRecord>();
   private listeners = new Set<SubagentListener>();
   private seq = 1;
+  private llmEngine: TabbyEngine | null = null;
+
+  public setLlmEngine(engine: TabbyEngine): void {
+    this.llmEngine = engine;
+  }
+
+  public getLlmEngine(): TabbyEngine | null {
+    return this.llmEngine;
+  }
 
   public static getInstance(): SubagentManager {
     if (!SubagentManager.instance) {

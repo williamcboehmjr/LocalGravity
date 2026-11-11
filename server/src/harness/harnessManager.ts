@@ -379,15 +379,47 @@ export class Harness2Manager {
    */
   public buildCompiledHarnessPrompt(workspaceRoot: string): string {
     const components = this.listHarnessComponents(workspaceRoot);
-    return components
-      .map((c) => {
-        let text = c.content.trim();
-        if (text.length > 2500) {
-          text = text.slice(0, 2500) + '\n... [Harness component truncated to preserve context]';
+    const sections = components.map((c) => {
+      let text = c.content.trim();
+      if (text.length > 2500) {
+        text = text.slice(0, 2500) + '\n... [Harness component truncated to preserve context]';
+      }
+      return `--- [${c.name}] ---\n${text}`;
+    });
+
+    // Load hierarchical GEMINI.md / AGENTS.md / .agents/rules/*.md (Antigravity 2.0 customizations)
+    const customFiles: Array<{ label: string; filePath: string }> = [
+      { label: 'Global GEMINI.md', filePath: path.join(os.homedir(), '.gemini', 'GEMINI.md') },
+      { label: 'Workspace GEMINI.md', filePath: path.join(workspaceRoot, 'GEMINI.md') },
+      { label: 'Workspace AGENTS.md', filePath: path.join(workspaceRoot, 'AGENTS.md') },
+    ];
+    for (const rulesDir of [
+      path.join(os.homedir(), '.gemini', 'antigravity', 'rules'),
+      path.join(workspaceRoot, '.agents', 'rules'),
+    ]) {
+      try {
+        if (fs.existsSync(rulesDir)) {
+          for (const entry of fs.readdirSync(rulesDir)) {
+            if (entry.endsWith('.md')) {
+              customFiles.push({ label: `Rule (${entry})`, filePath: path.join(rulesDir, entry) });
+            }
+          }
         }
-        return `--- [${c.name}] ---\n${text}`;
-      })
-      .join('\n\n');
+      } catch {}
+    }
+    for (const cf of customFiles) {
+      try {
+        if (fs.existsSync(cf.filePath)) {
+          const raw = fs.readFileSync(cf.filePath, 'utf-8').trim();
+          if (raw) {
+            const clipped = raw.length > 2000 ? raw.slice(0, 2000) + '\n... [truncated]' : raw;
+            sections.push(`--- [${cf.label}] ---\n${clipped}`);
+          }
+        }
+      } catch {}
+    }
+
+    return sections.join('\n\n');
   }
 
   /**

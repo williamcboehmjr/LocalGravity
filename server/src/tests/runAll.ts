@@ -12,6 +12,8 @@ const tests = [
   'taskManager.test.js',
   'subagentManager.test.js',
   'artifactManager.test.js',
+  'turnPipeline.test.js',
+  'swarmManager.test.js',
 ];
 
 console.log('==============================================================');

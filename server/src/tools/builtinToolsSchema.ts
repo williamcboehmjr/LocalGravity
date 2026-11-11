@@ -596,19 +596,110 @@ export const BUILTIN_TOOLS_SCHEMA = [
           },
           type: {
             type: 'string',
-            enum: ['plan', 'walkthrough', 'report', 'code', 'diff'],
-            description: 'Kind of artifact',
+            enum: ['plan', 'walkthrough', 'report', 'code', 'diff', 'task', 'html'],
+            description: 'Kind of artifact ("html" saves a live interactive widget rendered in an iframe)',
           },
           content: {
             type: 'string',
-            description: 'Full Markdown content of the artifact',
+            description: 'Full Markdown or HTML content of the artifact',
           },
           summary: {
             type: 'string',
             description: 'Brief 1-sentence summary of the artifact',
           },
+          requestFeedback: {
+            type: 'boolean',
+            description: 'Set true when asking the user to review and click Proceed before continuing',
+          },
+          userFacing: {
+            type: 'boolean',
+            description: 'Set true to highlight this artifact inline in the chat feed',
+          },
         },
         required: ['title', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'swarm',
+      description:
+        'Manage a multi-agent swarm working on the shared message board (add workers, check status, list/switch models, kill workers, or set swarm title).',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'models', 'add', 'model', 'kill', 'title'],
+            description: 'Swarm management action',
+          },
+          name: { type: 'string', description: 'Short lowercase worker name (e.g. parser, verifier)' },
+          brief: { type: 'string', description: 'Worker assignment brief (for add)' },
+          model: { type: 'string', description: 'Model name (optional)' },
+          workspace: {
+            type: 'string',
+            enum: ['inherit', 'share', 'branch'],
+            description: 'Workspace isolation mode for add',
+          },
+          n: { type: 'number', description: 'Number of homogeneous copies to spawn' },
+          tasks: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Per-worker slice targets for sharded add',
+          },
+          title: { type: 'string', description: 'Short title for the swarm' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+];
+
+export const SWARM_TOOLS_SCHEMA = [
+  {
+    type: 'function',
+    function: {
+      name: 'post_message',
+      description: 'Post a message to the swarm message board. Use @name or @all to wake sleeping workers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Message content to post' },
+          channel: { type: 'string', description: 'Optional channel name (default: main)' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_board',
+      description: 'Read messages from the swarm message board, oldest first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          since: { type: 'number', description: 'Read messages strictly after this seq number' },
+          limit: { type: 'number', description: 'Maximum messages to return (default 20)' },
+          seqs: { type: 'array', items: { type: 'number' }, description: 'Specific seq numbers to read' },
+          channel: { type: 'string', description: 'Optional channel filter' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'swarm_wait',
+      description: 'Park the current worker at zero GPU cost until another swarm member posts a matching message.',
+      parameters: {
+        type: 'object',
+        properties: {
+          since: { type: 'number', description: 'Highest seq already read' },
+          mentions_only: { type: 'boolean', description: 'Wake only on @name or @all (default true)' },
+        },
+        required: ['since'],
       },
     },
   },

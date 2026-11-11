@@ -57,9 +57,18 @@ export class SkillManager {
         path: path.join(userProfile, '.gemini', 'antigravity', 'builtin', 'skills'),
         rootType: 'builtin',
       },
-      // 3. Workspace Local Skills
+      // 3. User .agents/skills (Antigravity 2.0 standard)
+      {
+        path: path.join(userProfile, '.agents', 'skills'),
+        rootType: 'user',
+      },
+      // 4. Workspace Local Skills (.localgravity & .agents/skills)
       {
         path: path.join(workspaceRoot, '.localgravity', 'harness', 'skills'),
+        rootType: 'workspace',
+      },
+      {
+        path: path.join(workspaceRoot, '.agents', 'skills'),
         rootType: 'workspace',
       },
     ];

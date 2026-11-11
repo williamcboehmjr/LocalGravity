@@ -1,4 +1,9 @@
-import { PrunableMessage, pruneChatMessages } from './messagePruning.js';
+import {
+  PrunableMessage,
+  extractMessageText,
+  measureMessageTextLength,
+  pruneChatMessages,
+} from './messagePruning.js';
 
 export interface AutoCompactionResult {
   messages: PrunableMessage[];
@@ -23,19 +28,12 @@ export function autoCompactMessages(
   thresholdChars = 36000,
   keepRecentCount = 6
 ): AutoCompactionResult {
-  const previousChars = messages.reduce(
-    (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length),
-    0
-  );
+  const previousChars = messages.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
   const previousTokens = Math.max(1, Math.ceil(previousChars / 4));
 
-  // If below threshold or too few messages to compact, return pruned messages directly
-  if (previousChars <= thresholdChars || messages.length <= keepRecentCount + 2) {
+  const fallbackPrune = () => {
     const pruned = pruneChatMessages(messages, thresholdChars);
-    const afterChars = pruned.reduce(
-      (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length),
-      0
-    );
+    const afterChars = pruned.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
     const didPrune = afterChars < previousChars;
     return {
       messages: pruned,
@@ -44,16 +42,29 @@ export function autoCompactMessages(
       compactedChars: afterChars,
       previousTokens,
       compactedTokens: Math.max(1, Math.ceil(afterChars / 4)),
-      compactedTurnCount: didPrune ? messages.length - keepRecentCount : 0,
+      compactedTurnCount: didPrune ? Math.max(0, messages.length - keepRecentCount) : 0,
       summary: didPrune
         ? `Pruned historical tool outputs (${previousTokens} → ${Math.ceil(afterChars / 4)} tok)`
         : '',
     };
+  };
+
+  // If below threshold or too few messages to compact, return pruned messages directly
+  if (previousChars <= thresholdChars || messages.length <= keepRecentCount + 2) {
+    return fallbackPrune();
   }
 
   const systemMsg = messages[0]?.role === 'system' ? messages[0] : null;
   const startIdx = systemMsg ? 1 : 0;
-  const recentBoundary = Math.max(startIdx + 1, messages.length - keepRecentCount);
+  let recentBoundary = Math.max(startIdx + 1, messages.length - keepRecentCount);
+
+  // Never split an assistant(tool_calls) message from its role:'tool' replies at recentBoundary.
+  while (recentBoundary > startIdx && messages[recentBoundary]?.role === 'tool') {
+    recentBoundary--;
+  }
+  if (recentBoundary <= startIdx || messages[recentBoundary]?.role === 'tool') {
+    return fallbackPrune();
+  }
 
   const middleMessages = messages.slice(startIdx, recentBoundary);
   const recentMessages = messages.slice(recentBoundary);
@@ -63,13 +74,7 @@ export function autoCompactMessages(
   const assistantMilestones: string[] = [];
 
   for (const msg of middleMessages) {
-    const rawContent: any = msg.content;
-    const text =
-      typeof rawContent === 'string'
-        ? rawContent
-        : Array.isArray(rawContent)
-        ? rawContent.map((p: any) => p.text || '').join(' ')
-        : '';
+    const text = extractMessageText(msg.content);
 
     if (msg.role === 'user' && text.trim()) {
       const clean = text.replace(/\s+/g, ' ').trim().slice(0, 220);
@@ -134,10 +139,7 @@ export function autoCompactMessages(
   }
 
   const finalMessages = pruneChatMessages(assembled, thresholdChars);
-  const compactedChars = finalMessages.reduce(
-    (sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length),
-    0
-  );
+  const compactedChars = finalMessages.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
   const compactedTokens = Math.max(1, Math.ceil(compactedChars / 4));
 
   return {

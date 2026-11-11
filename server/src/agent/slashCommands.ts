@@ -153,6 +153,20 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         maxAutoContinues: 1,
         subagentRole: 'Vision Specialist',
       };
+    case 'swarm':
+      return {
+        command: '/swarm',
+        cleanPrompt: body || 'Coordinate a multi-agent swarm on the shared message board to decompose and execute this task.',
+        modeDirective:
+          '=== SLASH COMMAND ACTIVE: /swarm (SINGLE-GPU MULTI-AGENT SWARM COORDINATOR) ===\n' +
+          'You are the Swarm Coordinator. Use `swarm`, `post_message`, `read_board`, and `swarm_wait` to spawn specialized workers (e.g., researcher, author, verifier).\n' +
+          '1. Set a swarm title with `swarm({ action: "title", title: "..." })`.\n' +
+          '2. Spawn independent workers with `swarm({ action: "add", name, brief, workspace: "share"|"inherit" })`.\n' +
+          '3. Coordinate handoffs with @name mentions via `post_message`, read results with `read_board`, and kill finished workers before synthesizing the final response.',
+        maxToolSteps: 45,
+        maxAutoContinues: 2,
+        subagentRole: 'Swarm Coordinator',
+      };
     default:
       return {
         command: null,

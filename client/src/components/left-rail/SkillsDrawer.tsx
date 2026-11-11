@@ -1,15 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Wrench,
   RefreshCw,
-  Terminal,
-  GitBranch,
-  Search,
+  Sparkles,
   ChevronRight,
   ChevronDown,
-  Eye,
   Plug,
-  ShieldCheck,
 } from 'lucide-react';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useSessionStore } from '../../store/useSessionStore';
@@ -20,42 +16,30 @@ export const SkillsDrawer: React.FC = () => {
   const { mcpServers, setMcpServers } = useTelemetryStore();
   const { apiBaseUrl } = useSessionStore();
 
-  const skills = [
-    {
-      name: 'inspect_models',
-      type: 'vision',
-      desc: 'Strata Qwen 3.8 Flash-Next & Vision verifier',
-      icon: <Eye className="w-3 h-3 text-indigo-400" />,
-    },
-    {
-      name: 'workspace_search',
-      type: '19 tools',
-      desc: 'Read, write, diff, grep, find_files, symbols',
-      icon: <Search className="w-3 h-3 text-cyan-400" />,
-    },
-    {
-      name: 'run_terminal',
-      type: 'core',
-      desc: 'PowerShell 7 + background tasks',
-      icon: <Terminal className="w-3 h-3 text-emerald-400" />,
-    },
-    {
-      name: 'git_workflow',
-      type: 'skill',
-      desc: 'git_status, git_diff & file checkpoints',
-      icon: <GitBranch className="w-3 h-3 text-amber-400" />,
-    },
-    {
-      name: 'harness_ppc',
-      type: 'memory',
-      desc: 'Propose-Probe-Compose self-learning',
-      icon: <ShieldCheck className="w-3 h-3 text-purple-400" />,
-    },
-  ];
+  const [skills, setSkills] = useState<Array<{ name: string; description: string; rootType: string }>>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadSkills = useCallback(async () => {
+    setIsReloading(true);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/skills`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSkills(Array.isArray(data.skills) ? data.skills : []);
+      setLoadError(null);
+    } catch (err: any) {
+      setLoadError(err?.message || 'Failed to load skills');
+    } finally {
+      setIsReloading(false);
+    }
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
 
   const handleReload = () => {
-    setIsReloading(true);
-    setTimeout(() => setIsReloading(false), 600);
+    loadSkills();
   };
 
   const handleToggleMcp = async (serverName: string, currentEnabled: boolean) => {
@@ -106,22 +90,27 @@ export const SkillsDrawer: React.FC = () => {
 
       {isOpen && (
         <div className="space-y-1 pl-1">
+          {loadError && (
+            <div className="px-2 py-1 text-[10.5px] text-[#F28B82]">Skills unavailable: {loadError}</div>
+          )}
+          {!loadError && skills.length === 0 && !isReloading && (
+            <div className="px-2 py-1 text-[10.5px] text-[#6E6E73]">No skills discovered</div>
+          )}
           {skills.map((s) => (
             <div
-              key={s.name}
-              title={s.desc}
+              key={`${s.rootType}:${s.name}`}
+              title={s.description}
               className="flex items-center justify-between px-2 py-1 rounded-md hover:bg-[#1C1C1F] text-xs text-[#9A9A9E] hover:text-[#E3E3E3]"
             >
               <div className="flex items-center gap-2 truncate">
-                {s.icon}
+                <Sparkles className="w-3 h-3 text-[#8AB4F8]" />
                 <span className="font-mono text-[11px] truncate">{s.name}</span>
               </div>
               <span className="text-[9.5px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#18181B] border border-[#2C2C30] text-[#8E8E93]">
-                {s.type}
+                {s.rootType}
               </span>
             </div>
           ))}
-
           {mcpServers.length > 0 && (
             <div className="pt-1 mt-1 border-t border-[#1E1E22] space-y-1">
               {mcpServers.map((mcp) => (

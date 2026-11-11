@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Cpu, HardDrive, Plug, Zap, RefreshCw, Settings, ChevronUp, ChevronDown } from 'lucide-react';
-import { CountdownPill } from './CountdownPill';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useSessionStore } from '../../store/useSessionStore';
 
@@ -169,10 +168,6 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
           <Settings className="w-3.5 h-3.5" />
           <span>Settings</span>
         </button>
-
-        {!isConnected && (
-          <CountdownPill durationSeconds={15} label='Reconnecting' tone='amber' />
-        )}
 
         <button
           type="button"

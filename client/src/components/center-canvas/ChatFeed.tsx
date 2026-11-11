@@ -13,7 +13,6 @@ import {
   Sparkles,
   CheckCircle2,
   FolderOpen,
-  Layers,
   Copy,
   Check,
   RotateCcw,
@@ -22,10 +21,11 @@ import {
   Map,
   Cpu,
 } from 'lucide-react';
-import { useSessionStore, ToolCallItemData } from '../../store/useSessionStore';
+import { useSessionStore, ToolCallItemData, selectIsTurnActive, selectStatusLabel } from '../../store/useSessionStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
-import { useArtifactStore } from '../../store/useArtifactStore';
+import { useArtifactStore, WorkbenchTab, ArtifactRecord } from '../../store/useArtifactStore';
 import { ThoughtAccordion } from './ThoughtAccordion';
+import { AgentEmbedWidget } from './AgentEmbedWidget';
 
 function shortenPath(rawPath: string): string {
   if (!rawPath) return '.';
@@ -344,80 +344,66 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   };
 }
 
-function parseMessageContent(
-  rawContent: string,
-  existingThought?: string,
-  existingStepNotes?: string[],
-  hasTools?: boolean
-) {
+/**
+ * Code-fence-aware content cleaner. Never hides real prose:
+ *  - closed <think>/<thought>/<tool_call> blocks are removed (outside code fences only)
+ *  - an UNCLOSED tag is only stripped when it is at the trailing end AND the turn is streaming
+ */
+function maskCodeFences(text: string): { masked: string; restore: (s: string) => string } {
+  const blocks: string[] = [];
+  const masked = text.replace(/(```|~~~)[\s\S]*?(?:\1|$)/g, (m) => {
+    blocks.push(m);
+    return `\u0000FENCE${blocks.length - 1}\u0000`;
+  });
+  return {
+    masked,
+    restore: (s: string) => s.replace(/\u0000FENCE(\d+)\u0000/g, (_m, i) => blocks[Number(i)] ?? ''),
+  };
+}
+
+function parseMessageContent(rawContent: string, existingThought?: string, isStreaming?: boolean) {
   let thought = existingThought || '';
-  let content = rawContent || '';
+  const { masked, restore } = maskCodeFences(rawContent || '');
+  let content = masked;
 
-  const thoughtMatch = content.match(/<(thought|think)>([\s\S]*?)<\/(thought|think)>/i);
-  if (thoughtMatch) {
-    if (!thought) {
-      thought = thoughtMatch[2].trim();
-    }
-    content = content.replace(thoughtMatch[0], '').trim();
-  }
+  // Closed think blocks
+  content = content.replace(/<(thought|think)>([\s\S]*?)<\/\1>/gi, (_m, _t, body) => {
+    if (!thought) thought = String(body).trim();
+    return '';
+  });
+  // Closed tool_call blocks
+  content = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
 
-  const openMatch = content.match(/<(thought|think)>([\s\S]*)/i);
-  if (openMatch) {
-    if (!thought) {
-      thought = openMatch[2].trim();
-    }
-    content = content.replace(openMatch[0], '').trim();
-  }
-
-  // Strip raw <tool_call> tags (both closed and open streaming)
-  content = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
-  content = content.replace(/<tool_call>[\s\S]*/gi, '').trim();
-
-  // Separate transitional step chatter lines when tools are present so the main message stays clean
-  const stepNotes: string[] = [...(existingStepNotes || [])];
-  if (hasTools && content) {
-    const lines = content.split(/\r?\n/);
-    const remainingLines: string[] = [];
-    let stillInLeadingChatter = true;
-
-    const chatterRegex =
-      /^(let me\s+|now let me\s+|now i\s+|i will\s+|i'll\s+|first,\s+|next,\s+|checking\s+|running\s+|looking at\s+|analyzing\s+|reading\s+|i need to\s+|we need to\s+|the file is large|the tool output|the read_file tool|the read tool|both tools truncate|small chunks work|the \$ is being)/i;
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmedLine = lines[i].trim();
-      if (!trimmedLine) {
-        if (!stillInLeadingChatter) remainingLines.push(lines[i]);
-        continue;
-      }
-      if (
-        stillInLeadingChatter &&
-        trimmedLine.length < 240 &&
-        !trimmedLine.startsWith('#') &&
-        !trimmedLine.startsWith('-') &&
-        !trimmedLine.startsWith('*') &&
-        !trimmedLine.startsWith('1.') &&
-        chatterRegex.test(trimmedLine)
-      ) {
-        if (!stepNotes.includes(trimmedLine)) {
-          stepNotes.push(trimmedLine);
+  if (isStreaming) {
+    // Unclosed tag at the trailing end only
+    const open = content.match(/<(thought|think|tool_call)>(?![\s\S]*<\/\1>)([\s\S]*)$/i);
+    if (open && open.index !== undefined) {
+      if (open[1].toLowerCase() !== 'tool_call' && !thought) thought = open[2].trim();
+      content = content.slice(0, open.index);
+    } else {
+      // partially streamed opening tag, e.g. "<thi" or "<tool_ca"
+      const partial = content.match(/<\/?([a-z_]{0,9})$/i);
+      if (partial && partial.index !== undefined) {
+        const frag = partial[1].toLowerCase();
+        if (['thought', 'think', 'tool_call'].some((t) => t.startsWith(frag))) {
+          content = content.slice(0, partial.index);
         }
-      } else {
-        stillInLeadingChatter = false;
-        remainingLines.push(lines[i]);
       }
     }
-
-    content = remainingLines.join('\n').trim();
   }
 
-  return { thought, content, stepNotes };
+  content = restore(content).trim();
+  return { thought, content };
 }
 
 const ToolExecutionRow: React.FC<{
   item: ToolCallItemData;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
-}> = ({ item, onOpenInWorkbench }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  defaultOpen?: boolean;
+}> = ({ item, onOpenInWorkbench, defaultOpen }) => {
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const isOpen = userOpen ?? Boolean(defaultOpen);
+  const setIsOpen = (v: boolean) => setUserOpen(v);
   const { prefix, target, isRead, isEdit, isDir, isSearch } = formatCompactToolLabel(item);
 
   return (
@@ -483,169 +469,231 @@ const ToolExecutionRow: React.FC<{
   );
 };
 
+type TimelineStep =
+  | { kind: 'thought'; key: string }
+  | { kind: 'note'; key: string; text: string }
+  | { kind: 'tool'; key: string; tool: ToolCallItemData };
+
 /**
- * Antigravity-Style Activity Status Bar:
- * - Stays collapsed by default into a sleek, 1-line status banner while working.
- * - Stays collapsed once completed into a clean summary badge.
- * - Expands on demand if the user clicks it.
+ * ONE chronological step timeline per assistant message (thoughts, step notes and tool
+ * calls in execution order). The header is the single authoritative status line.
  */
-const AgentActivityBox: React.FC<{
+const StepTimeline: React.FC<{
+  thought: string;
+  thoughtElapsedMs?: number;
+  thoughtTokens?: number;
+  thoughtStreaming: boolean;
   toolCalls: ToolCallItemData[];
   stepNotes: string[];
-  isCurrentlyGenerating: boolean;
+  isActive: boolean;
+  statusLabel?: string;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
-}> = ({ toolCalls, stepNotes, isCurrentlyGenerating, onOpenInWorkbench }) => {
-  // Auto-open while actively generating so the user always sees live steps & tool outputs!
-  const [isExpanded, setIsExpanded] = useState<boolean>(isCurrentlyGenerating);
-  const listScrollRef = useRef<HTMLDivElement>(null);
+}> = ({
+  thought,
+  thoughtElapsedMs,
+  thoughtTokens,
+  thoughtStreaming,
+  toolCalls,
+  stepNotes,
+  isActive,
+  statusLabel,
+  onOpenInWorkbench,
+}) => {
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Chronological order: thought first, then each step note precedes the tool call of its step.
+  const steps: TimelineStep[] = [];
+  if (thought || thoughtStreaming) steps.push({ kind: 'thought', key: 'thought' });
+  const n = Math.max(stepNotes.length, toolCalls.length);
+  for (let i = 0; i < n; i++) {
+    if (i < stepNotes.length) steps.push({ kind: 'note', key: `note-${i}`, text: stepNotes[i] });
+    if (i < toolCalls.length) steps.push({ kind: 'tool', key: toolCalls[i].id, tool: toolCalls[i] });
+  }
+
+  const expanded = userExpanded ?? isActive;
+  const latestIdx = steps.length - 1;
 
   useEffect(() => {
-    if (isCurrentlyGenerating) {
-      setIsExpanded(true);
+    if (expanded && isActive && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
     }
-  }, [isCurrentlyGenerating, toolCalls.length, stepNotes.length]);
+  }, [steps.length, expanded, isActive, thought.length]);
 
-  // Auto-scroll the list if the user has it open
-  useEffect(() => {
-    if (isExpanded && listScrollRef.current) {
-      listScrollRef.current.scrollTop = listScrollRef.current.scrollHeight;
-    }
-  }, [toolCalls.length, stepNotes.length, isExpanded]);
-
-  const totalActions = toolCalls.length;
-  if (totalActions === 0 && stepNotes.length === 0) return null;
+  if (steps.length === 0 && !isActive) return null;
 
   const runningTool = toolCalls.find((t) => t.status === 'running');
-  const lastTool = toolCalls[toolCalls.length - 1];
-  const lastNote = stepNotes[stepNotes.length - 1];
-
-  const readCount = toolCalls.filter((t) =>
-    (t.toolName || t.command).toLowerCase().includes('read_file')
-  ).length;
-  const dirCount = toolCalls.filter((t) =>
-    (t.toolName || t.command).toLowerCase().includes('list_directory')
-  ).length;
-  const editCount = toolCalls.filter((t) => {
-    const c = (t.toolName || t.command).toLowerCase();
-    return c.includes('write_file') || c.includes('apply_diff');
-  }).length;
-  const cmdCount = Math.max(0, totalActions - readCount - dirCount - editCount);
-
-  const summaryParts: string[] = [];
-  if (readCount > 0) summaryParts.push(`${readCount} file${readCount > 1 ? 's' : ''} analyzed`);
-  if (dirCount > 0) summaryParts.push(`${dirCount} dir${dirCount > 1 ? 's' : ''} listed`);
-  if (editCount > 0) summaryParts.push(`${editCount} edit${editCount > 1 ? 's' : ''}`);
-  if (cmdCount > 0) summaryParts.push(`${cmdCount} cmd${cmdCount > 1 ? 's' : ''} run`);
-
-  const activeHeadline = runningTool
-    ? (() => {
-        const { prefix, target } = formatCompactToolLabel(runningTool);
-        return `${prefix} ${target}`;
-      })()
-    : lastTool
-    ? (() => {
-        const { prefix, target } = formatCompactToolLabel(lastTool);
-        return `${prefix} ${target}`;
-      })()
-    : lastNote || 'Executing actions...';
+  const headline = isActive
+    ? statusLabel ||
+      (runningTool
+        ? (() => {
+            const { prefix, target } = formatCompactToolLabel(runningTool);
+            return `${prefix} ${target}`;
+          })()
+        : thoughtStreaming
+        ? 'Thinking…'
+        : 'Working…')
+    : `Completed${toolCalls.length > 0 ? ` • ${toolCalls.length} action${toolCalls.length === 1 ? '' : 's'}` : ''}`;
 
   return (
-    <div className="my-2 rounded-xl border border-[#26282C] bg-[#141518] overflow-hidden shadow-sm transition-all">
-      {/* Header Bar (Click to Expand / Collapse on Demand) */}
+    <div className="my-2 rounded-xl border border-[#26282C] bg-[#141518] overflow-hidden shadow-sm">
       <button
         type="button"
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between gap-2.5 px-3.5 py-2 text-xs text-left hover:bg-[#1C1D21] transition-colors cursor-pointer select-none"
+        onClick={() => setUserExpanded(!expanded)}
+        disabled={steps.length === 0}
+        className="w-full flex items-center justify-between gap-2.5 px-3.5 py-2 text-xs text-left hover:bg-[#1C1D21] transition-colors cursor-pointer select-none disabled:cursor-default"
       >
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          {isCurrentlyGenerating ? (
+          {isActive ? (
             <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin shrink-0" />
           ) : (
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           )}
-
-          {isCurrentlyGenerating ? (
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <span className="font-semibold text-[13.5px] text-[#E8EAED] shrink-0">Working</span>
-              <span className="text-[#5F6368] shrink-0">•</span>
-              <span className="font-mono text-[13px] text-[#BDC1C6] truncate">
-                {activeHeadline}
-              </span>
-              {totalActions > 1 && (
-                <span className="text-[12px] text-[#70757A] shrink-0 font-sans hidden sm:inline">
-                  ({totalActions} actions)
-                </span>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <span className="font-medium text-[13.5px] text-[#BDC1C6] shrink-0">
-                Completed {totalActions} action{totalActions === 1 ? '' : 's'}
-              </span>
-              {summaryParts.length > 0 && (
-                <span className="text-[12px] text-[#70757A] truncate hidden sm:inline">
-                  ({summaryParts.join(', ')})
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2.5 shrink-0">
-          {stepNotes.length > 0 && (
-            <span className="hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#1F2023] text-[11px] text-[#9AA0A6]">
-              <Layers className="w-3 h-3" />
-              {stepNotes.length} note{stepNotes.length === 1 ? '' : 's'}
-            </span>
-          )}
-          <span className="text-[12px] text-[#8AB4F8] hover:text-[#AECBFA] font-medium flex items-center gap-0.5">
-            {isExpanded ? (
-              <>
-                <span>Hide</span>
-                <ChevronDown className="w-3.5 h-3.5" />
-              </>
-            ) : (
-              <>
-                <span>{isCurrentlyGenerating ? 'View live' : 'Details'}</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </>
-            )}
+          <span
+            className={`text-[13.5px] truncate ${
+              isActive ? 'font-semibold text-[#E8EAED]' : 'font-medium text-[#BDC1C6]'
+            }`}
+          >
+            {headline}
           </span>
         </div>
+        {steps.length > 0 && (
+          <span className="text-[12px] text-[#8AB4F8] font-medium flex items-center gap-0.5 shrink-0">
+            {expanded ? 'Hide' : 'Details'}
+            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </span>
+        )}
       </button>
 
-      {/* Expanded Activity Stream Window (On demand only) */}
-      {isExpanded && (
+      {expanded && steps.length > 0 && (
         <div
-          ref={listScrollRef}
-          className="px-3 pb-2.5 pt-1.5 border-t border-[#222327] max-h-56 overflow-y-auto space-y-1 bg-[#101113]"
+          ref={bodyRef}
+          className="px-3 pb-2.5 pt-1.5 border-t border-[#222327] max-h-72 overflow-y-auto space-y-0.5 bg-[#101113]"
         >
-          {toolCalls.map((tc) => (
-            <ToolExecutionRow
-              key={tc.id}
-              item={tc}
-              onOpenInWorkbench={onOpenInWorkbench}
-            />
-          ))}
-
-          {stepNotes.length > 0 && (
-            <div className="pt-1.5 mt-1.5 border-t border-[#1F2023] space-y-1">
-              {stepNotes.map((note, idx) => (
+          {steps.map((s, idx) => {
+            const isLatest = idx === latestIdx && isActive;
+            if (s.kind === 'thought') {
+              return (
+                <ThoughtAccordion
+                  key={s.key}
+                  thought={thought}
+                  elapsedMs={thoughtElapsedMs}
+                  tokenCount={thoughtTokens}
+                  isStreaming={thoughtStreaming}
+                  defaultOpen={isLatest}
+                />
+              );
+            }
+            if (s.kind === 'note') {
+              return (
                 <div
-                  key={idx}
-                  className="text-[12.5px] sm:text-[13px] text-[#8E8E93] px-2 py-0.5 flex items-start gap-2 leading-relaxed"
+                  key={s.key}
+                  className="text-[12.5px] sm:text-[13px] text-[#8E8E93] px-2 py-1 flex items-start gap-2 leading-relaxed"
                 >
                   <span className="text-[#55555A] shrink-0 mt-0.5">↳</span>
-                  <span>{note}</span>
+                  <span>{s.text}</span>
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            }
+            return (
+              <ToolExecutionRow
+                key={s.key}
+                item={s.tool}
+                onOpenInWorkbench={onOpenInWorkbench}
+                defaultOpen={isLatest}
+              />
+            );
+          })}
         </div>
       )}
     </div>
   );
 };
+
+/** Right-pane tab targets for sidecar://<id>/<view> links. */
+const SIDECAR_TAB_MAP: Record<string, WorkbenchTab> = {
+  swarm: 'swarm',
+  plan: 'plan',
+  preview: 'preview',
+  terminal: 'terminal',
+  editor: 'editor',
+  files: 'editor',
+  tasks: 'tasks',
+  artifacts: 'plan',
+  harness: 'harness',
+  evidence: 'evidence',
+  changes: 'changes',
+  subagents: 'subagents',
+};
+
+type ContentSegment =
+  | { kind: 'markdown'; text: string }
+  | { kind: 'embed'; src: string; body: string };
+
+/** Split message content into markdown segments and <agent-embed src="...">...</agent-embed> widgets. */
+function splitAgentEmbeds(content: string): ContentSegment[] {
+  const out: ContentSegment[] = [];
+  const re = /<agent-embed\s+[^>]*src=["']([^"']+)["'][^>]*>([\s\S]*?)<\/agent-embed>/gi;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > last) {
+      out.push({ kind: 'markdown', text: content.slice(last, m.index) });
+    }
+    out.push({ kind: 'embed', src: m[1], body: m[2]?.trim() || '' });
+    last = m.index + m[0].length;
+  }
+  if (last < content.length) {
+    out.push({ kind: 'markdown', text: content.slice(last) });
+  }
+  return out;
+}
+
+const InlineArtifactCard: React.FC<{
+  artifact: ArtifactRecord;
+  onOpen: () => void;
+}> = ({ artifact, onOpen }) => (
+  <div className="my-2.5 flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border border-[#2D2F34] bg-[#141518] hover:border-[#8AB4F8]/40 transition-colors">
+    <div className="flex items-center gap-2.5 min-w-0">
+      <Sparkles className="w-4 h-4 text-[#8AB4F8] shrink-0" />
+      <div className="min-w-0">
+        <div className="text-[13px] font-medium text-[#E8EAED] truncate">
+          {artifact.title || artifact.type}
+        </div>
+        {artifact.summary && (
+          <div className="text-[11.5px] text-[#8E8E93] truncate">{artifact.summary}</div>
+        )}
+      </div>
+    </div>
+    <button
+      type="button"
+      onClick={onOpen}
+      className="px-2.5 py-1 rounded-lg bg-[#8AB4F8]/15 hover:bg-[#8AB4F8]/25 border border-[#8AB4F8]/40 text-[#8AB4F8] text-[11.5px] font-medium shrink-0 cursor-pointer"
+    >
+      {artifact.requestFeedback ? 'Review & Proceed' : 'Open Artifact'}
+    </button>
+  </div>
+);
+
+function parseSidecarHref(href: string): { id: string; view: string } | null {
+  const m = href.match(/^sidecar:\/\/([^/?#]*)\/?([^?#]*)/i);
+  if (!m) return null;
+  const view = decodeURIComponent(m[2] || m[1] || '').toLowerCase();
+  return { id: decodeURIComponent(m[1] || ''), view };
+}
+
+function fileUriToPath(href: string): { path: string; startLine?: number; endLine?: number } {
+  const [base, hash = ''] = href.split('#');
+  let p = decodeURIComponent(base.replace(/^file:\/\/\/?/i, ''));
+  if (/^[a-zA-Z]:/.test(p) === false && !p.startsWith('/')) p = '/' + p;
+  if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1);
+  const lm = hash.match(/^L(\d+)(?:-L?(\d+))?/i);
+  return {
+    path: p,
+    startLine: lm ? Number(lm[1]) : undefined,
+    endLine: lm && lm[2] ? Number(lm[2]) : undefined,
+  };
+}
 
 const CodeBlockWithCopy: React.FC<{ language: string; codeText: string; className?: string }> = ({
   language,
@@ -699,20 +747,38 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     currentThoughtElapsedMs,
     currentThoughtTokens,
     isThinkingFinished,
-    isGenerating,
     activeModelName,
   } = useSessionStore();
+  const activeTurn = useSessionStore((s) => s.activeTurn);
+  const turnActive = useSessionStore(selectIsTurnActive);
+  const turnStatusLabel = useSessionStore(selectStatusLabel);
   const { tokensPerSec } = useTelemetryStore();
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
-  const { setActiveTab } = useArtifactStore();
+  const { setActiveTab, setActiveFile, artifacts, setActiveArtifactId, setActiveArtifactDoc } =
+    useArtifactStore();
+  const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length, currentStreamingThought, isGenerating]);
+  }, [messages.length, currentStreamingThought, turnActive, turnStatusLabel]);
+
+  const openFileInEditor = async (href: string) => {
+    const { path: filePath } = fileUriToPath(href);
+    let content = '';
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+      if (res.ok) {
+        const data = await res.json();
+        content = data.content ?? '';
+      }
+    } catch {}
+    setActiveFile(filePath, content);
+    setActiveTab('editor');
+  };
 
   const handleOpenInWorkbench = (tc: ToolCallItemData) => {
     const cmd = tc.command.toLowerCase();
@@ -808,26 +874,29 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
         )}
 
         {messages.map((msg, index) => {
-          const isLast = index === messages.length - 1;
-          const isCurrentlyGenerating = isLast && isGenerating && msg.role === 'assistant';
-          const hasTools = Boolean(msg.toolCalls && msg.toolCalls.length > 0);
+          const lastAssistantIdx = (() => {
+            for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant') return i;
+            return -1;
+          })();
+          const isCurrentTurnMsg = activeTurn?.messageId
+            ? msg.id === activeTurn.messageId
+            : index === lastAssistantIdx && msg.role === 'assistant';
+          const isCurrentlyGenerating = isCurrentTurnMsg && turnActive;
+          const thoughtDone = activeTurn?.thinkingFinished ?? isThinkingFinished;
 
-          const {
-            thought: parsedThought,
-            content,
-            stepNotes,
-          } = parseMessageContent(msg.content, msg.thought, msg.stepNotes, hasTools);
+          const { thought: parsedThought, content } = parseMessageContent(
+            msg.content,
+            msg.thought,
+            isCurrentlyGenerating
+          );
+          const stepNotes = msg.stepNotes || [];
 
           const activeThought = isCurrentlyGenerating
             ? currentStreamingThought || parsedThought
             : msg.thought || parsedThought;
-          const activeElapsedMs = isCurrentlyGenerating
-            ? currentThoughtElapsedMs
-            : msg.thoughtElapsedMs;
-          const activeTokens = isCurrentlyGenerating
-            ? currentThoughtTokens
-            : msg.thoughtTokenCount;
-          const isStreaming = isCurrentlyGenerating && !isThinkingFinished;
+          const activeElapsedMs = isCurrentlyGenerating ? currentThoughtElapsedMs : msg.thoughtElapsedMs;
+          const activeTokens = isCurrentlyGenerating ? currentThoughtTokens : msg.thoughtTokenCount;
+          const isStreaming = isCurrentlyGenerating && !thoughtDone;
 
           if (msg.role === 'user') {
             return (
@@ -892,141 +961,174 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
 
           return (
             <div key={msg.id} className="space-y-3.5 px-1">
-              {/* Step Timeline: Thoughts & Collapsible Activity Bar */}
-              <div className="space-y-1">
-                {(activeThought || isStreaming) && (
-                  <ThoughtAccordion
-                    thought={activeThought || ''}
-                    elapsedMs={activeElapsedMs}
-                    tokenCount={activeTokens}
-                    isStreaming={isStreaming}
-                  />
-                )}
+              {/* Single chronological step timeline + one authoritative status line */}
+              <StepTimeline
+                thought={activeThought || ''}
+                thoughtElapsedMs={activeElapsedMs}
+                thoughtTokens={activeTokens}
+                thoughtStreaming={isStreaming}
+                toolCalls={msg.toolCalls || []}
+                stepNotes={stepNotes}
+                isActive={isCurrentlyGenerating}
+                statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
+                onOpenInWorkbench={handleOpenInWorkbench}
+              />
 
-                {((msg.toolCalls && msg.toolCalls.length > 0) || stepNotes.length > 0) && (
-                  <AgentActivityBox
-                    toolCalls={msg.toolCalls || []}
-                    stepNotes={stepNotes}
-                    isCurrentlyGenerating={isCurrentlyGenerating}
-                    onOpenInWorkbench={handleOpenInWorkbench}
-                  />
-                )}
-
-                {isCurrentlyGenerating &&
-                  !content &&
-                  (!msg.toolCalls || msg.toolCalls.length === 0) &&
-                  !activeThought && (
-                    <div className="flex items-center gap-2 text-[14px] text-[#9AA0A6] py-1 select-none">
-                      <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin" />
-                      <span>Working...</span>
-                    </div>
-                  )}
-
-                {isCurrentlyGenerating &&
-                  ((msg.toolCalls && msg.toolCalls.length > 0) || stepNotes.length > 0) &&
-                  !content && (
-                    <div className="flex items-center gap-2 text-[13.5px] text-[#8AB4F8] py-1.5 px-2 rounded-lg bg-[#8AB4F8]/8 border border-[#8AB4F8]/20 select-none animate-pulse">
-                      <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin shrink-0" />
-                      <span>
-                        {msg.toolCalls?.some((t) => t.status === 'running')
-                          ? `Executing tool: ${msg.toolCalls.find((t) => t.status === 'running')?.toolName || 'command'}...`
-                          : `Reasoning on Step ${(msg.toolCalls?.length || 0) + 1} (evaluating tool output)...`}
-                      </span>
-                    </div>
-                  )}
-              </div>
-
-              {/* Clean Final Markdown Assistant Output with Large, Clear Typography */}
+              {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
               {content && (
                 <div className="text-[16px] sm:text-[17px] text-[#E8EAED] leading-[1.75] pt-1 prose prose-invert max-w-none">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      p({ children }) {
-                        return <p className="my-3 leading-[1.75] text-[16px] sm:text-[17px] text-[#E8EAED]">{children}</p>;
-                      },
-                      ul({ children }) {
-                        return <ul className="list-disc pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
-                      },
-                      ol({ children }) {
-                        return <ol className="list-decimal pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
-                      },
-                      li({ children }) {
-                        return <li className="leading-[1.75] text-[#E8EAED] pl-0.5">{children}</li>;
-                      },
-                      h1({ children }) {
-                        return <h1 className="text-[22px] sm:text-[24px] font-semibold text-white mt-6 mb-3.5 pb-1.5 border-b border-[#26282C]">{children}</h1>;
-                      },
-                      h2({ children }) {
-                        return <h2 className="text-[19px] sm:text-[21px] font-semibold text-white mt-5 mb-3">{children}</h2>;
-                      },
-                      h3({ children }) {
-                        return <h3 className="text-[17.5px] sm:text-[18.5px] font-semibold text-white mt-4 mb-2">{children}</h3>;
-                      },
-                      h4({ children }) {
-                        return <h4 className="text-[16px] sm:text-[17px] font-semibold text-[#E8EAED] mt-3 mb-1.5">{children}</h4>;
-                      },
-                      hr() {
-                        return <hr className="my-5 border-t border-[#26282C]" />;
-                      },
-                      strong({ children }) {
-                        return <strong className="font-semibold text-white">{children}</strong>;
-                      },
-                      a({ href, children }) {
-                        return (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="antigravity-link"
-                          >
-                            {children}
-                          </a>
-                        );
-                      },
-                      blockquote({ children }) {
-                        return (
-                          <blockquote className="border-l-3 border-[#8AB4F8] bg-[#8AB4F8]/10 pl-4 py-2 my-3 rounded-r-lg text-[15.5px] sm:text-[16px] text-[#D2E3FC] leading-relaxed">
-                            {children}
-                          </blockquote>
-                        );
-                      },
-                      table({ children }) {
-                        return (
-                          <div className="my-3.5 overflow-x-auto rounded-xl border border-[#2D2F34]">
-                            <table className="w-full text-left text-[14px] border-collapse">{children}</table>
-                          </div>
-                        );
-                      },
-                      th({ children }) {
-                        return <th className="bg-[#1C1D20] px-4 py-2.5 font-semibold text-white border-b border-[#2D2F34]">{children}</th>;
-                      },
-                      td({ children }) {
-                        return <td className="px-4 py-2.5 border-b border-[#242528] text-[#D4D4D8]">{children}</td>;
-                      },
-                      code({ className, children, ...props }: any) {
-                        const match = /language-(\w+)/.exec(className || '');
-                        const codeStr = String(children || '');
-                        const isBlock = Boolean(match) || codeStr.includes('\n');
-                        return isBlock ? (
-                          <CodeBlockWithCopy
-                            language={match?.[1] || 'code'}
-                            codeText={codeStr}
-                            className={className}
-                          />
-                        ) : (
-                          <code
-                            className="antigravity-code-badge"
-                            {...props}
-                          >
-                            {children}
-                          </code>
-                        );
-                      },
-                    }}
-                  >
-                    {content}
-                  </ReactMarkdown>
+                  {splitAgentEmbeds(content).map((seg, segIdx) =>
+                    seg.kind === 'embed' ? (
+                      <AgentEmbedWidget
+                        key={`embed-${segIdx}`}
+                        src={seg.src}
+                        fallbackText={seg.body || undefined}
+                      />
+                    ) : !seg.text.trim() ? null : (
+                      <ReactMarkdown
+                        key={`md-${segIdx}`}
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={(u) => u}
+                        components={{
+                          p({ children }) {
+                            return <p className="my-3 leading-[1.75] text-[16px] sm:text-[17px] text-[#E8EAED]">{children}</p>;
+                          },
+                          ul({ children }) {
+                            return <ul className="list-disc pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
+                          },
+                          ol({ children }) {
+                            return <ol className="list-decimal pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
+                          },
+                          li({ children }) {
+                            return <li className="leading-[1.75] text-[#E8EAED] pl-0.5">{children}</li>;
+                          },
+                          h1({ children }) {
+                            return <h1 className="text-[22px] sm:text-[24px] font-semibold text-white mt-6 mb-3.5 pb-1.5 border-b border-[#26282C]">{children}</h1>;
+                          },
+                          h2({ children }) {
+                            return <h2 className="text-[19px] sm:text-[21px] font-semibold text-white mt-5 mb-3">{children}</h2>;
+                          },
+                          h3({ children }) {
+                            return <h3 className="text-[17.5px] sm:text-[18.5px] font-semibold text-white mt-4 mb-2">{children}</h3>;
+                          },
+                          h4({ children }) {
+                            return <h4 className="text-[16px] sm:text-[17px] font-semibold text-[#E8EAED] mt-3 mb-1.5">{children}</h4>;
+                          },
+                          hr() {
+                            return <hr className="my-5 border-t border-[#26282C]" />;
+                          },
+                          strong({ children }) {
+                            return <strong className="font-semibold text-white">{children}</strong>;
+                          },
+                          a({ href, children }) {
+                            const url = href || '';
+                            if (/^file:\/\//i.test(url)) {
+                              return (
+                                <a
+                                  href={url}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    openFileInEditor(url);
+                                  }}
+                                  className="antigravity-link cursor-pointer"
+                                  title="Open in editor"
+                                >
+                                  {children}
+                                </a>
+                              );
+                            }
+                            if (/^sidecar:\/\//i.test(url)) {
+                              const sc = parseSidecarHref(url);
+                              const tab = sc ? SIDECAR_TAB_MAP[sc.view] : undefined;
+                              return (
+                                <button
+                                  type="button"
+                                  disabled={!tab}
+                                  onClick={() => tab && setActiveTab(tab)}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded-full bg-[#8AB4F8]/10 border border-[#8AB4F8]/30 text-[#8AB4F8] text-[0.85em] hover:bg-[#8AB4F8]/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default align-baseline"
+                                  title={tab ? `Open ${sc?.view} pane` : 'Unavailable pane'}
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>{children}</span>
+                                </button>
+                              );
+                            }
+                            return (
+                              <a href={url} target="_blank" rel="noopener noreferrer" className="antigravity-link">
+                                {children}
+                              </a>
+                            );
+                          },
+                          blockquote({ children }) {
+                            return (
+                              <blockquote className="border-l-3 border-[#8AB4F8] bg-[#8AB4F8]/10 pl-4 py-2 my-3 rounded-r-lg text-[15.5px] sm:text-[16px] text-[#D2E3FC] leading-relaxed">
+                                {children}
+                              </blockquote>
+                            );
+                          },
+                          table({ children }) {
+                            return (
+                              <div className="my-3.5 overflow-x-auto rounded-xl border border-[#2D2F34]">
+                                <table className="w-full text-left text-[14px] border-collapse">{children}</table>
+                              </div>
+                            );
+                          },
+                          th({ children }) {
+                            return <th className="bg-[#1C1D20] px-4 py-2.5 font-semibold text-white border-b border-[#2D2F34]">{children}</th>;
+                          },
+                          td({ children }) {
+                            return <td className="px-4 py-2.5 border-b border-[#242528] text-[#D4D4D8]">{children}</td>;
+                          },
+                          code({ className, children, ...props }: any) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            const codeStr = String(children || '');
+                            const isBlock = Boolean(match) || codeStr.includes('\n');
+                            return isBlock ? (
+                              <CodeBlockWithCopy
+                                language={match?.[1] || 'code'}
+                                codeText={codeStr}
+                                className={className}
+                              />
+                            ) : (
+                              <code className="antigravity-code-badge" {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                        }}
+                      >
+                        {seg.text}
+                      </ReactMarkdown>
+                    )
+                  )}
+
+                  {artifacts
+                    .filter(
+                      (a) =>
+                        (a.userFacing || a.requestFeedback) &&
+                        (content.includes(a.id) ||
+                          (a.title && content.includes(a.title)) ||
+                          (a.filePath && content.includes(a.filePath)))
+                    )
+                    .map((a) => (
+                      <InlineArtifactCard
+                        key={a.id}
+                        artifact={a}
+                        onOpen={() => {
+                          setActiveArtifactId(a.id);
+                          setActiveArtifactDoc(
+                            a.type === 'plan'
+                              ? 'plan.md'
+                              : a.type === 'walkthrough'
+                              ? 'walkthrough.md'
+                              : a.type === 'task'
+                              ? 'task.md'
+                              : a.id
+                          );
+                          setActiveTab('plan');
+                        }}
+                      />
+                    ))}
                 </div>
               )}
 
@@ -1090,12 +1192,6 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                 </div>
               )}
 
-              {isCurrentlyGenerating && content && isGenerating && (
-                <div className="flex items-center gap-2 text-[13px] text-[#80868B] pt-1.5 select-none">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8AB4F8]" />
-                  <span>Synthesizing response…</span>
-                </div>
-              )}
             </div>
           );
         })}

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 export interface McpServerConfig {
   command?: string;
@@ -38,10 +38,20 @@ export interface McpToolCallResult {
   outputText: string;
 }
 
+interface PersistentMcpSession {
+  child: ChildProcessWithoutNullStreams;
+  nextId: number;
+  initialized: boolean;
+  initPromise: Promise<void> | null;
+  buffer: string;
+  pending: Map<number, { resolve: (msg: any) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>;
+}
+
 export class McpClientManager {
   private localConfigPath: string;
   private globalConfigPath: string;
   private servers = new Map<string, McpServerStatus>();
+  private sessions = new Map<string, PersistentMcpSession>();
 
   constructor(repoRoot: string) {
     this.localConfigPath = path.join(repoRoot, 'mcp_config.json');
@@ -370,152 +380,199 @@ export class McpClientManager {
     };
   }
 
-  private executeStdioToolCall(
+  private async getOrCreatePersistentSession(srv: McpServerStatus, timeoutMs: number): Promise<PersistentMcpSession> {
+    const existing = this.sessions.get(srv.name);
+    if (existing && !existing.child.killed && existing.child.exitCode === null) {
+      if (existing.initPromise) await existing.initPromise;
+      return existing;
+    }
+
+    const env = {
+      ...process.env,
+      ...(srv.env || {}),
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
+    };
+
+    let cmd = srv.command;
+    const args = [...srv.args];
+    const isCmdOrBat = cmd.endsWith('.cmd') || cmd.endsWith('.bat');
+    const useShell = process.platform === 'win32' && isCmdOrBat;
+    if (useShell && cmd.includes(' ')) {
+      cmd = `"${cmd}"`;
+    }
+
+    const child = spawn(cmd, args, {
+      shell: useShell,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+
+    const session: PersistentMcpSession = {
+      child,
+      nextId: 1,
+      initialized: false,
+      initPromise: null,
+      buffer: '',
+      pending: new Map(),
+    };
+    this.sessions.set(srv.name, session);
+
+    const failAllPending = (reason: string) => {
+      for (const [, p] of session.pending.entries()) {
+        clearTimeout(p.timer);
+        p.reject(new Error(reason));
+      }
+      session.pending.clear();
+      if (this.sessions.get(srv.name) === session) {
+        this.sessions.delete(srv.name);
+      }
+    };
+
+    child.stdout.on('data', (chunk) => {
+      session.buffer += chunk.toString();
+      const lines = session.buffer.split('\n');
+      session.buffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const msg = JSON.parse(trimmed);
+          if (msg.id !== undefined && session.pending.has(msg.id)) {
+            const p = session.pending.get(msg.id)!;
+            session.pending.delete(msg.id);
+            clearTimeout(p.timer);
+            p.resolve(msg);
+          }
+        } catch {}
+      }
+    });
+
+    child.on('error', (err) => {
+      srv.status = 'error';
+      failAllPending(`MCP server ${srv.name} error: ${err.message}`);
+    });
+
+    child.on('close', (code) => {
+      failAllPending(`MCP server ${srv.name} exited (${code ?? 'null'})`);
+    });
+
+    const sendRpc = (method: string, params: any, rpcTimeoutMs: number): Promise<any> => {
+      const id = session.nextId++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          session.pending.delete(id);
+          reject(new Error(`MCP RPC ${method} timed out after ${rpcTimeoutMs}ms`));
+        }, rpcTimeoutMs);
+        session.pending.set(id, { resolve, reject, timer });
+        try {
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+        } catch (err: any) {
+          session.pending.delete(id);
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    };
+
+    session.initPromise = (async () => {
+      await sendRpc(
+        'initialize',
+        {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'LocalGravity', version: '2.2.7' },
+        },
+        Math.min(timeoutMs, 10000)
+      );
+      try {
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
+      } catch {}
+      session.initialized = true;
+      srv.status = 'connected';
+      srv.lastCheckedAt = new Date().toISOString();
+
+      // Dynamic tools/list discovery (non-fatal; retains legacy default tools if unavailable)
+      try {
+        const listMsg = await sendRpc('tools/list', {}, 4000);
+        const discovered = Array.isArray(listMsg?.result?.tools) ? listMsg.result.tools : [];
+        if (discovered.length > 0) {
+          srv.tools = discovered.map((t: any) => ({
+            name: String(t.name),
+            serverName: srv.name,
+            description: String(t.description || ''),
+            inputSchema: t.inputSchema || { type: 'object', properties: {} },
+          }));
+          srv.toolsCount = srv.tools.length;
+        }
+      } catch {}
+    })();
+
+    try {
+      await session.initPromise;
+    } finally {
+      session.initPromise = null;
+    }
+    return session;
+  }
+
+  private async executeStdioToolCall(
     srv: McpServerStatus,
     toolName: string,
     toolArgs: Record<string, any>,
     timeoutMs: number
   ): Promise<McpToolCallResult> {
-    return new Promise((resolve) => {
-      let resolved = false;
-      const finish = (res: McpToolCallResult) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(res);
-        }
-      };
-
-      const env = {
-        ...process.env,
-        ...(srv.env || {}),
-        PYTHONUTF8: '1',
-        PYTHONIOENCODING: 'utf-8',
-      };
-
-      // Handle Windows binary execution with spaces and .cmd/.bat scripts
-      let cmd = srv.command;
-      let args = [...srv.args];
-      const isCmdOrBat = cmd.endsWith('.cmd') || cmd.endsWith('.bat');
-      const useShell = process.platform === 'win32' && isCmdOrBat;
-      if (useShell && cmd.includes(' ')) {
-        cmd = `"${cmd}"`;
-      }
-
-      const child = spawn(cmd, args, {
-        shell: useShell,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env,
-      });
-
-      const timer = setTimeout(() => {
+    try {
+      const session = await this.getOrCreatePersistentSession(srv, timeoutMs);
+      const id = session.nextId++;
+      const msg: any = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          session.pending.delete(id);
+          reject(new Error(`MCP tool execution timed out after ${timeoutMs}ms for ${srv.name}:${toolName}`));
+        }, timeoutMs);
+        session.pending.set(id, { resolve, reject, timer });
         try {
-          child.kill();
-        } catch {}
-        finish({
-          content: [],
-          isError: true,
-          outputText: `MCP tool execution timed out after ${timeoutMs}ms for ${srv.name}:${toolName}`,
-        });
-      }, timeoutMs);
-
-      let stdoutBuf = '';
-      let stderrBuf = '';
-
-      child.stderr.on('data', (d) => {
-        stderrBuf += d.toString();
-      });
-
-      child.stdout.on('data', (chunk) => {
-        stdoutBuf += chunk.toString();
-        const lines = stdoutBuf.split('\n');
-        stdoutBuf = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const msg = JSON.parse(trimmed);
-            if (msg.id === 1 && msg.result) {
-              // Initialized! Send tools/call
-              child.stdin.write(
-                JSON.stringify({
-                  jsonrpc: '2.0',
-                  id: 2,
-                  method: 'tools/call',
-                  params: {
-                    name: toolName,
-                    arguments: toolArgs || {},
-                  },
-                }) + '\n'
-              );
-            } else if (msg.id === 2) {
-              clearTimeout(timer);
-              try {
-                child.kill();
-              } catch {}
-
-              if (msg.error) {
-                finish({
-                  content: [],
-                  isError: true,
-                  outputText: `MCP Error (${msg.error.code}): ${msg.error.message}`,
-                });
-                return;
-              }
-
-              const result = msg.result || {};
-              const contentList = Array.isArray(result.content) ? result.content : [];
-              let combinedText = contentList
-                .map((c: any) => c.text || JSON.stringify(c))
-                .join('\n');
-
-              if (!combinedText && result) {
-                combinedText = JSON.stringify(result, null, 2);
-              }
-
-              finish({
-                content: contentList,
-                isError: result.isError || false,
-                outputText: combinedText,
-              });
-              return;
-            }
-          } catch {}
+          session.child.stdin.write(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id,
+              method: 'tools/call',
+              params: { name: toolName, arguments: toolArgs || {} },
+            }) + '\n'
+          );
+        } catch (err: any) {
+          session.pending.delete(id);
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
       });
 
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        finish({
+      if (msg.error) {
+        return {
           content: [],
           isError: true,
-          outputText: `Failed to spawn MCP server ${srv.name}: ${err.message}`,
-        });
-      });
-
-      // Send JSON-RPC initialize
-      try {
-        child.stdin.write(
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'initialize',
-            params: {
-              protocolVersion: '2024-11-05',
-              capabilities: {},
-              clientInfo: { name: 'LocalGravity', version: '2.0.0' },
-            },
-          }) + '\n'
-        );
-      } catch (err: any) {
-        clearTimeout(timer);
-        finish({
-          content: [],
-          isError: true,
-          outputText: `Failed to write initialize to MCP server: ${err?.message}`,
-        });
+          outputText: `MCP Error (${msg.error.code}): ${msg.error.message}`,
+        };
       }
-    });
+
+      const result = msg.result || {};
+      const contentList = Array.isArray(result.content) ? result.content : [];
+      let combinedText = contentList.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+      if (!combinedText && result) {
+        combinedText = JSON.stringify(result, null, 2);
+      }
+      return {
+        content: contentList,
+        isError: result.isError || false,
+        outputText: combinedText,
+      };
+    } catch (err: any) {
+      return {
+        content: [],
+        isError: true,
+        outputText: err?.message || `Failed MCP call ${srv.name}:${toolName}`,
+      };
+    }
   }
 
   public toggleServer(serverName: string, enabled?: boolean): McpServerStatus | undefined {
@@ -524,6 +581,13 @@ export class McpClientManager {
     srv.enabled = enabled !== undefined ? enabled : !srv.enabled;
     srv.status = srv.enabled ? 'ready' : 'disabled';
     srv.lastCheckedAt = new Date().toISOString();
+    if (!srv.enabled) {
+      const sess = this.sessions.get(serverName);
+      if (sess) {
+        try { sess.child.kill(); } catch {}
+        this.sessions.delete(serverName);
+      }
+    }
     return srv;
   }
 

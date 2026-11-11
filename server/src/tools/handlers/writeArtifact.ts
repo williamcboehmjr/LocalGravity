@@ -9,11 +9,13 @@ export const execute: BuiltinToolHandler = async (args, ctx) => {
   const title = String(args.title || 'Implementation Plan').trim();
   const content = String(args.content || '').trim();
   const rawType = String(args.type || 'plan').toLowerCase();
-  const validTypes: ArtifactKind[] = ['plan', 'walkthrough', 'report', 'code', 'diff'];
+  const validTypes: ArtifactKind[] = ['plan', 'walkthrough', 'report', 'code', 'diff', 'task', 'html'];
   const type: ArtifactKind = validTypes.includes(rawType as ArtifactKind)
     ? (rawType as ArtifactKind)
     : 'report';
   const summary = args.summary ? String(args.summary) : undefined;
+  const requestFeedback = args.requestFeedback !== undefined ? Boolean(args.requestFeedback) : Boolean(args.request_feedback);
+  const userFacing = args.userFacing !== undefined ? Boolean(args.userFacing) : Boolean(args.user_facing);
 
   if (!content) {
     return {
@@ -30,6 +32,8 @@ export const execute: BuiltinToolHandler = async (args, ctx) => {
     type,
     content,
     summary,
+    requestFeedback,
+    userFacing,
   });
 
   return {
@@ -42,6 +46,8 @@ export const execute: BuiltinToolHandler = async (args, ctx) => {
           type: artifact.type,
           filePath: artifact.filePath,
           summary: artifact.summary,
+          requestFeedback: artifact.requestFeedback,
+          userFacing: artifact.userFacing,
         },
       },
       null,

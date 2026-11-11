@@ -84,7 +84,7 @@ export class BackgroundTaskManager {
     const child = spawn(shell, shellArgs, {
       cwd: params.cwd || process.cwd(),
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.processes.set(taskId, child);
 
@@ -205,5 +205,19 @@ export class BackgroundTaskManager {
     task.recentLogs.push('Task cancelled by user/agent.');
     this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
     return true;
+  }
+
+  public sendInputToTask(taskId: string, input: string): boolean {
+    const proc = this.processes.get(taskId);
+    const task = this.tasks.get(taskId);
+    if (!proc || !proc.stdin || !task || task.status !== 'running') return false;
+    try {
+      proc.stdin.write(input.endsWith('\n') ? input : `${input}\n`);
+      task.recentLogs.push(`[stdin] ${input}`);
+      this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

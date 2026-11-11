@@ -17,8 +17,32 @@ export interface FileCheckpointItem {
   created_at: string;
 }
 
-export type WorkbenchTab = 'none' | 'editor' | 'terminal' | 'preview' | 'harness' | 'tasks' | 'plan' | 'evidence';
-export type ArtifactDocType = 'plan.md' | 'walkthrough.md' | 'task.md';
+export type WorkbenchTab =
+  | 'none'
+  | 'changes'
+  | 'editor'
+  | 'terminal'
+  | 'preview'
+  | 'harness'
+  | 'subagents'
+  | 'tasks'
+  | 'plan'
+  | 'evidence'
+  | 'swarm';
+export type ArtifactDocType = 'plan.md' | 'walkthrough.md' | 'task.md' | string;
+
+export interface ArtifactRecord {
+  id: string;
+  threadId?: string;
+  title?: string;
+  type: 'plan' | 'walkthrough' | 'task' | 'html' | string;
+  content: string;
+  summary?: string;
+  filePath?: string;
+  requestFeedback?: boolean;
+  userFacing?: boolean;
+  updatedAt?: number;
+}
 
 interface ArtifactState {
   activeTab: WorkbenchTab;
@@ -27,6 +51,8 @@ interface ArtifactState {
   parsedTasks: TaskItem[];
   planMarkdown: string;
   walkthroughMarkdown: string;
+  artifacts: ArtifactRecord[];
+  activeArtifactId: string | null;
   evidenceItems: Array<{
     id: string;
     type: 'screenshot' | 'log' | 'diff';
@@ -53,6 +79,10 @@ interface ArtifactState {
   toggleTask: (taskId: string) => string;
   setPlanMarkdown: (md: string) => void;
   setWalkthroughMarkdown: (md: string) => void;
+  upsertArtifact: (art: ArtifactRecord) => void;
+  setArtifacts: (list: ArtifactRecord[]) => void;
+  setActiveArtifactId: (id: string | null) => void;
+  clearArtifactFeedback: (id: string) => void;
   addEvidence: (item: { type: 'screenshot' | 'log' | 'diff'; title: string; data: string }) => void;
   setWorkspaceFiles: (files: Array<{ path: string; name: string; type: 'file' | 'directory' }>) => void;
   setActiveFile: (path: string, content: string, diffOriginal?: string | null) => void;
@@ -93,7 +123,7 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
   return items;
 }
 
-const initialTaskMd = `# Antigravity 2.0 Alignment & Hardening\n\n## Core Inference & Vision\n- [x] Strata Engine + Qwen 3.8 Flash-Next (IQ3_S + Vision • 64k Context)\n- [x] Multimodal Vision Grounding (--vision + mmproj-F16.gguf on Port 8080)\n- [x] Instant Stop Generation & AbortController Stream Cancellation\n- [x] Smart 15-Minute GPU Idle Offload & Taskbar Self-Restart Watchdog\n\n## Workstation & UX\n- [x] 19 Built-In Workstation Tools (including inspect_models & test_vision)\n- [x] 3-Pane Antigravity 2.0 Obsidian UI + Monaco Diff + xterm.js\n- [x] Dynamic Port Discovery (Ports 5000/5001 Strictly Untouched)`;
+const initialTaskMd = '';
 
 const initialPlanMd = `# LocalGravity 2.0 (Antigravity Clone Architecture)
 
@@ -123,6 +153,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   parsedTasks: parseTasksFromMarkdown(initialTaskMd),
   planMarkdown: initialPlanMd,
   walkthroughMarkdown: initialWalkthroughMd,
+  artifacts: [],
+  activeArtifactId: null,
   evidenceItems: [],
   workspaceFiles: [],
   activeFilePath: '',
@@ -161,6 +193,32 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
   setPlanMarkdown: (md) => set({ planMarkdown: md }),
   setWalkthroughMarkdown: (md) => set({ walkthroughMarkdown: md }),
+  upsertArtifact: (art) =>
+    set((state) => {
+      const idx = state.artifacts.findIndex((a) => a.id === art.id);
+      const next = idx >= 0 ? state.artifacts.map((a, i) => (i === idx ? { ...a, ...art } : a)) : [art, ...state.artifacts];
+      const updates: Partial<ArtifactState> = { artifacts: next, activeArtifactId: art.id };
+      if (art.type === 'plan') {
+        updates.planMarkdown = art.content;
+        updates.activeArtifactDoc = 'plan.md';
+      } else if (art.type === 'walkthrough') {
+        updates.walkthroughMarkdown = art.content;
+        updates.activeArtifactDoc = 'walkthrough.md';
+      } else if (art.type === 'task') {
+        updates.taskMarkdown = art.content;
+        updates.parsedTasks = parseTasksFromMarkdown(art.content);
+        updates.activeArtifactDoc = 'task.md';
+      } else if (art.type === 'html') {
+        updates.activeArtifactDoc = art.id;
+      }
+      return updates;
+    }),
+  setArtifacts: (list) => set({ artifacts: list }),
+  setActiveArtifactId: (id) => set({ activeArtifactId: id }),
+  clearArtifactFeedback: (id) =>
+    set((state) => ({
+      artifacts: state.artifacts.map((a) => (a.id === id ? { ...a, requestFeedback: false } : a)),
+    })),
   addEvidence: (item) =>
     set((state) => ({
       evidenceItems: [

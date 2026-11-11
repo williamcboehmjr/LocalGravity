@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Terminal,
   ListTodo,
   PanelLeft,
   PanelRight,
@@ -8,23 +7,27 @@ import {
   Trash2,
   MessageSquare,
   Smartphone,
-  Eye,
   RotateCcw,
-  ShieldCheck,
   ArrowLeft,
   ArrowRight,
   Search,
   MoreHorizontal,
   FileText,
-  Blocks,
   ChevronRight,
   X,
   Clock,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSessionStore,
-  FileAttachmentItem, QueuedMessage } from './store/useSessionStore';
-import { useArtifactStore, WorkbenchTab } from './store/useArtifactStore';
+import {
+  useSessionStore,
+  FileAttachmentItem,
+  QueuedMessage,
+  selectIsTurnActive,
+  selectStatusLabel,
+  isPhaseProtocolActive,
+  applyDpiScaleToDom,
+} from './store/useSessionStore';
+import { useArtifactStore } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
 import { SessionList } from './components/left-rail/SessionList';
 import { SkillsDrawer } from './components/left-rail/SkillsDrawer';
@@ -42,12 +45,15 @@ import { HarnessWorkbenchTab } from './components/right-canvas/HarnessWorkbenchT
 import { TaskChecklist } from './components/right-canvas/TaskChecklist';
 import { PlanViewer } from './components/right-canvas/PlanViewer';
 import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
+import { AuxTabBar } from './components/right-canvas/AuxTabBar';
+import { SwarmBoardTab } from './components/right-canvas/SwarmBoardTab';
+import { ChangesTab } from './components/right-canvas/ChangesTab';
+import { SubagentsTab } from './components/right-canvas/SubagentsTab';
 import { Splitter } from './components/common/Splitter';
 import { ModelTier, ThinkingBudget } from './types/protocol';
 import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
 import { checkForAppUpdates, UpdateInfo } from './services/updaterService';
 import { DpiScaleControl } from './components/center-canvas/DpiScaleControl';
-import { applyDpiScaleToDom } from './store/useSessionStore';
 
 export const App: React.FC = () => {
   const {
@@ -72,10 +78,18 @@ export const App: React.FC = () => {
     finalizeAssistantMessage,
     commitAssistantStepNote,
     upsertSubagentTask,
-    subagentTasks,
     appendStreamingThought,
     isGenerating,
+    activeTurn,
     setIsGenerating,
+    applyTurnPhase,
+    startPendingTurn,
+    applyLegacyTurnStart,
+    applyLegacyTurnEnd,
+    syncGenerating,
+    setSwarmState,
+    applySwarmEvent,
+    setBackgroundTasks,
     setModelState,
     autoNameSessionFromPrompt,
     messageQueue,
@@ -104,13 +118,15 @@ export const App: React.FC = () => {
     setPlanMarkdown,
     setWalkthroughMarkdown,
     setActiveArtifactDoc,
+    setActiveArtifactId,
+    upsertArtifact,
+    setArtifacts,
     parsedTasks,
-    checkpoints,
     setCheckpoints,
     setLatestVisionCapture,
   } = useArtifactStore();
 
-  const { setTelemetry, setMcpServers, mcpServers, tokensPerSec } = useTelemetryStore();
+  const { setTelemetry, setMcpServers } = useTelemetryStore();
 
   const [leftRailWidth, setLeftRailWidth] = useState(250);
   const [rightDrawerWidth, setRightDrawerWidth] = useState(340);
@@ -123,7 +139,6 @@ export const App: React.FC = () => {
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
-  const [showSubagentDrawer, setShowSubagentDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
   const [gpuStatus, setGpuStatus] = useState<{
     gpuState: 'active' | 'standby' | 'waking' | 'offline';
@@ -143,15 +158,6 @@ export const App: React.FC = () => {
     compactedTokens: number;
   } | null>(null);
   const [adaptiveCotLabel, setAdaptiveCotLabel] = useState<string>('');
-  const [backgroundTasks, setBackgroundTasks] = useState<
-    Array<{
-      taskId: string;
-      type: 'command' | 'timer';
-      title: string;
-      status: string;
-      recentLogs: string[];
-    }>
-  >([]);
 
 
 
@@ -218,7 +224,10 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [dpiScale, zoomIn, zoomOut, resetZoom]);
 
+  const isTurnActive = selectIsTurnActive({ activeTurn, isGenerating });
+  const activeStatusLabel = selectStatusLabel({ activeTurn });
   const wsRef = useRef<WebSocket | null>(null);
+  const pendingInterruptRef = useRef<QueuedMessage | null>(null);
 
   // Initialize decoupled OS AppData state when running inside Tauri Desktop
   useEffect(() => {
@@ -294,6 +303,24 @@ export const App: React.FC = () => {
           try {
             const data = JSON.parse(event.data);
             const { type, payload } = data;
+            const store = useSessionStore.getState();
+            const activeThreadId = store.sessionId;
+            const evtThreadId: string | undefined =
+              payload?.thread_id || payload?.threadId || payload?.session_id;
+            const isForActiveThread = !evtThreadId || evtThreadId === activeThreadId;
+            const evtTurnId: string | undefined = payload?.turn_id || payload?.turnId;
+            const evtMessageId: string | undefined = payload?.message_id || payload?.messageId;
+            const curTurn = store.activeTurn;
+            const isStaleTurnEvent = Boolean(
+              (evtTurnId &&
+                curTurn?.turnId &&
+                !curTurn.turnId.startsWith('pending-') &&
+                curTurn.turnId !== evtTurnId) ||
+                (evtMessageId &&
+                  curTurn?.isActive &&
+                  curTurn.messageId &&
+                  curTurn.messageId !== evtMessageId)
+            );
 
             if (type === 'SYNC_STATE') {
               if (payload.projects?.length > 0) {
@@ -302,32 +329,49 @@ export const App: React.FC = () => {
               if (payload.threads) {
                 setThreads(payload.threads, payload.activeThreadId);
               }
-              if (payload.messages) {
-                hydrateMessagesFromServer(payload.messages, payload.activeStreams || []);
-              }
+              const resolvedThreadId = useSessionStore.getState().sessionId;
               const activeThreadObj = Array.isArray(payload.threads)
-                ? payload.threads.find((t: any) => t.id === (payload.activeThreadId || sessionId))
+                ? payload.threads.find((t: any) => t.id === resolvedThreadId)
                 : null;
+              const matchingStreams = Array.isArray(payload.activeStreams)
+                ? payload.activeStreams.filter(
+                    (s: any) => !s?.thread_id || s.thread_id === resolvedThreadId
+                  )
+                : [];
+              if (payload.messages) {
+                hydrateMessagesFromServer(
+                  payload.messages,
+                  matchingStreams,
+                  activeThreadObj?.status,
+                  payload.activeTurn
+                );
+              }
               const isServerThreadBusy =
                 activeThreadObj?.status === 'thinking' || activeThreadObj?.status === 'executing_tool';
-              const hasActiveStream =
-                (Array.isArray(payload.activeStreams) && payload.activeStreams.length > 0) ||
-                isServerThreadBusy;
-              if (hasActiveStream) {
-                setIsGenerating(true);
+              const hasActiveStream = matchingStreams.length > 0 || isServerThreadBusy;
+              if (payload.activeTurn && (!payload.activeTurn.thread_id || payload.activeTurn.thread_id === resolvedThreadId)) {
+                applyTurnPhase(payload.activeTurn);
+                if (!payload.activeTurn.is_active) setAdaptiveCotLabel('');
               } else {
-                finalizeAssistantMessage();
-                setIsGenerating(false);
-                setAdaptiveCotLabel('');
+                syncGenerating(hasActiveStream);
+                if (!hasActiveStream) setAdaptiveCotLabel('');
               }
               if (payload.checkpoints) {
                 setCheckpoints(payload.checkpoints);
+              }
+              if (Array.isArray(payload.artifacts)) {
+                setArtifacts(payload.artifacts);
               }
               if (payload.mcpServers) {
                 setMcpServers(payload.mcpServers);
               }
               if (Array.isArray(payload.backgroundTasks)) {
                 setBackgroundTasks(payload.backgroundTasks);
+              }
+              if (payload.swarm !== undefined) {
+                setSwarmState(payload.swarm || null);
+              } else {
+                setSwarmState(null);
               }
               if (payload.tabby || payload.telemetry) {
                 setTelemetry({
@@ -359,10 +403,24 @@ export const App: React.FC = () => {
                 ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
                 ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
               });
+            } else if (type === 'TURN_PHASE') {
+              applyTurnPhase(payload);
+              if (isForActiveThread && !payload?.is_active) {
+                setAdaptiveCotLabel('');
+              }
             } else if (type === 'TURN_STARTED') {
-              setIsGenerating(true);
+              if (!isForActiveThread) {
+                store.setThreadStatus(evtThreadId!, 'thinking');
+                return;
+              }
+              applyLegacyTurnStart(payload);
             } else if (type === 'THOUGHT_STREAM') {
-              setIsGenerating(true);
+              if (!isForActiveThread) {
+                store.setThreadStatus(evtThreadId!, 'thinking');
+                return;
+              }
+              if (isStaleTurnEvent) return;
+              if (!isPhaseProtocolActive()) setIsGenerating(true);
               if (payload.tokens_per_sec) {
                 setTelemetry({ tokensPerSec: payload.tokens_per_sec });
               }
@@ -373,31 +431,61 @@ export const App: React.FC = () => {
                 payload.is_finished
               );
             } else if (type === 'TOKEN_STREAM') {
+              if (!isForActiveThread) return;
+              if (isStaleTurnEvent) return;
               if (payload.tokens_per_sec) {
                 setTelemetry({ tokensPerSec: payload.tokens_per_sec });
               }
+              if (payload.chunk) {
+                updateLastAssistantMessage(
+                  payload.chunk,
+                  payload.output_tokens,
+                  payload.tokens_per_sec,
+                  payload.message_id
+                );
+              }
               if (payload.is_finished) {
-                finalizeAssistantMessage();
-                setIsGenerating(false);
+                finalizeAssistantMessage(payload.message_id);
+                if (!isPhaseProtocolActive()) {
+                  setIsGenerating(false);
+                }
                 setAdaptiveCotLabel('');
-              } else {
+              } else if (!isPhaseProtocolActive()) {
                 setIsGenerating(true);
-                updateLastAssistantMessage(payload.chunk, payload.output_tokens, payload.tokens_per_sec);
               }
             } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
-              finalizeAssistantMessage();
-              setIsGenerating(false);
-              setAdaptiveCotLabel('');
+              const phase =
+                type === 'TURN_ABORTED' ? 'aborted' : type === 'TURN_ERROR' ? 'error' : 'completed';
+              if (!isForActiveThread) {
+                store.setThreadStatus(evtThreadId!, phase === 'error' ? 'error' : 'idle');
+                return;
+              }
+              applyLegacyTurnEnd(payload, phase);
+              if (!isStaleTurnEvent) setAdaptiveCotLabel('');
             } else if (type === 'STEP_NOTE_COMMITTED') {
-              setIsGenerating(true);
-              commitAssistantStepNote(payload.note, payload.committed_content);
+              if (!isForActiveThread || isStaleTurnEvent) return;
+              if (!isPhaseProtocolActive()) setIsGenerating(true);
+              commitAssistantStepNote(payload.note, payload.committed_content, payload.message_id);
             } else if (type === 'SUBAGENT_EVENT') {
-              if (payload?.status === 'running') {
-                setIsGenerating(true);
+              if (!isForActiveThread) return;
+              if (!isPhaseProtocolActive()) {
+                if (payload?.status === 'running') {
+                  setIsGenerating(true);
+                } else if (payload?.status === 'completed' || payload?.status === 'error') {
+                  if (!store.activeTurn?.isActive) setIsGenerating(false);
+                }
               }
               upsertSubagentTask(payload);
             } else if (type === 'TOOL_EVENT') {
-              if (payload?.status === 'running') {
+              if (!isForActiveThread) {
+                store.setThreadStatus(
+                  evtThreadId!,
+                  payload?.status === 'running' ? 'executing_tool' : 'thinking'
+                );
+                return;
+              }
+              if (isStaleTurnEvent) return;
+              if (!isPhaseProtocolActive() && payload?.status === 'running') {
                 setIsGenerating(true);
               }
               updateLastAssistantTool(payload.command, payload.output, payload.status, {
@@ -405,56 +493,114 @@ export const App: React.FC = () => {
                 toolName: payload.tool_name,
                 durationMs: payload.duration_ms,
                 exitCode: payload.exit_code,
+                messageId: payload.message_id,
               });
             } else if (type === 'TOOL_STREAM') {
-              setIsGenerating(true);
+              if (!isForActiveThread || isStaleTurnEvent) return;
+              if (!isPhaseProtocolActive()) setIsGenerating(true);
               if (payload?.chunk) {
                 updateLastAssistantTool(
                   payload.tool_name || '',
                   payload.chunk,
                   'running',
-                  { id: payload.tool_execution_id, appendOutput: true }
+                  {
+                    id: payload.tool_execution_id,
+                    appendOutput: true,
+                    messageId: payload.message_id,
+                  }
                 );
               }
             } else if (type === 'CHECKPOINT_CREATED') {
+              if (!isForActiveThread) return;
               if (payload.checkpoint) {
-                setCheckpoints([payload.checkpoint, ...checkpoints]);
+                const latestCheckpoints = useArtifactStore.getState().checkpoints;
+                setCheckpoints([payload.checkpoint, ...latestCheckpoints]);
               }
             } else if (type === 'VISION_CAPTURE') {
               if (payload?.base64DataUrl) {
                 setLatestVisionCapture(payload);
               }
             } else if (type === 'ARTIFACT_SYNC') {
-              if (payload.artifact_name === 'task.md') {
+              const syncId = payload.id || payload.artifact_name || 'art-' + Date.now();
+              const syncType =
+                payload.type ||
+                (payload.artifact_name === 'walkthrough.md'
+                  ? 'walkthrough'
+                  : payload.artifact_name === 'task.md'
+                  ? 'task'
+                  : payload.artifact_name?.endsWith('.html')
+                  ? 'html'
+                  : 'plan');
+              if (payload.id || payload.requestFeedback !== undefined || syncType === 'html') {
+                upsertArtifact({
+                  id: syncId,
+                  threadId: evtThreadId || activeThreadId,
+                  title: payload.title || payload.artifact_name,
+                  type: syncType,
+                  content: payload.content || '',
+                  requestFeedback: Boolean(payload.requestFeedback),
+                  userFacing: payload.userFacing,
+                  updatedAt: Date.now(),
+                });
+              }
+              if (payload.artifact_name === 'task.md' || syncType === 'task') {
                 setTaskMarkdown(payload.content);
-              } else if (payload.artifact_name === 'walkthrough.md') {
+              } else if (payload.artifact_name === 'walkthrough.md' || syncType === 'walkthrough') {
                 setWalkthroughMarkdown(payload.content);
                 setActiveArtifactDoc('walkthrough.md');
+                if (payload.id) setActiveArtifactId(syncId);
+                setActiveTab('plan');
+                setShowRightDrawer(true);
+              } else if (syncType === 'html') {
+                setActiveArtifactId(syncId);
+                setActiveArtifactDoc(syncId);
                 setActiveTab('plan');
                 setShowRightDrawer(true);
               } else if (
                 payload.artifact_name === 'implementation_plan.md' ||
-                payload.artifact_name === 'plan.md'
+                payload.artifact_name === 'plan.md' ||
+                syncType === 'plan'
               ) {
                 setPlanMarkdown(payload.content);
                 setActiveArtifactDoc('plan.md');
+                if (payload.id) setActiveArtifactId(syncId);
                 setActiveTab('plan');
                 setShowRightDrawer(true);
               }
             } else if (type === 'ARTIFACT_UPDATED') {
               const art = payload?.artifact;
               if (art) {
+                const artId = art.id || art.title || 'art-' + Date.now();
+                upsertArtifact({
+                  id: artId,
+                  threadId: art.threadId || art.thread_id || evtThreadId || activeThreadId,
+                  title: art.title,
+                  type: art.type,
+                  content: art.content || '',
+                  summary: art.summary,
+                  filePath: art.filePath || art.file_path,
+                  requestFeedback: Boolean(art.requestFeedback),
+                  userFacing: art.userFacing,
+                  updatedAt: art.updatedAt || Date.now(),
+                });
                 if (art.type === 'plan') {
                   setPlanMarkdown(art.content);
+                  setActiveArtifactId(artId);
                   setActiveArtifactDoc('plan.md');
                   setActiveTab('plan');
                   setShowRightDrawer(true);
                 } else if (art.type === 'walkthrough') {
                   setWalkthroughMarkdown(art.content);
+                  setActiveArtifactId(artId);
                   setActiveArtifactDoc('walkthrough.md');
                   setActiveTab('plan');
                   setShowRightDrawer(true);
-                } else {
+                } else if (art.type === 'html') {
+                  setActiveArtifactId(artId);
+                  setActiveArtifactDoc(artId);
+                  setActiveTab('plan');
+                  setShowRightDrawer(true);
+                } else if (art.type === 'task') {
                   setTaskMarkdown(art.content);
                 }
               }
@@ -474,6 +620,13 @@ export const App: React.FC = () => {
                   timestamp: Date.now(),
                 });
               }
+            } else if (
+              type === 'SWARM_STATE' ||
+              type === 'SWARM_MESSAGE' ||
+              type === 'SWARM_MEMBER_UPDATED'
+            ) {
+              if (!isForActiveThread) return;
+              applySwarmEvent(type, payload);
             } else if (type === 'BACKGROUND_TASK_UPDATED') {
               if (Array.isArray(payload?.allTasks)) {
                 setBackgroundTasks(payload.allTasks);
@@ -484,7 +637,8 @@ export const App: React.FC = () => {
                 compactedTokens: payload?.compactedTokens || 0,
               });
             } else if (type === 'ADAPTIVE_COT_STATE') {
-              setIsGenerating(true);
+              if (!isForActiveThread) return;
+              if (!isPhaseProtocolActive()) setIsGenerating(true);
               setAdaptiveCotLabel(payload?.modeLabel || '');
             } else if (type === 'TELEMETRY') {
               setTelemetry({
@@ -612,6 +766,9 @@ export const App: React.FC = () => {
     thinkingBudgetOverride?: ThinkingBudget,
     attachments?: FileAttachmentItem[]
   ) => {
+    const storeSnap = useSessionStore.getState();
+    const activeThreadId = storeSnap.sessionId;
+    const policy = storeSnap.executionPolicy;
     const tier = tierOverride || selectedTier;
     const budget = thinkingBudgetOverride || thinkingBudget;
 
@@ -624,7 +781,7 @@ export const App: React.FC = () => {
       timestamp: Date.now(),
     });
 
-    autoNameSessionFromPrompt(sessionId, text);
+    autoNameSessionFromPrompt(activeThreadId, text);
 
     addMessage({
       id: 'assistant-' + Date.now(),
@@ -643,7 +800,7 @@ export const App: React.FC = () => {
       toolCalls: [],
     });
 
-    setIsGenerating(true);
+    startPendingTurn();
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
@@ -651,13 +808,15 @@ export const App: React.FC = () => {
           id: 'prompt-' + Date.now(),
           type: 'PROMPT_SUBMIT',
           payload: {
-            thread_id: sessionId,
-            session_id: sessionId,
+            thread_id: activeThreadId,
+            session_id: activeThreadId,
             prompt: text,
             images,
             attachments,
             tier,
             thinking_budget: budget,
+            execution_policy: policy,
+            executionPolicy: policy,
           },
         })
       );
@@ -678,36 +837,51 @@ export const App: React.FC = () => {
           42
         );
         finalizeAssistantMessage();
-        setIsGenerating(false);
+        syncGenerating(false);
       }, 1500);
     }
   };
 
-  // Auto-drain queued messages when generation finishes
+  // Auto-drain queued / interrupted messages strictly after the current turn reaches terminal phase
   useEffect(() => {
-    if (!isGenerating && messageQueue.length > 0) {
+    if (isTurnActive) return;
+    if (pendingInterruptRef.current) {
+      const nextInterrupt = pendingInterruptRef.current;
+      pendingInterruptRef.current = null;
+      handleSendPrompt(
+        nextInterrupt.text,
+        nextInterrupt.images,
+        nextInterrupt.tier,
+        nextInterrupt.thinkingBudget,
+        nextInterrupt.attachments
+      );
+      return;
+    }
+    if (messageQueue.length > 0) {
       const next = dequeueMessage();
       if (next) {
         handleSendPrompt(next.text, next.images, next.tier, next.thinkingBudget, next.attachments);
       }
     }
-  }, [isGenerating, messageQueue.length]);
+  }, [isTurnActive, messageQueue.length]);
 
   const handleStopGeneration = () => {
+    const { sessionId: activeThreadId, activeTurn: curTurn } = useSessionStore.getState();
+    const stopTurnId =
+      curTurn?.turnId && !curTurn.turnId.startsWith('pending-') ? curTurn.turnId : undefined;
+    const stopPayload = {
+      thread_id: activeThreadId,
+      session_id: activeThreadId,
+      ...(stopTurnId ? { turn_id: stopTurnId } : {}),
+    };
+    const wsOpen = Boolean(wsRef.current && wsRef.current.readyState === WebSocket.OPEN);
     try {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      if (wsOpen && wsRef.current) {
         wsRef.current.send(
           JSON.stringify({
             id: 'stop-' + Date.now(),
             type: 'STOP_GENERATION',
-            payload: { thread_id: sessionId, session_id: sessionId },
-          })
-        );
-        wsRef.current.send(
-          JSON.stringify({
-            id: 'cancel-' + Date.now(),
-            type: 'CANCEL_GENERATION',
-            payload: { thread_id: sessionId, session_id: sessionId },
+            payload: stopPayload,
           })
         );
       }
@@ -715,17 +889,23 @@ export const App: React.FC = () => {
       console.warn('[App] WebSocket stop error:', e);
     }
 
-    // HTTP Stop Fallback - fire both thread and universal endpoints immediately
-    const stopUrl = `${apiBaseUrl}/api/threads/${sessionId}/stop`;
-    fetch(stopUrl, { method: 'POST' }).catch(() => {});
-    fetch(`${apiBaseUrl}/api/stop`, {
+    // One authoritative HTTP stop fallback
+    fetch(`${apiBaseUrl}/api/threads/${activeThreadId}/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ thread_id: sessionId, session_id: sessionId }),
+      body: JSON.stringify(stopPayload),
     }).catch(() => {});
 
-    finalizeAssistantMessage();
-    setIsGenerating(false);
+    if (wsOpen) {
+      // Wait for server TURN_PHASE/TURN_ABORTED terminal event so queue drain cannot race
+      useSessionStore.setState((s) =>
+        s.activeTurn?.isActive
+          ? { activeTurn: { ...s.activeTurn, statusLabel: 'Stopping…' } }
+          : s
+      );
+    } else {
+      syncGenerating(false);
+    }
   };
 
   const handleQueuePrompt = (text: string, images?: string[], attachments?: FileAttachmentItem[]) => {
@@ -740,10 +920,8 @@ export const App: React.FC = () => {
 
   const handleInterruptAndSend = (item: QueuedMessage) => {
     removeQueuedMessage(item.id);
+    pendingInterruptRef.current = item;
     handleStopGeneration();
-    setTimeout(() => {
-      handleSendPrompt(item.text, item.images, item.tier, item.thinkingBudget, item.attachments);
-    }, 80);
   };
 
   const handleTierSwitch = (newTier: ModelTier) => {
@@ -763,6 +941,7 @@ export const App: React.FC = () => {
   };
 
   const handleNewThread = async () => {
+    pendingInterruptRef.current = null;
     try {
       const res = await fetch(`${apiBaseUrl}/api/threads`, {
         method: 'POST',
@@ -806,12 +985,26 @@ export const App: React.FC = () => {
   };
 
   const handleSelectThread = async (threadId: string) => {
+    pendingInterruptRef.current = null;
+    setSwarmState(null);
     try {
-      const res = await fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`);
-      if (res.ok) {
-        const data = await res.json();
-        hydrateMessagesFromServer(data.messages || [], data.activeStreams || []);
+      const [msgRes, swarmRes] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`),
+        fetch(`${apiBaseUrl}/api/swarm/${threadId}`).catch(() => null),
+      ]);
+      if (msgRes.ok) {
+        const data = await msgRes.json();
+        hydrateMessagesFromServer(
+          data.messages || [],
+          data.activeStreams || [],
+          data.threadStatus || data.thread?.status,
+          data.activeTurn
+        );
         if (data.checkpoints) setCheckpoints(data.checkpoints);
+      }
+      if (swarmRes && swarmRes.ok && useSessionStore.getState().sessionId === threadId) {
+        const sData = await swarmRes.json();
+        setSwarmState(sData?.swarm ?? (sData?.id ? sData : null));
       }
     } catch {}
   };
@@ -876,24 +1069,6 @@ export const App: React.FC = () => {
   const activeSession = sessions.find((s) => s.id === sessionId);
   const totalTasks = parsedTasks.length;
   const completedTasks = parsedTasks.filter((t) => t.completed).length;
-
-  const overviewItems: Array<{
-    id: WorkbenchTab;
-    label: string;
-    icon: React.ReactNode;
-    hasSubmenu?: boolean;
-  }> = [
-    { id: 'tasks', label: 'Review', icon: <RotateCcw className="w-3.5 h-3.5" /> },
-    { id: 'plan', label: 'Artifacts', icon: <FileText className="w-3.5 h-3.5" /> },
-    { id: 'editor', label: 'Files', icon: <FileText className="w-3.5 h-3.5" /> },
-    { id: 'terminal', label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> },
-    {
-      id: 'harness',
-      label: 'Extensions',
-      icon: <Blocks className="w-3.5 h-3.5" />,
-      hasSubmenu: true,
-    },
-  ];
 
   return (
     <div className="flex flex-col h-full max-h-full w-full bg-[#131314] text-[#E3E3E3] overflow-hidden font-sans">
@@ -1276,7 +1451,7 @@ export const App: React.FC = () => {
             <ChatFeed onQuickSend={(p) => handleSendPrompt(p)} />
             <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
               {/* Antigravity Floating Pills (Review & Status) */}
-              {(totalTasks > 0 || isGenerating) && (
+              {(totalTasks > 0 || isTurnActive) && (
                 <div className="flex items-center gap-2 mb-2 select-none overflow-x-auto">
                   {totalTasks > 0 && (
                     <button
@@ -1295,10 +1470,10 @@ export const App: React.FC = () => {
                       <ChevronRight className="w-3 h-3 text-[#9AA0A6]" />
                     </button>
                   )}
-                  {isGenerating && (
+                  {isTurnActive && (
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#8AB4F8] bg-[#8AB4F8]/10 border border-[#8AB4F8]/20">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#8AB4F8] animate-ping" />
-                      <span>{adaptiveCotLabel || 'Reasoning active'}</span>
+                      <span>{activeStatusLabel || adaptiveCotLabel || 'Reasoning active'}</span>
                     </div>
                   )}
                 </div>
@@ -1337,163 +1512,27 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* 3. RIGHT PANE (Google Antigravity 2.0 "Overview" Card + Workbench) */}
+      {/* 3. RIGHT PANE (Compact AuxTabBar + Full-Height Workbench) */}
       {showRightDrawer && (
         <aside
           style={{ width: `${rightDrawerWidth}px` }}
-          className="shrink-0 h-full bg-[#131314] p-2.5 flex flex-col gap-2.5 min-w-0 hidden md:flex"
+          className="shrink-0 h-full bg-[#131314] p-2.5 flex flex-col gap-2 min-w-0 hidden md:flex"
         >
-          {/* Floating "Overview" Navigation Card matching Screenshot 1 */}
-          <div className="bg-[#18181B] border border-[#26262A] rounded-xl p-2.5 shrink-0 select-none shadow-md">
-            <div className="flex items-center justify-between px-1.5 pb-1.5">
-              <span className="text-xs font-medium text-[#8E8E93]">Overview</span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(activeTab === 'preview' ? 'none' : 'preview')}
-                  className={`p-1 rounded hover:bg-[#242428] transition-colors ${
-                    activeTab === 'preview' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
-                  }`}
-                  title="Vision / App Preview"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(activeTab === 'harness' ? 'none' : 'harness')}
-                  className={`p-1 rounded hover:bg-[#242428] transition-colors ${
-                    activeTab === 'harness' ? 'text-[#E3E3E3]' : 'text-[#6E6E73] hover:text-[#E3E3E3]'
-                  }`}
-                  title="Harness² Self-Healing"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-0.5">
-              {overviewItems.map((item) => {
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setActiveTab(activeTab === item.id ? 'none' : item.id)}
-                    className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                      isActive
-                        ? 'bg-[#26262A] text-[#E3E3E3] font-medium'
-                        : 'text-[#A0A0A5] hover:bg-[#202024] hover:text-[#E3E3E3]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-[#8E8E93]">{item.icon}</span>
-                      <span>{item.label}</span>
-                    </div>
-                    {item.hasSubmenu && <ChevronRight className="w-3.5 h-3.5 text-[#5E5E63]" />}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-2 pt-2 border-t border-[#242428]">
-              <button
-                type="button"
-                onClick={() => setShowSubagentDrawer(!showSubagentDrawer)}
-                className="w-full flex items-center justify-between px-1.5 py-1 rounded-lg hover:bg-[#202024] text-[11px] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5">
-                  <span>Task Subagents & Logs</span>
-                  {isGenerating && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#60A5FA] animate-ping" />
-                  )}
-                </div>
-                <span className="px-1.5 py-0.5 rounded-full bg-[#242428] text-[#A0A0A5] font-mono text-[10px]">
-                  {subagentTasks.filter((t) => t.status === 'running').length + backgroundTasks.filter((t) => t.status === 'running').length || mcpServers.filter((s) => s.enabled).length} • {tokensPerSec > 0 ? tokensPerSec.toFixed(1) : '—'} tok/s
-                </span>
-              </button>
-
-              {(showSubagentDrawer || isGenerating || backgroundTasks.some((b) => b.status === 'running')) &&
-                (subagentTasks.length > 0 || backgroundTasks.length > 0) && (
-                <div className="mt-1.5 space-y-1.5 max-h-48 overflow-y-auto px-1 pt-1">
-                  {backgroundTasks.slice(-3).map((bg) => (
-                    <div
-                      key={bg.taskId}
-                      className="p-2 rounded-lg bg-[#131316] border border-[#242429] text-[11px] space-y-1"
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                              bg.status === 'running' ? 'bg-sky-400 animate-pulse' : 'bg-emerald-400'
-                            }`}
-                          />
-                          <span className="font-medium text-[#E3E3E3] truncate">{bg.title}</span>
-                        </div>
-                        <span className="font-mono text-[9.5px] text-sky-400 shrink-0 uppercase">
-                          {bg.type} • {bg.status}
-                        </span>
-                      </div>
-                      {bg.recentLogs.length > 0 && (
-                        <div className="font-mono text-[10px] text-[#8E8E93] truncate">
-                          {bg.recentLogs[bg.recentLogs.length - 1]}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {subagentTasks.slice(0, 4).map((task) => (
-                    <div
-                      key={task.id}
-                      className="p-2 rounded-lg bg-[#131316] border border-[#242429] text-[11px] space-y-1"
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                              task.status === 'running'
-                                ? 'bg-[#60A5FA] animate-pulse'
-                                : 'bg-emerald-400'
-                            }`}
-                          />
-                          <span className="font-medium text-[#E3E3E3] truncate">
-                            {task.role}
-                          </span>
-                        </div>
-                        <span className="font-mono text-[9.5px] text-[#6E6E73] shrink-0">
-                          Step {task.step}/{task.maxSteps}
-                        </span>
-                      </div>
-                      <div className="font-mono text-[10px] text-[#8E8E93] truncate">
-                        {task.summary}
-                      </div>
-                      {task.status === 'running' && task.logs.length > 1 && (
-                        <div className="pl-2 border-l border-[#26262C] space-y-0.5 pt-0.5">
-                          {task.logs.slice(-3, -1).map((lg, i) => (
-                            <div
-                              key={i}
-                              className="font-mono text-[9.5px] text-[#5E5E66] truncate"
-                            >
-                              {lg}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <AuxTabBar />
 
           {/* Active Workbench View Card */}
           {activeTab !== 'none' && (
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
+              {activeTab === 'changes' && <ChangesTab />}
               {activeTab === 'editor' && <WorkbenchEditor />}
               {activeTab === 'terminal' && <IntegratedTerminal />}
               {activeTab === 'preview' && <VisionPreviewTab />}
               {activeTab === 'harness' && <HarnessWorkbenchTab />}
+              {activeTab === 'subagents' && <SubagentsTab />}
               {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
               {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
               {activeTab === 'evidence' && <EvidenceDrawer />}
+              {activeTab === 'swarm' && <SwarmBoardTab />}
             </div>
           )}
         </aside>

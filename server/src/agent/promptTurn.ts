@@ -14,9 +14,40 @@ import { parseAntigravitySlashCommand } from './slashCommands.js';
 import os from 'node:os';
 import path from 'node:path';
 import { BUILTIN_TOOLS_SCHEMA } from '../tools/builtinTools.js';
+import { SWARM_TOOLS_SCHEMA } from '../tools/builtinToolsSchema.js';
+import { SwarmManager } from '../swarm/swarmManager.js';
 import { SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
 import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
 import fs from 'node:fs';
+
+export type TurnPhaseName =
+  | 'queued'
+  | 'prefilling'
+  | 'thinking'
+  | 'streaming_prose'
+  | 'preparing_tool_call'
+  | 'executing_tools'
+  | 'synthesizing_final_prose'
+  | 'completed'
+  | 'aborted'
+  | 'error';
+
+export interface ActiveTurnSnapshot {
+  seq: number;
+  thread_id: string;
+  threadId: string;
+  turn_id: string;
+  message_id: string;
+  phase: TurnPhaseName;
+  is_active: boolean;
+  step: number;
+  max_steps: number;
+  status_label: string;
+  thinking_finished: boolean;
+  active_tool_id?: string;
+  error?: string;
+  timestamp: number;
+}
 
 export interface PromptTurnDeps {
   db: LocalGravityDB;
@@ -29,11 +60,12 @@ export interface PromptTurnDeps {
   attachmentManager: AttachmentManager;
   broadcastSync: (event: Record<string, any>) => void;
   activeAbortControllers: Map<string, AbortController>;
+  activeTurns?: Map<string, ActiveTurnSnapshot>;
   repoRoot: string;
 }
 
 export function createPromptTurnHandler(deps: PromptTurnDeps) {
-  const { db, tabby, mcp, skills, tools, harness, terminal, attachmentManager, broadcastSync, activeAbortControllers, repoRoot } = deps;
+  const { db, tabby, mcp, skills, tools, harness, terminal, attachmentManager, broadcastSync, activeAbortControllers, activeTurns, repoRoot } = deps;
 
   return async function handlePromptTurn(params: {
     threadId: string;
@@ -63,43 +95,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     const project = db.getProject(thread.project_id) || db.ensureDefaultProject(repoRoot);
     const compiledHarness = harness.buildCompiledHarnessPrompt(project.root_path);
 
-    // 1. Save and ground incoming attachments of any type (images, documents, archives, databases, code)
+    // 1. ARM THE TURN FIRST: persist messages, register the stream buffer, mark the thread active and
+    //    register the abort controller BEFORE any slow work (attachment saving) so SYNC_STATE / Stop
+    //    always see an active turn.
     const savedAttachments: SavedAttachment[] = [];
-    if (Array.isArray(params.attachments) && params.attachments.length > 0) {
-      for (const rawAtt of params.attachments) {
-        try {
-          if (typeof rawAtt === 'string') {
-            const saved = await attachmentManager.saveAttachment(thread.id, {
-              dataUrl: rawAtt,
-              name: rawAtt.startsWith('data:image/') ? `image_${Date.now()}.jpg` : `upload_${Date.now()}.bin`,
-            });
-            savedAttachments.push(saved);
-          } else if (rawAtt && typeof rawAtt === 'object') {
-            const saved = await attachmentManager.saveAttachment(thread.id, {
-              id: rawAtt.id,
-              name: rawAtt.name,
-              type: rawAtt.type,
-              size: rawAtt.size,
-              dataUrl: rawAtt.base64DataUrl || rawAtt.dataUrl || rawAtt.url,
-              savedPath: rawAtt.savedPath,
-            });
-            savedAttachments.push(saved);
-          }
-        } catch (attErr) {
-          console.error('[PromptTurn] Error saving attachment:', attErr);
-        }
-      }
-    }
+    const slashInfo = parseAntigravitySlashCommand(params.prompt);
+    const effectiveThinkingBudget: ThinkingBudget = slashInfo.forceThinkingBudget || params.thinkingBudget;
 
-    // Persist User Message with rich attachment records
     const userMsg = db.createMessage({
       thread_id: thread.id,
       role: 'user',
       content: params.prompt,
-      attachments: savedAttachments.length > 0 ? savedAttachments : (params.attachments || []),
+      attachments: [],
     });
-
-    // 2. Create Placeholder Assistant Message & Register 250ms Rehydration Stream Buffer
     const assistantMsg = db.createMessage({
       thread_id: thread.id,
       role: 'assistant',
@@ -112,22 +120,116 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       active_model_tier: params.tier,
       active_thinking_budget: params.thinkingBudget,
     });
+    const abortController = new AbortController();
+    activeAbortControllers.set(thread.id, abortController);
 
-    broadcastSync({
+    // Every broadcast carries thread_id + message_id so clients can filter stale events.
+    const send = (event: Record<string, any>) =>
+      broadcastSync({
+        ...event,
+        payload: {
+          thread_id: thread!.id,
+          threadId: thread!.id,
+          message_id: assistantMsg.id,
+          ...(event.payload || {}),
+        },
+      });
+
+    // Canonical server-driven turn phase state machine.
+    let phaseSeq = 0;
+    let turnStep = 0;
+    let turnMaxSteps = slashInfo.maxToolSteps;
+    let thinkingFinished = false;
+    let lastPhase: TurnPhaseName | null = null;
+    let lastPhaseLabel = '';
+    let terminalPhaseSent = false;
+    const emitPhase = (
+      phase: TurnPhaseName,
+      statusLabel: string,
+      extra: { active_tool_id?: string; error?: string } = {}
+    ) => {
+      const isActive = !(phase === 'completed' || phase === 'aborted' || phase === 'error');
+      if (!isActive) {
+        if (terminalPhaseSent) return;
+        terminalPhaseSent = true;
+      } else if (terminalPhaseSent) {
+        return;
+      }
+      if (phase === lastPhase && statusLabel === lastPhaseLabel && !extra.active_tool_id) return;
+      lastPhase = phase;
+      lastPhaseLabel = statusLabel;
+      const payload: ActiveTurnSnapshot = {
+        seq: ++phaseSeq,
+        thread_id: thread!.id,
+        threadId: thread!.id,
+        turn_id: assistantMsg.id,
+        message_id: assistantMsg.id,
+        phase,
+        is_active: isActive,
+        step: turnStep,
+        max_steps: turnMaxSteps,
+        status_label: statusLabel,
+        thinking_finished: thinkingFinished,
+        ...(extra.active_tool_id ? { active_tool_id: extra.active_tool_id } : {}),
+        ...(extra.error ? { error: extra.error } : {}),
+        timestamp: Date.now(),
+      };
+      if (isActive) {
+        activeTurns?.set(thread!.id, payload);
+      } else if (activeTurns?.get(thread!.id)?.turn_id === assistantMsg.id) {
+        activeTurns.delete(thread!.id);
+      }
+      send({
+        type: 'TURN_PHASE',
+        payload,
+      });
+    };
+
+    send({
       type: 'TURN_STARTED',
       payload: {
-        threadId: thread.id,
+        turn_id: assistantMsg.id,
         userMessage: userMsg,
         assistantMessage: assistantMsg,
         tier: params.tier,
         thinkingBudget: params.thinkingBudget,
       },
     });
-
-    const abortController = new AbortController();
-    activeAbortControllers.set(thread.id, abortController);
+    emitPhase('queued', 'Starting turn...');
+    const subagentId = `subagent-${assistantMsg.id.slice(0, 8)}`;
+    let turnOutcome: 'completed' | 'aborted' | 'error' = 'completed';
+    let turnErrorMsg = '';
 
     try {
+      // Save and ground incoming attachments of any type (images, documents, archives, databases, code)
+      if (Array.isArray(params.attachments) && params.attachments.length > 0) {
+        for (const rawAtt of params.attachments) {
+          try {
+            if (typeof rawAtt === 'string') {
+              const saved = await attachmentManager.saveAttachment(thread.id, {
+                dataUrl: rawAtt,
+                name: rawAtt.startsWith('data:image/') ? `image_${Date.now()}.jpg` : `upload_${Date.now()}.bin`,
+              });
+              savedAttachments.push(saved);
+            } else if (rawAtt && typeof rawAtt === 'object') {
+              const saved = await attachmentManager.saveAttachment(thread.id, {
+                id: rawAtt.id,
+                name: rawAtt.name,
+                type: rawAtt.type,
+                size: rawAtt.size,
+                dataUrl: rawAtt.base64DataUrl || rawAtt.dataUrl || rawAtt.url,
+                savedPath: rawAtt.savedPath,
+              });
+              savedAttachments.push(saved);
+            }
+          } catch (attErr) {
+            console.error('[PromptTurn] Error saving attachment:', attErr);
+          }
+        }
+        const attToPersist = savedAttachments.length > 0 ? savedAttachments : (params.attachments || []);
+        db.updateMessageAttachments(userMsg.id, attToPersist);
+        userMsg.attachments = JSON.stringify(attToPersist);
+      }
       const history = db.listMessages(thread.id);
       const userHome = os.homedir().replace(/\\/g, '/');
       const downloadsDir = path.join(os.homedir(), 'Downloads').replace(/\\/g, '/');
@@ -135,8 +237,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const documentsDir = path.join(os.homedir(), 'Documents').replace(/\\/g, '/');
 
       // Parse Antigravity Slash Commands (/goal, /plan, /boost, /grill-me, /teamwork, /browser, /learn, /compact, /schedule)
-      const slashInfo = parseAntigravitySlashCommand(params.prompt);
-      const effectiveThinkingBudget: ThinkingBudget = slashInfo.forceThinkingBudget || params.thinkingBudget;
+      // Antigravity Slash Commands are parsed at the top of the turn (slashInfo / effectiveThinkingBudget).
 
       // Special fast-path for /compact command
       if (params.prompt.trim().toLowerCase().startsWith('/compact')) {
@@ -155,7 +256,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           `✅ **Context Compacted (/compact)**\n\n` +
           `Compacted **${msgCount}** historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens, pruned ${prunedCount} older turns into Working Memory).\n` +
           `Older intermediate tool outputs and verbose turns have been distilled into a compact Working Memory Snapshot so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
-        broadcastSync({
+        send({
           type: 'CONTEXT_COMPACTED',
           payload: {
             threadId: thread.id,
@@ -167,7 +268,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           },
         });
         db.appendTokenDelta(assistantMsg.id, thread.id, summaryNote, Math.ceil(summaryNote.length / 4));
-        broadcastSync({
+        send({
           type: 'TOKEN_STREAM',
           payload: {
             session_id: thread.id,
@@ -180,9 +281,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         });
         db.finalizeStreamingMessage(assistantMsg.id);
         const updatedThread = db.updateThread(thread.id, { status: 'idle' });
-        broadcastSync({
+        emitPhase('completed', 'Completed');
+        send({
           type: 'TURN_COMPLETED',
-          payload: { threadId: thread.id, messageId: assistantMsg.id, thread: updatedThread },
+          payload: { threadId: thread.id, messageId: assistantMsg.id, thread: updatedThread, final_content: summaryNote },
         });
         return;
       }
@@ -383,8 +485,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const collectedStepNotes: string[] = [];
 
       // Broadcast active subagent start to Overview drawer
-      const subagentId = `subagent-${assistantMsg.id.slice(0, 8)}`;
-      broadcastSync({
+      send({
         type: 'SUBAGENT_EVENT',
         payload: {
           id: subagentId,
@@ -402,6 +503,25 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
       while (step < MAX_TOOL_STEPS) {
         step++;
+        turnStep = step;
+        turnMaxSteps = MAX_TOOL_STEPS;
+        thinkingFinished = false;
+        let stepThinkingClosed = false;
+        const closeThinking = () => {
+          if (stepThinkingClosed) return;
+          stepThinkingClosed = true;
+          thinkingFinished = true;
+          send({
+            type: 'THOUGHT_STREAM',
+            payload: {
+              session_id: thread!.id,
+              chunk: '',
+              elapsed_ms: lastThinkingMs,
+              token_count: cumulativeThinkingTokens,
+              is_finished: true,
+            },
+          });
+        };
         const isFinalStep = step === MAX_TOOL_STEPS;
         const executedToolsThisStep: Array<{
           id: string;
@@ -412,10 +532,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }> = [];
 
         // On the final step, omit tools so the model must provide its final text synthesis
+        const includeSwarmBoardTools =
+          slashInfo.command === '/swarm' || SwarmManager.getInstance().hasActiveSwarm(thread.id);
         const activeTools = isFinalStep
           ? undefined
           : [
               ...BUILTIN_TOOLS_SCHEMA,
+              ...(includeSwarmBoardTools ? SWARM_TOOLS_SCHEMA : []),
               ...SKILL_TOOLS_SCHEMA,
               ...mcp.exportOpenAiTools(),
             ];
@@ -429,7 +552,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
 
         const adaptiveCot = computeAdaptiveThinkingConfig(effectiveThinkingBudget, step);
-        broadcastSync({
+        send({
           type: 'ADAPTIVE_COT_STATE',
           payload: {
             threadId: thread!.id,
@@ -441,7 +564,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             timestamp: Date.now(),
           },
         });
-        broadcastSync({
+        send({
           type: 'THOUGHT_STREAM',
           payload: {
             session_id: thread!.id,
@@ -458,7 +581,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
         if (compactRes.didCompact) {
           chatMessages.splice(0, chatMessages.length, ...compactRes.messages);
-          broadcastSync({
+          send({
             type: 'CONTEXT_COMPACTED',
             payload: {
               threadId: thread!.id,
@@ -471,6 +594,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           });
         }
 
+        emitPhase(
+          'prefilling',
+          step === 1 ? 'Processing prompt...' : `Evaluating tool outputs (Step ${step}/${MAX_TOOL_STEPS})...`
+        );
         const result = await tabby.streamChatCompletion({
           tier: params.tier,
           thinkingBudget: effectiveThinkingBudget,
@@ -478,12 +605,17 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           messages: compactRes.messages,
           tools: activeTools,
           abortSignal: abortController.signal,
+          onToolCallPreparing: (toolName) => {
+            closeThinking();
+            emitPhase('preparing_tool_call', toolName ? `Preparing tool call: ${toolName}...` : 'Preparing tool call...');
+          },
           onThoughtDelta: (delta, elapsedMs, tokenCount) => {
+            emitPhase('thinking', `Thinking (Step ${step}/${MAX_TOOL_STEPS})...`);
             cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
             lastThinkingMs = elapsedMs;
             const liveTokPerSec = tabby.getTelemetry().tokensPerSec || Number((cumulativeThinkingTokens / Math.max(0.08, elapsedMs / 1000)).toFixed(1));
             db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, cumulativeThinkingTokens);
-            broadcastSync({
+            send({
               type: 'THOUGHT_STREAM',
               payload: {
                 session_id: thread!.id,
@@ -498,11 +630,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             });
           },
           onTokenDelta: (delta, tokenCount, measuredTokPerSec) => {
+            closeThinking();
+            if (isFinalStep && hasExecutedTools) emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
+            else emitPhase('streaming_prose', 'Writing response...');
             cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
             const liveTokPerSec = measuredTokPerSec || tabby.getTelemetry().tokensPerSec || Number((cumulativeOutputTokens / Math.max(0.08, (Date.now() - turnStartMs) / 1000)).toFixed(1));
             db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
             // If this is step > 1 and no thoughts arrived yet, mark thinking as finished once text tokens start
-            broadcastSync({
+            send({
               type: 'TOKEN_STREAM',
               payload: {
                 session_id: thread!.id,
@@ -515,7 +650,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
           },
-          onToolCallRequest: async (toolName, toolArgs) => {
+          onToolCallRequest: isFinalStep ? undefined : async (toolName, toolArgs) => {
+            closeThinking();
             hasExecutedTools = true;
             db.updateThread(thread!.id, { status: 'executing_tool' });
             const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
@@ -527,7 +663,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               arguments_json: JSON.stringify(toolArgs),
             });
 
-            broadcastSync({
+            emitPhase('executing_tools', `Running ${toolName}...`, { active_tool_id: toolExec.id });
+            send({
               type: 'TOOL_EVENT',
               payload: {
                 session_id: thread!.id,
@@ -542,7 +679,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
 
-            broadcastSync({
+            send({
               type: 'SUBAGENT_EVENT',
               payload: {
                 id: subagentId,
@@ -565,7 +702,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 messageId: assistantMsg.id,
                 workspaceRoot: project.root_path,
                 onStdoutChunk: (chunk) => {
-                  broadcastSync({
+                  send({
                     type: 'TOOL_STREAM',
                     payload: {
                       thread_id: thread!.id,
@@ -577,7 +714,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   });
                 },
                 onStderrChunk: (chunk) => {
-                  broadcastSync({
+                  send({
                     type: 'TOOL_STREAM',
                     payload: {
                       thread_id: thread!.id,
@@ -589,13 +726,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   });
                 },
                 onFileCheckpointCreated: (checkpoint) => {
-                  broadcastSync({
+                  send({
                     type: 'CHECKPOINT_CREATED',
                     payload: { thread_id: thread!.id, checkpoint },
                   });
                 },
                 onScreenCaptured: (base64Image, windowTitle) => {
-                  broadcastSync({
+                  send({
                     type: 'VISION_CAPTURE',
                     payload: {
                       base64DataUrl: base64Image,
@@ -616,7 +753,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               });
 
               if (ppcCycle) {
-                broadcastSync({
+                send({
                   type: 'HARNESS_PPC_COMPLETED',
                   payload: {
                     cycle: ppcCycle,
@@ -634,7 +771,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 duration_ms: execResult.durationMs,
               });
 
-              broadcastSync({
+              send({
                 type: 'TOOL_EVENT',
                 payload: {
                   session_id: thread!.id,
@@ -668,7 +805,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 status: 'error',
                 duration_ms: 0,
               });
-              broadcastSync({
+              send({
                 type: 'TOOL_EVENT',
                 payload: {
                   session_id: thread!.id,
@@ -718,7 +855,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               }
               // Move the transient status note into the collapsible activity log and keep main message buffer clean
               db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-              broadcastSync({
+              send({
                 type: 'STEP_NOTE_COMMITTED',
                 payload: {
                   session_id: thread.id,
@@ -730,7 +867,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   is_auto_continue: true,
                 },
               });
-              broadcastSync({
+              send({
                 type: 'SUBAGENT_EVENT',
                 payload: {
                   id: subagentId,
@@ -766,13 +903,15 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
 
         // Tools were executed in this step!
-        // If the model emitted a short transitional preamble (< 650 chars, e.g., "Let me read index.ts..."),
+        // If the model emitted a short transitional preamble (< 200 chars, no headings/code/lists, e.g., "Let me read index.ts..."),
         // move it into the collapsible activity window (STEP_NOTE_COMMITTED) instead of polluting the final answer!
         if (stepText) {
-          if (stepText.length < 650) {
+          const looksStructured =
+            /^\s{0,3}#{1,6}\s/m.test(stepText) || stepText.includes('```') || /^\s*(?:[-*+]|\d+[.)])\s+\S/m.test(stepText);
+          if (stepText.length < 200 && !looksStructured) {
             collectedStepNotes.push(stepText);
             db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-            broadcastSync({
+            send({
               type: 'STEP_NOTE_COMMITTED',
               payload: {
                 session_id: thread.id,
@@ -840,13 +979,16 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
       // Early exit if aborted during tool execution or token generation
       if (abortController.signal.aborted) {
+        turnOutcome = 'aborted';
+        db.finalizeRunningToolExecutions(assistantMsg.id);
         db.finalizeStreamingMessage(assistantMsg.id);
         db.updateThread(thread.id, { status: 'idle' });
-        broadcastSync({
+        emitPhase('aborted', 'Stopped');
+        send({
           type: 'TURN_ABORTED',
-          payload: { thread_id: thread.id, session_id: thread.id },
+          payload: { thread_id: thread.id, session_id: thread.id, turn_id: assistantMsg.id, message_id: assistantMsg.id },
         });
-        broadcastSync({
+        send({
           type: 'TOKEN_STREAM',
           payload: {
             session_id: thread.id,
@@ -862,7 +1004,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
       // If /plan was used, automatically sync the generated plan to the Plan Workbench
       if (slashInfo.command === '/plan' && committedFinalContent.trim().length > 40) {
-        broadcastSync({
+        send({
           type: 'ARTIFACT_SYNC',
           payload: {
             session_id: thread.id,
@@ -873,37 +1015,91 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         });
       }
 
-      broadcastSync({
-        type: 'SUBAGENT_EVENT',
-        payload: {
-          id: subagentId,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          role: slashInfo.subagentRole,
-          command: slashInfo.command || 'autonomous',
-          status: 'completed',
-          step,
-          maxSteps: MAX_TOOL_STEPS,
-          summary: `Completed in ${step} step${step === 1 ? '' : 's'}${autoContinueCount > 0 ? ` (${autoContinueCount} self-catches)` : ''}`,
-          timestamp: Date.now(),
-        },
-      });
-
-      // Fallback summary if model executed actions but ended its turn with empty user-facing prose
+      // Fallback / synthesis if loop ended with empty user-facing prose
       if (!committedFinalContent.trim()) {
-        if (collectedStepNotes.length > 0) {
-          committedFinalContent = collectedStepNotes[collectedStepNotes.length - 1];
-        } else {
-          committedFinalContent = `Completed all actions across ${step} autonomous step${step === 1 ? '' : 's'}.`;
+        // Prefer promoting the last substantial step note if available
+        const substantialNote = [...collectedStepNotes].reverse().find((n) => n.trim().length >= 40);
+        let fallbackText = substantialNote || '';
+
+        // If tools ran but we have no substantial prose yet, run a 1-step tool-free synthesis
+        if (!fallbackText && hasExecutedTools && !abortController.signal.aborted) {
+          emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
+          try {
+            const synthMessages = [
+              ...chatMessages,
+              {
+                role: 'user',
+                content:
+                  'Please summarize the results and provide your complete, clear final answer for the user based on the tool outputs above. Do not call any tools.',
+              },
+            ];
+            const synthResult = await tabby.streamChatCompletion({
+              tier: params.tier,
+              thinkingBudget: effectiveThinkingBudget,
+              stepIndex: step + 1,
+              messages: synthMessages,
+              tools: undefined,
+              abortSignal: abortController.signal,
+              onThoughtDelta: () => {},
+              onTokenDelta: (delta) => {
+                if (!delta) return;
+                cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
+                db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
+                send({
+                  type: 'TOKEN_STREAM',
+                  payload: {
+                    session_id: thread!.id,
+                    thread_id: thread!.id,
+                    message_id: assistantMsg.id,
+                    chunk: delta,
+                    output_tokens: cumulativeOutputTokens,
+                    tokens_per_sec: tabby.getTelemetry().tokensPerSec,
+                    is_finished: false,
+                  },
+                });
+              },
+            });
+            const synthClean = deduplicateRepeatedSequences((synthResult.content || '').trim());
+            if (synthClean) {
+              committedFinalContent = synthClean;
+            }
+          } catch (synthErr) {
+            console.error('[PromptTurn] Final synthesis step failed:', synthErr);
+          }
         }
-        db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
+
+        if (!committedFinalContent.trim()) {
+          if (!fallbackText && collectedStepNotes.length > 0) {
+            fallbackText = collectedStepNotes[collectedStepNotes.length - 1];
+          }
+          committedFinalContent =
+            fallbackText ||
+            `Completed all actions across ${step} autonomous step${step === 1 ? '' : 's'}.`;
+          cumulativeOutputTokens += Math.max(1, Math.ceil(committedFinalContent.length / 4));
+          db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
+          send({
+            type: 'TOKEN_STREAM',
+            payload: {
+              session_id: thread.id,
+              thread_id: thread.id,
+              message_id: assistantMsg.id,
+              chunk: committedFinalContent,
+              output_tokens: cumulativeOutputTokens,
+              tokens_per_sec: tabby.getTelemetry().tokensPerSec,
+              is_finished: false,
+            },
+          });
+        } else {
+          db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
+        }
       }
 
       db.finalizeRunningToolExecutions(assistantMsg.id);
       db.finalizeStreamingMessage(assistantMsg.id);
       const updatedThread = db.updateThread(thread.id, { status: 'idle' });
 
-      broadcastSync({
+      thinkingFinished = true;
+      send({
         type: 'THOUGHT_STREAM',
         payload: {
           session_id: thread.id,
@@ -916,7 +1112,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
 
-      broadcastSync({
+      send({
         type: 'TOKEN_STREAM',
         payload: {
           session_id: thread.id,
@@ -929,11 +1125,15 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
 
-      broadcastSync({
+      emitPhase('completed', 'Completed');
+      send({
         type: 'TURN_COMPLETED',
         payload: {
           threadId: thread.id,
+          turn_id: assistantMsg.id,
           messageId: assistantMsg.id,
+          message_id: assistantMsg.id,
+          final_content: committedFinalContent,
           thread: updatedThread,
         },
       });
@@ -943,14 +1143,16 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         err?.name === 'AbortError' ||
         err?.message?.toLowerCase().includes('abort')
       ) {
+        turnOutcome = 'aborted';
         db.finalizeRunningToolExecutions(assistantMsg.id);
         db.finalizeStreamingMessage(assistantMsg.id);
         db.updateThread(thread.id, { status: 'idle' });
-        broadcastSync({
+        emitPhase('aborted', 'Stopped');
+        send({
           type: 'TURN_ABORTED',
-          payload: { thread_id: thread.id, session_id: thread.id },
+          payload: { thread_id: thread.id, session_id: thread.id, turn_id: assistantMsg.id, message_id: assistantMsg.id },
         });
-        broadcastSync({
+        send({
           type: 'TOKEN_STREAM',
           payload: {
             session_id: thread.id,
@@ -964,20 +1166,47 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
+      turnOutcome = 'error';
+      turnErrorMsg = err?.message || String(err);
       db.finalizeRunningToolExecutions(assistantMsg.id);
       db.finalizeStreamingMessage(assistantMsg.id);
       db.updateThread(thread.id, { status: 'error' });
-      broadcastSync({
+      emitPhase('error', 'Error', { error: turnErrorMsg });
+      send({
         type: 'TURN_ERROR',
         payload: {
           threadId: thread.id,
+          turn_id: assistantMsg.id,
           messageId: assistantMsg.id,
-          error: err?.message || String(err),
+          error: turnErrorMsg,
         },
       });
     } finally {
-      activeAbortControllers.delete(thread.id);
+      send({
+        type: 'SUBAGENT_EVENT',
+        payload: {
+          id: subagentId,
+          role: slashInfo.subagentRole,
+          command: slashInfo.command || 'autonomous',
+          status: turnOutcome === 'error' ? 'error' : 'completed',
+          step: turnStep,
+          maxSteps: turnMaxSteps,
+          summary:
+            turnOutcome === 'error'
+              ? `Failed: ${turnErrorMsg.slice(0, 120)}`
+              : turnOutcome === 'aborted'
+              ? `Stopped at step ${turnStep}`
+              : `Completed in ${turnStep} step${turnStep === 1 ? '' : 's'}`,
+          timestamp: Date.now(),
+        },
+      });
+      if (activeAbortControllers.get(thread.id) === abortController) {
+        activeAbortControllers.delete(thread.id);
+      }
+      if (activeTurns?.get(thread.id)?.turn_id === assistantMsg.id) {
+        activeTurns.delete(thread.id);
+      }
     }
-  
   };
 }
+

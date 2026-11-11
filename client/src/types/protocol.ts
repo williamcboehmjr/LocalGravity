@@ -31,6 +31,10 @@ export interface PromptSubmitMessage extends BaseMessage<{
   tier: ModelTier;
   thinking_budget: ThinkingBudget;
   images?: string[];
+  thread_id?: string;
+  attachments?: unknown[];
+  execution_policy?: 'always_proceed' | 'request_review';
+  executionPolicy?: 'always_proceed' | 'request_review';
 }> {
   type: 'PROMPT_SUBMIT';
 }
@@ -114,17 +118,87 @@ export interface ExecResultMessage extends BaseMessage<{
 
 // 10. ARTIFACT_SYNC (Bidirectional)
 export interface ArtifactSyncMessage extends BaseMessage<{
+  id?: string;
   session_id: string;
-  artifact_name: 'task.md' | 'implementation_plan.md';
+  artifact_name: 'task.md' | 'implementation_plan.md' | 'plan.md' | 'walkthrough.md' | string;
   content: string;
   version: number;
+  type?: 'plan' | 'walkthrough' | 'task' | 'html' | string;
+  requestFeedback?: boolean;
+  userFacing?: boolean;
 }> {
   type: 'ARTIFACT_SYNC';
+}
+
+// 13. SWARM_STATE / SWARM_MESSAGE / SWARM_MEMBER_UPDATED (Brain -> UI)
+export type SwarmMemberState = 'waiting' | 'working' | 'stopped' | 'killed';
+
+export interface SwarmMemberPayload {
+  id: string;
+  swarm_id?: string;
+  name: string;
+  added_by?: string;
+  thread_id?: string;
+  model?: string;
+  state: SwarmMemberState;
+  workspace_mode?: string;
+  workspace_path?: string;
+  channels?: string[];
+  wait_since?: number;
+  mentions_only?: boolean;
+  last_read_seq?: number;
+  last_post_seq?: number;
+  brief?: string;
+}
+
+export interface SwarmMessagePayload {
+  seq: number;
+  swarm_id?: string;
+  channel: string;
+  agent: string;
+  text: string;
+  kind?: string;
+  mentions?: string[];
+  created_at: string | number;
+}
+
+export interface SwarmSnapshotPayload {
+  id: string;
+  title: string;
+  status: string;
+  head: number;
+  members: SwarmMemberPayload[];
+  messages: SwarmMessagePayload[];
+}
+
+export interface SwarmStateMessage extends BaseMessage<{
+  thread_id: string;
+  swarm: SwarmSnapshotPayload | null;
+}> {
+  type: 'SWARM_STATE';
+}
+
+export interface SwarmMessageEvent extends BaseMessage<{
+  thread_id: string;
+  swarm_id: string;
+  message: SwarmMessagePayload;
+}> {
+  type: 'SWARM_MESSAGE';
+}
+
+export interface SwarmMemberUpdatedEvent extends BaseMessage<{
+  thread_id: string;
+  swarm_id: string;
+  member: SwarmMemberPayload;
+}> {
+  type: 'SWARM_MEMBER_UPDATED';
 }
 
 // 11. STOP_GENERATION
 export interface StopGenerationMessage extends BaseMessage<{
   session_id: string;
+  thread_id?: string;
+  turn_id?: string;
 }> {
   type: 'STOP_GENERATION';
 }
@@ -145,7 +219,45 @@ export interface TelemetryMessage extends BaseMessage<{
   type: 'TELEMETRY';
 }
 
+// 12. TURN_PHASE (Brain -> UI): authoritative per-turn lifecycle state
+export type TurnPhase =
+  | 'queued'
+  | 'prefilling'
+  | 'thinking'
+  | 'streaming_prose'
+  | 'preparing_tool_call'
+  | 'executing_tools'
+  | 'synthesizing_final_prose'
+  | 'completed'
+  | 'aborted'
+  | 'error';
+
+export interface TurnPhasePayload {
+  seq: number;
+  thread_id: string;
+  threadId?: string;
+  turn_id: string;
+  message_id: string;
+  phase: TurnPhase;
+  is_active: boolean;
+  step: number;
+  max_steps: number;
+  status_label: string;
+  thinking_finished: boolean;
+  active_tool_id?: string;
+  error?: string;
+  timestamp?: number | string;
+}
+
+export interface TurnPhaseMessage extends BaseMessage<TurnPhasePayload> {
+  type: 'TURN_PHASE';
+}
+
 export type AnyIncomingMessage =
+  | TurnPhaseMessage
+  | SwarmStateMessage
+  | SwarmMessageEvent
+  | SwarmMemberUpdatedEvent
   | ModelStateMessage
   | ThoughtStreamMessage
   | TokenStreamMessage

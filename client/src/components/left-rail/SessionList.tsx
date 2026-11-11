@@ -79,7 +79,13 @@ export const SessionList: React.FC<SessionListProps> = ({
   const handleSaveRename = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (editTitle.trim()) {
-      renameSession(id, editTitle.trim());
+      const newTitle = editTitle.trim();
+      renameSession(id, newTitle);
+      fetch(`${apiBaseUrl}/api/threads/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      }).catch(() => {});
     }
     setEditingId(null);
   };

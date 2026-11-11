@@ -121,7 +121,7 @@ export const THINKING_BUDGET_SPECS: Record<
   off: {
     budget: 'off',
     maxThinkingTokens: 0,
-    followUpStepMaxThinkingTokens: 0,
+    followUpStepMaxThinkingTokens: 256,
     prefillClosedThink: true,
     systemDirective:
       'THINKING BUDGET: OFF (0 tokens). Execute requested tools or respond directly with zero deliberation.',
@@ -129,7 +129,7 @@ export const THINKING_BUDGET_SPECS: Record<
   fast: {
     budget: 'fast',
     maxThinkingTokens: 250,
-    followUpStepMaxThinkingTokens: 0,
+    followUpStepMaxThinkingTokens: 256,
     prefillClosedThink: true,
     systemDirective:
       'THINKING BUDGET: FAST. Deliver a concise, direct response or immediate tool execution with sub-second latency.',

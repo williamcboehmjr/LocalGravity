@@ -19,6 +19,7 @@ export interface ToolExecutionContext {
   messageId: string;
   workspaceRoot: string;
   abortSignal?: AbortSignal;
+  swarmAgentName?: string;
   onStdoutChunk?: (chunk: string) => void;
   onStderrChunk?: (chunk: string) => void;
   onFileCheckpointCreated?: (checkpoint: FileCheckpointRecord) => void;

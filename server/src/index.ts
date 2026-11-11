@@ -36,7 +36,8 @@ import { queryHostHardwareTelemetry } from './utils/telemetry.js';
 import { pruneChatMessages } from './utils/messagePruning.js';
 import { detectPrematureStop } from './agent/prematureStop.js';
 import { parseAntigravitySlashCommand } from './agent/slashCommands.js';
-import { createPromptTurnHandler } from './agent/promptTurn.js';
+import { createPromptTurnHandler, type ActiveTurnSnapshot } from './agent/promptTurn.js';
+import { SwarmManager } from './swarm/swarmManager.js';
 import { AttachmentManager, RawAttachmentInput } from './files/attachmentManager.js';
 
 import {
@@ -139,6 +140,7 @@ export async function createDaemonServer(options?: {
   const syncClients = new Set<WebSocket>();
   const terminalClients = new Set<WebSocket>();
   const activeAbortControllers = new Map<string, AbortController>();
+  const activeTurns = new Map<string, ActiveTurnSnapshot>();
   const pendingEdgeRpc = new Map<
     string,
     {
@@ -174,7 +176,14 @@ export async function createDaemonServer(options?: {
   // Wire Antigravity 6-Pillar Managers to real-time WebSocket broadcastSync
   const taskMgr = BackgroundTaskManager.getInstance();
   const subagentMgr = SubagentManager.getInstance();
+  subagentMgr.setLlmEngine(tabby);
   const artifactMgr = ArtifactManager.getInstance();
+  const swarmMgr = SwarmManager.getInstance();
+  swarmMgr.configure({
+    db,
+    broadcastSync,
+    runtimeDeps: { tabby, tools, repoRoot: REPO_ROOT },
+  });
 
   taskMgr.onEvent((evt) => {
     broadcastSync({
@@ -215,12 +224,20 @@ export async function createDaemonServer(options?: {
         ? 'plan.md'
         : artifact.type === 'walkthrough'
         ? 'walkthrough.md'
+        : artifact.type === 'html'
+        ? `${artifact.id.replace(/^artifact-/, '')}.html`
         : 'task.md';
     broadcastSync({
       type: 'ARTIFACT_SYNC',
       payload: {
+        id: artifact.id,
+        type: artifact.type,
         session_id: artifact.threadId,
         artifact_name: mappedName,
+        artifactId: artifact.id,
+        artifactType: artifact.type,
+        requestFeedback: Boolean(artifact.requestFeedback),
+        userFacing: Boolean(artifact.userFacing),
         content: artifact.content,
         title: artifact.title,
         version: artifact.updatedAt,
@@ -270,11 +287,76 @@ export async function createDaemonServer(options?: {
     };
   });
 
+  app.post('/api/tasks/:id/kill', async (req) => {
+    const { id } = req.params as { id: string };
+    const killed = taskMgr.killTask(id);
+    return { ok: killed, tasks: taskMgr.listTasks() };
+  });
+
+  app.post('/api/tasks/:id/input', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { input?: string };
+    const sent = taskMgr.sendInputToTask(id, String(body.input || ''));
+    return { ok: sent };
+  });
+
   app.get('/api/artifacts', async (req) => {
     const { thread_id } = (req.query || {}) as { thread_id?: string };
     return {
       artifacts: artifactMgr.listArtifacts(thread_id),
     };
+  });
+
+  app.get('/api/artifacts/:id/raw', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const artifact =
+      artifactMgr.getArtifact(id) ||
+      artifactMgr.listArtifacts().find((a) => a.id === `artifact-${id}` || a.title.toLowerCase() === id.toLowerCase());
+    if (!artifact) {
+      return reply.code(404).send({ error: `Artifact "${id}" not found` });
+    }
+    const darkThemeCss = `<style>:root{color-scheme:dark;--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;--accent:#3b82f6;}html,body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,sans-serif;margin:0;padding:12px;}</style>`;
+    if (artifact.type === 'html' || artifact.filePath.endsWith('.html')) {
+      const html = artifact.content.includes('</head>')
+        ? artifact.content.replace('</head>', `${darkThemeCss}</head>`)
+        : `<!DOCTYPE html><html><head><meta charset="utf-8">${darkThemeCss}</head><body>${artifact.content}</body></html>`;
+      return reply.type('text/html; charset=utf-8').send(html);
+    }
+    return reply.type('text/plain; charset=utf-8').send(artifact.content);
+  });
+
+  app.post('/api/artifacts/:id/feedback', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const updated = artifactMgr.clearArtifactFeedback(id);
+    if (!updated) {
+      return reply.code(404).send({ error: `Artifact "${id}" not found` });
+    }
+    return { ok: true, artifact: updated };
+  });
+
+  // ==================== SWARM BOARD & ROSTER API ====================
+  app.get('/api/swarm/:threadId', async (req) => {
+    const { threadId } = req.params as { threadId: string };
+    return { swarm: swarmMgr.getSwarmSnapshot(threadId) };
+  });
+
+  app.post('/api/swarm/:threadId/post', async (req, reply) => {
+    const { threadId } = req.params as { threadId: string };
+    const body = (req.body || {}) as { text?: string; agent?: string; channel?: string };
+    const text = String(body.text || '').trim();
+    if (!text) {
+      return reply.code(400).send({ error: 'text is required' });
+    }
+    const message = swarmMgr.postMessage(threadId, body.agent || 'user', text, {
+      channel: body.channel || 'main',
+    });
+    return { ok: true, message, swarm: swarmMgr.getSwarmSnapshot(threadId) };
+  });
+
+  app.post('/api/swarm/:threadId/kill/:name', async (req) => {
+    const { threadId, name } = req.params as { threadId: string; name: string };
+    const res = swarmMgr.killMember(threadId, name, 'user');
+    return { ok: res.killed, ...res, swarm: swarmMgr.getSwarmSnapshot(threadId) };
   });
 
   app.get('/api/runtime/ports', async () => ports);
@@ -615,27 +697,55 @@ export async function createDaemonServer(options?: {
     return { cleared: true };
   });
 
-  const stopGenerationHandler = async (threadId?: string) => {
+  const stopGenerationHandler = async (threadId?: string, rawTurnId?: string) => {
+    const turnId = rawTurnId && !rawTurnId.startsWith('pending-') ? rawTurnId : undefined;
     let abortedCount = 0;
+    let targetMessageId: string | undefined;
+    let targetTurnId: string | undefined = turnId;
+
     if (threadId) {
+      const currentTurn = activeTurns.get(threadId);
       const ctrl = activeAbortControllers.get(threadId);
+
+      // Keyed by turn: never let a stale stop request abort a newer turn on the same thread.
+      if (turnId && currentTurn && currentTurn.turn_id !== turnId) {
+        return { stopped: false, abortedCount: 0, staleTurn: true, threadId, turnId };
+      }
+
+      // Idempotent: if this turn/thread has no active controller or active stream, return cleanly.
+      const streams = db.getActiveStreamsForThread(threadId);
+      if (!ctrl && !currentTurn && streams.length === 0) {
+        return { stopped: true, abortedCount: 0, alreadyIdle: true, threadId, turnId };
+      }
+
+      targetTurnId = currentTurn?.turn_id || turnId || streams[0]?.messageId;
+      targetMessageId = currentTurn?.message_id || streams[0]?.messageId;
+
       if (ctrl) {
         try { ctrl.abort(); } catch {}
         activeAbortControllers.delete(threadId);
         abortedCount++;
       }
-      for (const s of db.getActiveStreamsForThread(threadId)) {
+      if (currentTurn) {
+        activeTurns.delete(threadId);
+      }
+      for (const s of streams) {
+        db.finalizeRunningToolExecutions(s.messageId);
         db.finalizeStreamingMessage(s.messageId);
       }
       db.updateThread(threadId, { status: 'idle' });
-    }
-    // Abort all active controllers if threadId not specifically mapped or if threadId is omitted
-    if (abortedCount === 0 || !threadId) {
+      if (streams.length > 0 && abortedCount === 0) {
+        abortedCount++;
+      }
+    } else {
+      // Global stop (no threadId specified): abort all active turns.
       for (const [id, c] of activeAbortControllers.entries()) {
         try { c.abort(); } catch {}
         activeAbortControllers.delete(id);
+        activeTurns.delete(id);
         if (id) {
           for (const s of db.getActiveStreamsForThread(id)) {
+            db.finalizeRunningToolExecutions(s.messageId);
             db.finalizeStreamingMessage(s.messageId);
           }
           db.updateThread(id, { status: 'idle' });
@@ -643,42 +753,81 @@ export async function createDaemonServer(options?: {
         abortedCount++;
       }
     }
-    broadcastSync({
-      type: 'TURN_ABORTED',
-      payload: { thread_id: threadId, session_id: threadId },
-    });
-    broadcastSync({
-      type: 'TOKEN_STREAM',
-      payload: {
-        thread_id: threadId,
-        session_id: threadId,
-        chunk: '',
-        is_finished: true,
-      },
-    });
-    return { stopped: true, abortedCount, threadId };
+
+    if (abortedCount > 0) {
+      if (threadId && targetTurnId) {
+        broadcastSync({
+          type: 'TURN_PHASE',
+          payload: {
+            seq: Number.MAX_SAFE_INTEGER,
+            thread_id: threadId,
+            threadId,
+            turn_id: targetTurnId,
+            message_id: targetMessageId || targetTurnId,
+            phase: 'aborted',
+            is_active: false,
+            step: 0,
+            max_steps: 0,
+            status_label: 'Stopped',
+            thinking_finished: true,
+            timestamp: Date.now(),
+          },
+        });
+      }
+      broadcastSync({
+        type: 'TURN_ABORTED',
+        payload: {
+          thread_id: threadId,
+          session_id: threadId,
+          ...(targetTurnId ? { turn_id: targetTurnId } : {}),
+          ...(targetMessageId ? { message_id: targetMessageId } : {}),
+        },
+      });
+      broadcastSync({
+        type: 'TOKEN_STREAM',
+        payload: {
+          thread_id: threadId,
+          session_id: threadId,
+          ...(targetMessageId ? { message_id: targetMessageId } : {}),
+          chunk: '',
+          is_finished: true,
+        },
+      });
+    }
+    return { stopped: true, abortedCount, threadId, turnId: targetTurnId, messageId: targetMessageId };
   };
 
   app.post('/api/threads/:id/stop', async (req) => {
     const { id } = req.params as { id: string };
-    return await stopGenerationHandler(id);
+    const body = (req.body || {}) as { turn_id?: string; turnId?: string; message_id?: string };
+    return await stopGenerationHandler(id, body.turn_id || body.turnId || body.message_id);
   });
   app.post('/api/threads/:id/cancel', async (req) => {
     const { id } = req.params as { id: string };
-    return await stopGenerationHandler(id);
+    const body = (req.body || {}) as { turn_id?: string; turnId?: string; message_id?: string };
+    return await stopGenerationHandler(id, body.turn_id || body.turnId || body.message_id);
   });
   app.post('/api/stop', async (req) => {
-    const body = (req.body || {}) as { thread_id?: string; session_id?: string };
-    return await stopGenerationHandler(body.thread_id || body.session_id);
+    const body = (req.body || {}) as { thread_id?: string; session_id?: string; turn_id?: string; turnId?: string; message_id?: string };
+    return await stopGenerationHandler(body.thread_id || body.session_id, body.turn_id || body.turnId || body.message_id);
   });
 
   // ==================== MESSAGES, TOOLS & CHECKPOINTS API ====================
   app.get('/api/threads/:id/messages', async (req) => {
     const { id } = req.params as { id: string };
+    const thread = db.getThread(id);
     const messages = db.listMessages(id);
     const activeStreams = db.getActiveStreamsForThread(id);
     const checkpoints = db.listFileCheckpoints(id);
-    return { messages, activeStreams, checkpoints };
+    const activeTurn = activeTurns.get(id) || null;
+    return {
+      messages,
+      activeStreams,
+      checkpoints,
+      threadStatus: thread?.status || 'idle',
+      thread,
+      activeTurn,
+    };
   });
 
   app.get('/api/threads/:id/checkpoints', async (req) => {
@@ -1149,7 +1298,7 @@ export async function createDaemonServer(options?: {
   // ==================== TURN EXECUTION ENGINE (WITH HARNESS² + PROPOSE-PROBE-COMPOSE) ====================
   const handlePromptTurn = createPromptTurnHandler({
     db, tabby, mcp, skills, tools, harness, terminal, attachmentManager,
-    broadcastSync, activeAbortControllers, repoRoot: REPO_ROOT,
+    broadcastSync, activeAbortControllers, activeTurns, repoRoot: REPO_ROOT,
   });
 
 
@@ -1178,6 +1327,75 @@ export async function createDaemonServer(options?: {
     return { accepted: true, threadId: id, tier, thinkingBudget: budget };
   });
 
+  // 60s Cron Evaluator for .localgravity/harness/automations.json
+  const matchCronField = (field: string, value: number): boolean => {
+    if (field === '*') return true;
+    for (const part of field.split(',')) {
+      if (part.startsWith('*/')) {
+        const step = Number(part.slice(2));
+        if (step > 0 && value % step === 0) return true;
+      } else if (part.includes('-')) {
+        const [lo, hi] = part.split('-').map(Number);
+        if (!Number.isNaN(lo) && !Number.isNaN(hi) && value >= lo && value <= hi) return true;
+      } else if (Number(part) === value) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const matchesCronExpression = (cronExpr: string, now: Date): boolean => {
+    const parts = (cronExpr || '').trim().split(/\s+/);
+    if (parts.length !== 5) return false;
+    return (
+      matchCronField(parts[0], now.getMinutes()) &&
+      matchCronField(parts[1], now.getHours()) &&
+      matchCronField(parts[2], now.getDate()) &&
+      matchCronField(parts[3], now.getMonth() + 1) &&
+      matchCronField(parts[4], now.getDay())
+    );
+  };
+
+  const cronTimer = setInterval(() => {
+    try {
+      const now = new Date();
+      const minuteKey = now.toISOString().slice(0, 16);
+      const list = readAutomations();
+      let changed = false;
+      for (const item of list) {
+        if (!item.enabled || !item.prompt) continue;
+        if (item.lastRunAt && item.lastRunAt.slice(0, 16) === minuteKey) continue;
+        if (!matchesCronExpression(item.cron, now)) continue;
+        item.lastRunAt = now.toISOString();
+        changed = true;
+        broadcastSync({
+          type: 'TIMER_FIRED',
+          payload: {
+            taskId: item.id,
+            automationId: item.id,
+            title: item.name,
+            prompt: item.prompt,
+            timestamp: Date.now(),
+          },
+        });
+        const threads = db.listThreads();
+        const targetId = threads[0]?.id || 'thread-default';
+        void handlePromptTurn({
+          threadId: targetId,
+          prompt: item.prompt,
+          tier: item.tier || 'high',
+          thinkingBudget: 'fast',
+        }).catch((err) => console.error('[AutomationCron] Error running automation turn:', err));
+      }
+      if (changed) writeAutomations(list);
+    } catch (err) {
+      console.error('[AutomationCron] Tick error:', err);
+    }
+  }, 60_000);
+  cronTimer.unref?.();
+  app.addHook('onClose', async () => {
+    clearInterval(cronTimer);
+  });
+
   // ==================== WEBSOCKET MULTIPLEXING (`/ws/sync`, `/ws/agent/:sessionId`, `/ws/terminal`) ====================
   const handleWsConnection = (socket: WebSocket, initialThreadId?: string) => {
     syncClients.add(socket);
@@ -1203,6 +1421,7 @@ export async function createDaemonServer(options?: {
           activeThreadId: targetThreadId,
           messages,
           activeStreams,
+          activeTurn: targetThreadId ? (activeTurns.get(targetThreadId) || null) : null,
           checkpoints,
           mcpServers: mcp.listServers(),
           tabby: tabbyTel,
@@ -1211,6 +1430,7 @@ export async function createDaemonServer(options?: {
           ppcHistory: harness.getPpcHistory(),
           backgroundTasks: taskMgr.listTasks(),
           artifacts: artifactMgr.listArtifacts(targetThreadId),
+          swarm: targetThreadId ? swarmMgr.getSwarmSnapshot(targetThreadId) : null,
         },
       })
     );
@@ -1234,6 +1454,7 @@ export async function createDaemonServer(options?: {
                 activeThreadId: reqThreadId,
                 messages: threadMsgs,
                 activeStreams: inFlight,
+                activeTurn: reqThreadId ? (activeTurns.get(reqThreadId) || null) : null,
                 checkpoints: reqThreadId ? db.listFileCheckpoints(reqThreadId) : [],
                 mcpServers: mcp.listServers(),
                 tabby: tabby.getTelemetry(),
@@ -1242,6 +1463,7 @@ export async function createDaemonServer(options?: {
                 ppcHistory: harness.getPpcHistory(),
                 backgroundTasks: taskMgr.listTasks(),
                 artifacts: artifactMgr.listArtifacts(reqThreadId),
+                swarm: reqThreadId ? swarmMgr.getSwarmSnapshot(reqThreadId) : null,
               },
             })
           );
@@ -1303,7 +1525,8 @@ export async function createDaemonServer(options?: {
           }
         } else if (type === 'STOP_GENERATION' || type === 'CANCEL_GENERATION') {
           const threadId = payload?.thread_id || payload?.session_id || targetThreadId;
-          await stopGenerationHandler(threadId);
+          const turnId = payload?.turn_id || payload?.turnId || payload?.message_id;
+          await stopGenerationHandler(threadId, turnId);
         } else if (type === 'ARTIFACT_SYNC') {
           broadcastSync({
             type: 'ARTIFACT_SYNC',

@@ -6,6 +6,8 @@ interface ThoughtAccordionProps {
   elapsedMs?: number;
   tokenCount?: number;
   isStreaming?: boolean;
+  /** Open by default (e.g. when this is the latest, active timeline step). User toggle wins. */
+  defaultOpen?: boolean;
 }
 
 export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
@@ -13,10 +15,11 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
   elapsedMs = 0,
   tokenCount = 0,
   isStreaming = false,
+  defaultOpen = false,
 }) => {
-  // Stay collapsed by default to keep the interface clean and calm.
-  // The user can click to expand thoughts at any time on demand.
-  const [isOpen, setIsOpen] = useState<boolean>(false);
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const isOpen = userOpen ?? defaultOpen;
+  const setIsOpen = (v: boolean) => setUserOpen(v);
   const [liveMs, setLiveMs] = useState(elapsedMs);
   const scrollRef = useRef<HTMLDivElement>(null);
 

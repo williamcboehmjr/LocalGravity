@@ -51,9 +51,9 @@ export function computeAdaptiveThinkingConfig(
       stepIndex: step,
       enableThinking: true,
       reasoningEffort: 'low',
-      reasoningBudgetTokens: 64,
+      reasoningBudgetTokens: 256,
       prefillClosedThink: false,
-      modeLabel: `Fast Tool Loop (64 tok throttle • Step ${step})`,
+      modeLabel: `Fast Tool Loop (256 tok throttle • Step ${step})`,
     };
   }
 
@@ -87,8 +87,8 @@ export function computeAdaptiveThinkingConfig(
     stepIndex: step,
     enableThinking: true,
     reasoningEffort: 'low',
-    reasoningBudgetTokens: 80,
+    reasoningBudgetTokens: 384,
     prefillClosedThink: false,
-    modeLabel: `Rapid Tool Loop (80 tok throttle • Step ${step})`,
+    modeLabel: `Rapid Tool Loop (384 tok throttle • Step ${step})`,
   };
 }

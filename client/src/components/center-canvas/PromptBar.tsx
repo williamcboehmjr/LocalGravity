@@ -28,6 +28,7 @@ import {
   RefreshCw,
   Wrench,
   ShieldCheck,
+  Network,
 } from 'lucide-react';
 import { useSessionStore, QueuedMessage, FileAttachmentItem } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
@@ -98,6 +99,13 @@ export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommandItem[] = [
     description: 'Align on requirements & resolve design trade-offs through focused questions first',
     badge: 'Interview',
     icon: <MessageSquareMore className="w-3.5 h-3.5 text-amber-400 shrink-0" />,
+  },
+  {
+    command: '/swarm',
+    title: 'Multi-Agent Swarm Board',
+    description: 'Coordinate parallel specialist agents on a shared @mention board with live feed & roster',
+    badge: 'Swarm',
+    icon: <Network className="w-3.5 h-3.5 text-violet-400 shrink-0" />,
   },
   {
     command: '/teamwork',
@@ -172,8 +180,11 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setThinkingBudget,
     executionPolicy,
     setExecutionPolicy,
-    isGenerating,
+    isGenerating: isGeneratingLegacy,
+    activeTurn,
   } = useSessionStore();
+  // Stop button / queue mode follow the authoritative server turn state.
+  const isGenerating = activeTurn ? activeTurn.isActive : isGeneratingLegacy;
 
   const { workspaceFiles } = useArtifactStore();
   const { mcpServers } = useTelemetryStore();

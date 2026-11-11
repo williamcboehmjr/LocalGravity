@@ -5,6 +5,7 @@ import YAML from 'yaml';
 import { LlamaMoESidecar } from './llamaSidecar.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
 import { computeAdaptiveThinkingConfig } from '../agent/adaptiveCot.js';
+import { SwarmTurnScheduler, type GpuTurnPriority } from '../swarm/swarmScheduler.js';
 
 // Pure text-normalization helpers extracted to a side-effect-free module.
 export { hasConsecutiveRepetition, deduplicateRepeatedSequences } from './textNormalizers.js';
@@ -539,6 +540,9 @@ export class TabbyEngine {
     onThoughtDelta: (delta: string, elapsedMs: number, tokenCount: number) => void;
     onTokenDelta: (delta: string, tokenCount: number, tokensPerSec?: number) => void;
     onToolCallRequest?: (toolName: string, args: Record<string, any>) => Promise<void>;
+    onToolCallPreparing?: (toolName?: string) => void;
+    gpuPriority?: GpuTurnPriority;
+    skipGpuLock?: boolean;
   }): Promise<{
     content: string;
     thinkingContent: string;
@@ -553,8 +557,10 @@ export class TabbyEngine {
 
         // Ensure target model is loaded in TabbyAPI VRAM
     const desiredModel = this.resolveDiskModelName(params.tier);
-    let isCurrentlyLoaded = false;
+    let isCurrentlyLoaded = params.tier === 'high' && this.activeTier === 'high';
+    // Strata (tier 'high') is served by the llama sidecar, not TabbyAPI: skip the dead /v1/model ping.
     try {
+      if (params.tier === 'high') throw new Error('skip');
       const cur = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
         headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
         signal: AbortSignal.timeout(1500),
@@ -680,162 +686,201 @@ export class TabbyEngine {
             requestBody.thinking_budget_tokens = adaptive.reasoningBudgetTokens;
           }
         }
-        let response: Response;
-        try {
-          response = await fetch(endpointUrl, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(requestBody),
-            signal: params.abortSignal,
-          });
-        } catch (fetchErr: any) {
-          if (
-            params.abortSignal?.aborted ||
-            fetchErr?.name === 'AbortError' ||
-            fetchErr?.message?.toLowerCase().includes('abort') ||
-            fetchErr?.code === 'ABORT_ERR'
-          ) {
+        const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
+
+        const runInferenceOnly = async (): Promise<{ earlyReturn?: { content: string; thinkingContent: string; thinkingDurationMs: number; thinkingTokens: number; outputTokens: number } }> => {
+          let response: Response;
+          try {
+            response = await fetch(endpointUrl, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(requestBody),
+              signal: params.abortSignal,
+            });
+          } catch (fetchErr: any) {
+            if (
+              params.abortSignal?.aborted ||
+              fetchErr?.name === 'AbortError' ||
+              fetchErr?.message?.toLowerCase().includes('abort') ||
+              fetchErr?.code === 'ABORT_ERR'
+            ) {
+              this.swapStatus = 'ready';
+              this.resetIdleTimer();
+              return {
+                earlyReturn: {
+                  content,
+                  thinkingContent: '',
+                  thinkingDurationMs: 0,
+                  thinkingTokens: 0,
+                  outputTokens: 0,
+                },
+              };
+            }
+            throw fetchErr;
+          }
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            console.error(`[StrataEngine] Strata /v1/chat/completions returned HTTP ${response.status}: ${errText}`);
+            let parsedMsg = '';
+            try {
+              const errJson = JSON.parse(errText);
+              parsedMsg = errJson.error?.message || errJson.detail || '';
+            } catch {}
+            const errorMsg = `⚠️ Strata Engine Error (HTTP ${response.status}): ${parsedMsg || errText}`;
+            outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
+            content = errorMsg;
+            params.onTokenDelta(errorMsg, outputTokens);
             this.swapStatus = 'ready';
             this.resetIdleTimer();
-            return {
-              content,
-              thinkingContent: '',
-              thinkingDurationMs: 0,
-              thinkingTokens: 0,
-              outputTokens: 0,
-            };
+            return { earlyReturn: { content, thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens } };
           }
-          throw fetchErr;
-        }
 
-        if (!response.ok) {
-          const errText = await response.text().catch(() => '');
-          console.error(`[StrataEngine] Strata /v1/chat/completions returned HTTP ${response.status}: ${errText}`);
-          let parsedMsg = '';
-          try {
-            const errJson = JSON.parse(errText);
-            parsedMsg = errJson.error?.message || errJson.detail || '';
-          } catch {}
-          const errorMsg = `⚠️ Strata Engine Error (HTTP ${response.status}): ${parsedMsg || errText}`;
-          outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));
-          content = errorMsg;
-          params.onTokenDelta(errorMsg, outputTokens);
-          this.swapStatus = 'ready';
-          this.resetIdleTimer();
-          return { content, thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens };
-        }
+          if (response.ok && response.body) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let inThinkTag = false;
+            let rawBuffer = '';
 
-        if (response.ok && response.body) {
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let inThinkTag = false;
-          let rawBuffer = '';
-          const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
+            const abortHandler = () => {
+              try { void reader.cancel(); } catch {}
+            };
+            params.abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
-          const abortHandler = () => {
-            try { void reader.cancel(); } catch {}
-          };
-          params.abortSignal?.addEventListener('abort', abortHandler, { once: true });
-
-          try {
-            while (true) {
-              if (params.abortSignal?.aborted) {
-                try { await reader.cancel(); } catch {}
+            // Sliding-buffer <think>/</think> parser: tags may be split across SSE chunks.
+            let tagCarry = '';
+            let announcedToolPrep = false;
+            const emitThought = (text: string) => {
+              if (!text || params.thinkingBudget === 'off') return;
+              if (thinkingTokens >= effectiveMaxThinkingTokens && params.tier !== 'high') return;
+              thinkingTokens += Math.max(1, Math.ceil(text.length / 4));
+              thinkingContent += text;
+              thinkingDurationMs = Math.round(performance.now() - startTime);
+              const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
+              this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
+              params.onThoughtDelta(text, thinkingDurationMs, thinkingTokens);
+            };
+            const emitAnswer = (text: string) => {
+              if (!text) return;
+              outputTokens += Math.max(1, Math.ceil(text.length / 4));
+              content += text;
+              const elapsedSec = Math.max(0.08, (performance.now() - startTime) / 1000);
+              this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
+              params.onTokenDelta(text, outputTokens, this.tokensPerSec);
+            };
+            const partialTagLen = (s: string, tag: string): number => {
+              const max = Math.min(s.length, tag.length - 1);
+              for (let n = max; n > 0; n--) {
+                if (tag.startsWith(s.slice(s.length - n))) return n;
+              }
+              return 0;
+            };
+            const processContentChunk = (chunk: string, flush = false) => {
+              let pending = tagCarry + chunk;
+              tagCarry = '';
+              while (pending) {
+                const tag = inThinkTag ? '</think>' : '<think>';
+                const idx = pending.indexOf(tag);
+                if (idx >= 0) {
+                  const before = pending.slice(0, idx);
+                  if (inThinkTag) emitThought(before);
+                  else emitAnswer(before);
+                  inThinkTag = !inThinkTag;
+                  pending = pending.slice(idx + tag.length);
+                  continue;
+                }
+                const hold = flush ? 0 : partialTagLen(pending, tag);
+                const emitPart = pending.slice(0, pending.length - hold);
+                tagCarry = pending.slice(pending.length - hold);
+                if (inThinkTag) emitThought(emitPart);
+                else emitAnswer(emitPart);
                 break;
               }
-              const { done, value } = await reader.read();
-              if (done || params.abortSignal?.aborted) break;
-              rawBuffer += decoder.decode(value, { stream: true });
-              const lines = rawBuffer.split('\n');
-              rawBuffer = lines.pop() || '';
+            };
 
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith('data:')) continue;
-                const dataStr = trimmed.slice(5).trim();
-                if (dataStr === '[DONE]') break;
+            try {
+              while (true) {
+                if (params.abortSignal?.aborted) {
+                  try { await reader.cancel(); } catch {}
+                  break;
+                }
+                const { done, value } = await reader.read();
+                if (done || params.abortSignal?.aborted) break;
+                rawBuffer += decoder.decode(value, { stream: true });
+                const lines = rawBuffer.split('\n');
+                rawBuffer = lines.pop() || '';
 
-                try {
-                  const parsed = JSON.parse(dataStr);
-                  const delta = parsed.choices?.[0]?.delta;
-                  if (!delta) continue;
+                for (const line of lines) {
+                  const trimmed = line.trim();
+                  if (!trimmed.startsWith('data:')) continue;
+                  const dataStr = trimmed.slice(5).trim();
+                  if (dataStr === '[DONE]') break;
 
-                  if (delta.reasoning_content) {
-                    if (params.thinkingBudget !== 'off') {
-                      thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
-                      thinkingContent += delta.reasoning_content;
-                      thinkingDurationMs = Math.round(performance.now() - startTime);
-                      const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
-                      this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
-                      params.onThoughtDelta(
-                        delta.reasoning_content,
-                        thinkingDurationMs,
-                        thinkingTokens
-                      );
-                    }
-                  }
+                  try {
+                    const parsed = JSON.parse(dataStr);
+                    const delta = parsed.choices?.[0]?.delta;
+                    if (!delta) continue;
 
-                  if (delta.content) {
-                    let textChunk: string = delta.content;
-                    if (textChunk.includes('<think>')) {
-                      inThinkTag = true;
-                      textChunk = textChunk.replace('<think>', '');
-                    }
-                    if (textChunk.includes('</think>')) {
-                      const [thoughtPart, answerPart] = textChunk.split('</think>');
-                      if (thoughtPart && params.thinkingBudget !== 'off') {
-                        thinkingTokens += Math.max(1, Math.ceil(thoughtPart.length / 4));
-                        thinkingContent += thoughtPart;
+                    if (delta.reasoning_content) {
+                      if (params.thinkingBudget !== 'off') {
+                        thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
+                        thinkingContent += delta.reasoning_content;
                         thinkingDurationMs = Math.round(performance.now() - startTime);
                         const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
                         this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
-                        params.onThoughtDelta(thoughtPart, thinkingDurationMs, thinkingTokens);
+                        params.onThoughtDelta(
+                          delta.reasoning_content,
+                          thinkingDurationMs,
+                          thinkingTokens
+                        );
                       }
-                      inThinkTag = false;
-                      textChunk = answerPart || '';
                     }
 
-                    if (inThinkTag && params.thinkingBudget !== 'off') {
-                      // Enforce ~250 token budget for 'fast'
-                      if (thinkingTokens < effectiveMaxThinkingTokens) {
-                        thinkingTokens += Math.max(1, Math.ceil(textChunk.length / 4));
-                        thinkingContent += textChunk;
-                        thinkingDurationMs = Math.round(performance.now() - startTime);
-                        const elapsedSec = Math.max(0.08, thinkingDurationMs / 1000);
-                        this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
-                        params.onThoughtDelta(textChunk, thinkingDurationMs, thinkingTokens);
-                      } else {
-                        inThinkTag = false;
-                      }
-                    } else if (textChunk) {
-                      outputTokens += Math.max(1, Math.ceil(textChunk.length / 4));
-                      content += textChunk;
-                      const elapsedSec = Math.max(0.08, (performance.now() - startTime) / 1000);
-                      this.tokensPerSec = Number(((thinkingTokens + outputTokens) / elapsedSec).toFixed(1));
-                      params.onTokenDelta(textChunk, outputTokens, this.tokensPerSec);
+                    if (delta.content) {
+                      processContentChunk(String(delta.content));
                     }
-                  }
-
-                  if (delta.tool_calls) {
-                    for (const tc of delta.tool_calls) {
-                      const idx = tc.index ?? 0;
-                      if (!pendingToolCalls.has(idx)) {
-                        pendingToolCalls.set(idx, { id: tc.id, name: tc.function?.name || '', arguments: '' });
+                    if (delta.tool_calls) {
+                      if (!announcedToolPrep) {
+                        announcedToolPrep = true;
+                        try { params.onToolCallPreparing?.(delta.tool_calls?.[0]?.function?.name); } catch {}
                       }
-                      const item = pendingToolCalls.get(idx)!;
-                      if (tc.id) item.id = tc.id;
-                      if (tc.function?.name) item.name = tc.function.name;
-                      if (tc.function?.arguments) item.arguments += tc.function.arguments;
+                      for (const tc of delta.tool_calls) {
+                        const idx = tc.index ?? 0;
+                        if (!pendingToolCalls.has(idx)) {
+                          pendingToolCalls.set(idx, { id: tc.id, name: tc.function?.name || '', arguments: '' });
+                        }
+                        const item = pendingToolCalls.get(idx)!;
+                        if (tc.id) item.id = tc.id;
+                        if (tc.function?.name) item.name = tc.function.name;
+                        if (tc.function?.arguments) item.arguments += tc.function.arguments;
+                      }
                     }
+                  } catch {
+                    // Ignore malformed SSE line
                   }
-                } catch {
-                  // Ignore malformed SSE line
                 }
               }
+            } finally {
+              params.abortSignal?.removeEventListener('abort', abortHandler);
             }
-          } finally {
-            params.abortSignal?.removeEventListener('abort', abortHandler);
+            // Flush any held-back partial tag text
+            if (tagCarry && !params.abortSignal?.aborted) processContentChunk('', true);
           }
+          return {};
+        };
+
+        const infOutcome = params.skipGpuLock
+          ? await runInferenceOnly()
+          : await SwarmTurnScheduler.getInstance().acquireGpuTurn(
+              params.gpuPriority ?? 0,
+              `llm:step-${stepIdx}`,
+              runInferenceOnly
+            );
+        if (infOutcome.earlyReturn) {
+          return infOutcome.earlyReturn;
+        }
+
+        if (true) {
 
           if (params.onToolCallRequest && pendingToolCalls.size > 0 && !params.abortSignal?.aborted) {
             for (const [, call] of pendingToolCalls) {

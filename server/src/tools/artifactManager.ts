@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export type ArtifactKind = 'plan' | 'walkthrough' | 'report' | 'code' | 'diff';
+export type ArtifactKind = 'plan' | 'walkthrough' | 'report' | 'code' | 'diff' | 'task' | 'html';
 
 export interface ArtifactItem {
   id: string;
@@ -11,6 +11,8 @@ export interface ArtifactItem {
   content: string;
   summary: string;
   filePath: string;
+  requestFeedback?: boolean;
+  userFacing?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -59,6 +61,8 @@ export class ArtifactManager {
     type?: ArtifactKind;
     content: string;
     summary?: string;
+    requestFeedback?: boolean;
+    userFacing?: boolean;
   }): ArtifactItem {
     const slug = params.title
       .toLowerCase()
@@ -68,7 +72,9 @@ export class ArtifactManager {
     const id = params.id || `artifact-${slug}`;
     const existing = this.artifacts.get(id);
     const now = Date.now();
-    const filePath = path.join(this.storageDir, `${slug}.md`);
+    const resolvedType: ArtifactKind = params.type || existing?.type || 'report';
+    const ext = resolvedType === 'html' ? 'html' : 'md';
+    const filePath = path.join(this.storageDir, `${slug}.${ext}`);
 
     try {
       fs.mkdirSync(this.storageDir, { recursive: true });
@@ -79,10 +85,12 @@ export class ArtifactManager {
       id,
       threadId: params.threadId || existing?.threadId || 'default',
       title: params.title,
-      type: params.type || existing?.type || 'report',
+      type: resolvedType,
       content: params.content,
       summary: params.summary || params.content.replace(/\s+/g, ' ').trim().slice(0, 140),
       filePath: filePath.replace(/\\/g, '/'),
+      requestFeedback: params.requestFeedback ?? existing?.requestFeedback ?? false,
+      userFacing: params.userFacing ?? existing?.userFacing ?? false,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     };
@@ -90,6 +98,19 @@ export class ArtifactManager {
     this.artifacts.set(id, item);
     this.notify(item);
     return { ...item };
+  }
+
+  public clearArtifactFeedback(id: string): ArtifactItem | null {
+    const existing = this.artifacts.get(id);
+    if (!existing) return null;
+    const updated: ArtifactItem = {
+      ...existing,
+      requestFeedback: false,
+      updatedAt: Date.now(),
+    };
+    this.artifacts.set(id, updated);
+    this.notify(updated);
+    return { ...updated };
   }
 
   public getArtifact(id: string): ArtifactItem | null {
