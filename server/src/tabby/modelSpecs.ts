@@ -128,16 +128,16 @@ export const THINKING_BUDGET_SPECS: Record<
   },
   fast: {
     budget: 'fast',
-    maxThinkingTokens: 250,
-    followUpStepMaxThinkingTokens: 256,
+    maxThinkingTokens: 1024,
+    followUpStepMaxThinkingTokens: 640,
     prefillClosedThink: true,
     systemDirective:
-      'THINKING BUDGET: FAST. Deliver a concise, direct response or immediate tool execution with sub-second latency.',
+      'THINKING BUDGET: FAST. Reason concisely to select tools accurately, then execute immediately.',
   },
   deep: {
     budget: 'deep',
-    maxThinkingTokens: 600,
-    followUpStepMaxThinkingTokens: 180,
+    maxThinkingTokens: 2560,
+    followUpStepMaxThinkingTokens: 1024,
     prefillClosedThink: false,
     systemDirective:
       'THINKING BUDGET: DEEP (Goal-Directed Action). Plan concisely (under 20 lines): determine objective, select exact tools/files, then IMMEDIATELY execute. Never output speculative prose or monologue in place of executing real tool calls.',

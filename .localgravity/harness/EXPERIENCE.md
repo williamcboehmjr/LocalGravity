@@ -312,3 +312,52 @@
 - **[PPC Auto-Tool Rule 2026-11-10T01:23:03.669Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "p='C:UsersSue.geminiant`) encountered error `At line:1 char:94 + ... tymcp_config.json'; if(Test-Path ){Write-Output ('EXISTS`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-11T17:06:44.062Z]
+- **Failed Tool**: `read_file` (`read_file({"path":"server/src/tools/terminal.ts"})`)
+- **Initial Failure Telemetry**: `File not found: C:\Users\Sue\.gemini\antigravity\scratch\LocalGravity\server\src\tools\terminal.ts`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T17:06:44.062Z]**: Tool `read_file` (`read_file({"path":"server/src/tools/terminal.ts"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityserversrctoolster`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for read_file with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T17:09:39.656Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"cd server && npm run build 2>&1 | head -40","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `[31;1mhead: [31;1mThe term 'head' is not recognized as a name of a cmdlet, function, script file, or executable program.[0m [31;1m[31;1mCheck the spelling `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T17:09:39.656Z]**: Tool `run_terminal` (`run_terminal({"command":"cd server && npm run build 2>&1 | head -40","cwd":"C:/U`) encountered error `[31;1mhead: [31;1mThe term 'head' is not recognized as a name of a cmdlet, fun`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T18:09:45.183Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"Select-String -Path server\\src\\agent\\promptTurn.ts -Pattern 'SavedAttachment|attachments|attachment' | ForEach-Object { $_.LineNumber.ToString() + ': ' + $_.Line.Trim() }\"","cwd":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity"})`)
+- **Initial Failure Telemetry**: `At line:1 char:142 + ... achments|attachment' | ForEach-Object { .LineNumber.ToString() + ': ' ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T18:09:45.183Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path ser`) encountered error `At line:1 char:142 + ... achments|attachment' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T18:16:31.357Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"Select-String -Path server/src/agent/promptTurn.ts -Pattern 'executedToolsThisStep|screenshotBase64|createToolExecution|updateToolExecution' | ForEach-Object { $_.LineNumber.ToString() + ':' + $_.Line.Trim().Substring(0,[Math]::Min(95,$_.Line.Trim().Length)) }\"","timeout_ms":30000})`)
+- **Initial Failure Telemetry**: `At line:1 char:182 + ... updateToolExecution' | ForEach-Object { .LineNumber.ToString() + ':'  ... +                                                            `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T18:16:31.357Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path ser`) encountered error `At line:1 char:182 + ... updateToolExecution' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T18:26:52.869Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"cd LocalGravity && git --no-pager diff --stat & echo ====DIFF==== & git --no-pager diff client/src/components/center-canvas/AuxTabBar.tsx client/src/hooks/useArtifactStore.ts server/src/index.ts"})`)
+- **Initial Failure Telemetry**: `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': unknown revision or path not in the working tree. Use '--' to separate paths from`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T18:26:52.869Z]**: Tool `run_terminal` (`run_terminal({"command":"cd LocalGravity && git --no-pager diff --stat & echo ==`) encountered error `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': u`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T18:27:00.743Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"git --no-pager -C \"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity\" diff client/src/components/center-canvas/AuxTabBar.tsx client/src/hooks/useArtifactStore.ts server/src/index.ts"})`)
+- **Initial Failure Telemetry**: `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': unknown revision or path not in the working tree. Use '--' to separate paths from`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T18:27:00.743Z]**: Tool `run_terminal` (`run_terminal({"command":"git --no-pager -C "C:/Users/Sue/.gemini/antigravity/scr`) encountered error `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': u`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-11T18:29:03.875Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity && grep -rn \"checkpoint\" server/src --include=*.ts | head -40"})`)
+- **Initial Failure Telemetry**: `[31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable program.[0m [31;1m[31;1mCheck the spelling `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-11T18:29:03.875Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `[31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, fun`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

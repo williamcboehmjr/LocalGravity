@@ -1,15 +1,15 @@
 {
-  "version": "v2.3.0",
-  "notes": "v2.3.0: TurnPhase state machine, zero-loss final prose, native single-GPU /swarm + Swarm Board UI, chronological step timeline, Generative UI widgets, RequestFeedback Proceed cards, live cron & persistent MCP",
-  "pub_date": "2026-11-11T17:02:43.216Z",
+  "version": "v2.3.1",
+  "notes": "v2.3.1: Raised Strata thinking budgets (1024/640 fast, 2560/1024 deep) to stop mid-thought cutoffs, raised compaction threshold to 35k tokens & preserved active user request across re-compaction, expanded prematureStop verbs, cleaned AuxTabBar layout + default right-pane view, auto-fallback localhost port from stale ports to 3390",
+  "pub_date": "2026-11-11T18:42:13.545Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelVLR0pZSG81VzRmeno0NWp5TURUTVRQSEZtcDNJd0ZYVzI3MWREYzdWNCtIckNPcWdrajVRRHVjNEJneStXSFYrbDRWamtjVXFpNzhYM04xcWFES3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDE2NTYyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4wX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuMApHSTQxd05FbFhGWjRpOEZBTUpZVVRMTUR6MEM1aVRoNktxWDhCUW0zYk1NN01ZQXN4ZEZnOWpRVmZkN3VqMEdKb0VhVVB0K3ErMmpHZm5uZmJvR1pEUT09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.0/LocalGravity_2.3.0_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemFGVXdSTDhRK2ZRakRBZDFUcVJjYVN1M294aVJBT3pyYWZCVmpNZWxLSDBVMzlEalhQcEhpcnlaSVRlcWtoVzVlV3lTT0JqSHNtck1FR2JJZVZmMFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDIyNTMyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4xX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuMQpQcGU4cHRQTktGZlV2VzFHN3l5OG5LN3pXTGJiYWw2NmtMV0FrQ1BzbGUxZkZJa0tFT1RWTHp4cS9mb21SOXdFK24wL1Qycmh3VGF2Z3JtcHFkYlRBQT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.1/LocalGravity_2.3.1_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelo1VytNeTBmNmwzdnljalZsTk95c3N6RWdvVW1UZHczQ3UrODhMQnZkRUJ3L0tWZUVJdHp4THN1bUhLQkRUMFA0RnJibzhlWVMxZnQ5S1dYTDJTK2dNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDE2NTYzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4wX2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjAKTDdIZThqU3hSOWpleHpXVy83cC9SdExzaVZkWmJnb242WWFnOWs4WjBWdHpvcUtQV3lPeWQ0OXQ3ZlBqZXBNaXdjNVY2NnZqZlZ0S0xVV1FELytVREE9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.0/LocalGravity_2.3.0_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemI5WENteXZON2Y0S1NucUtyRzZpQWFaNTVaVGRkcGFNeFZ1NHRteDVpUUpycnlobjhWTzc3YmFxMGh4dmZoOE1FMVpDbHRlT0dJZEtnVzV6Rld3TndzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDIyNTMzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4xX2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjEKdHdvR1BSaE1ZcGhuanY4TW0zcHYxb2JPZFZtQUdTVmlxMkFGYlAzWHUxQ0NHRTYyanhwdk9udmFKY2FVM2JYeVRTamJFMXpwZ1ZYYTRRNlVwYW1hRGc9PQo=",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.1/LocalGravity_2.3.1_aarch64.dmg"
     }
   }
 }

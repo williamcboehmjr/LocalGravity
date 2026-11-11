@@ -40,10 +40,10 @@ export function computeAdaptiveThinkingConfig(
         budget: 'fast',
         stepIndex: 1,
         enableThinking: true,
-        reasoningEffort: 'low',
-        reasoningBudgetTokens: 180,
+        reasoningEffort: 'medium',
+        reasoningBudgetTokens: 1024,
         prefillClosedThink: false,
-        modeLabel: 'Fast Plan (180 tok budget • Step 1)',
+        modeLabel: 'Fast Plan (1024 tok budget • Step 1)',
       };
     }
     return {
@@ -51,9 +51,9 @@ export function computeAdaptiveThinkingConfig(
       stepIndex: step,
       enableThinking: true,
       reasoningEffort: 'low',
-      reasoningBudgetTokens: 256,
+      reasoningBudgetTokens: 640,
       prefillClosedThink: false,
-      modeLabel: `Fast Tool Loop (256 tok throttle • Step ${step})`,
+      modeLabel: `Fast Tool Loop (640 tok throttle • Step ${step})`,
     };
   }
 
@@ -64,9 +64,9 @@ export function computeAdaptiveThinkingConfig(
       stepIndex: 1,
       enableThinking: true,
       reasoningEffort: 'high',
-      reasoningBudgetTokens: 768,
+      reasoningBudgetTokens: 2560,
       prefillClosedThink: false,
-      modeLabel: 'Deep Architecture Plan (768 tok budget • Step 1)',
+      modeLabel: 'Deep Architecture Plan (2560 tok budget • Step 1)',
     };
   }
 
@@ -75,10 +75,10 @@ export function computeAdaptiveThinkingConfig(
       budget: 'deep',
       stepIndex: 2,
       enableThinking: true,
-      reasoningEffort: 'low',
-      reasoningBudgetTokens: 192,
+      reasoningEffort: 'medium',
+      reasoningBudgetTokens: 1024,
       prefillClosedThink: false,
-      modeLabel: 'Adaptive Verification (192 tok throttle • Step 2)',
+      modeLabel: 'Adaptive Verification (1024 tok budget • Step 2)',
     };
   }
 
@@ -87,8 +87,8 @@ export function computeAdaptiveThinkingConfig(
     stepIndex: step,
     enableThinking: true,
     reasoningEffort: 'low',
-    reasoningBudgetTokens: 384,
+    reasoningBudgetTokens: 1024,
     prefillClosedThink: false,
-    modeLabel: `Rapid Tool Loop (384 tok throttle • Step ${step})`,
+    modeLabel: `Rapid Tool Loop (1024 tok budget • Step ${step})`,
   };
 }

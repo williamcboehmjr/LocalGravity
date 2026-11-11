@@ -111,3 +111,17 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-10T00:38:19.904Z]**: Tool `code_outline` (`code_outline({"path":"client/src/components/center-canvas/ChatCanvas.tsx"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityclientsrccomponen`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-10T01:23:03.669Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "p='C:UsersSue.geminiant`) encountered error `At line:1 char:94 + ... tymcp_config.json'; if(Test-Path ){Write-Output ('EXISTS`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T17:06:44.062Z]**: Tool `read_file` (`read_file({"path":"server/src/tools/terminal.ts"})`) encountered error `File not found: C:UsersSue.geminiantigravityscratchLocalGravityserversrctoolster`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T17:09:39.656Z]**: Tool `run_terminal` (`run_terminal({"command":"cd server && npm run build 2>&1 | head -40","cwd":"C:/U`) encountered error `[31;1mhead: [31;1mThe term 'head' is not recognized as a name of a cmdlet, fun`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:09:45.183Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path ser`) encountered error `At line:1 char:142 + ... achments|attachment' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:16:31.357Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Select-String -Path ser`) encountered error `At line:1 char:182 + ... updateToolExecution' | ForEach-Object { .LineNumber.ToS`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:26:52.869Z]**: Tool `run_terminal` (`run_terminal({"command":"cd LocalGravity && git --no-pager diff --stat & echo ==`) encountered error `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': u`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:27:00.743Z]**: Tool `run_terminal` (`run_terminal({"command":"git --no-pager -C "C:/Users/Sue/.gemini/antigravity/scr`) encountered error `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': u`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:29:03.875Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `[31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, fun`. Fallback to safe cross-platform invocation.

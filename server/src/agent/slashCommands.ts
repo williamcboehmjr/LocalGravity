@@ -19,7 +19,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
       cleanPrompt: rawPrompt,
       modeDirective: '',
       maxToolSteps: 32,
-      maxAutoContinues: 2,
+      maxAutoContinues: 5,
       subagentRole: 'Autonomous Engineer',
     };
   }
@@ -39,7 +39,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
           '2. Execute all required file inspections, edits, and terminal verifications.\n' +
           '3. Never stop after merely reading files—follow through all the way to the finished deliverable.',
         maxToolSteps: 50,
-        maxAutoContinues: 2,
+        maxAutoContinues: 5,
         subagentRole: 'Goal Executor',
       };
     case 'plan':
@@ -173,7 +173,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         cleanPrompt: rawPrompt,
         modeDirective: '',
         maxToolSteps: 32,
-        maxAutoContinues: 2,
+        maxAutoContinues: 5,
         subagentRole: 'Autonomous Engineer',
       };
   }

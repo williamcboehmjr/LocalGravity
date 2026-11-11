@@ -139,6 +139,7 @@ export async function createDaemonServer(options?: {
 
   const syncClients = new Set<WebSocket>();
   const terminalClients = new Set<WebSocket>();
+
   const activeAbortControllers = new Map<string, AbortController>();
   const activeTurns = new Map<string, ActiveTurnSnapshot>();
   const pendingEdgeRpc = new Map<
@@ -1532,6 +1533,21 @@ export async function createDaemonServer(options?: {
             type: 'ARTIFACT_SYNC',
             payload,
           });
+        } else if (type === 'TASK_INPUT') {
+          const taskId = payload?.task_id;
+          if (!taskId) return;
+
+          // Spawn-backed task: forward raw keystrokes to the live process stdin.
+          if (typeof payload.data === 'string') {
+            const ok = taskMgr.sendInputToTask(taskId, payload.data);
+            if (!ok) {
+              console.log(`[TaskInput] Task ${taskId} has no live stdin (exited, not running, or non-interactive)`);
+            }
+          }
+
+          // Spawn-based tasks have no terminal geometry; just refresh the client with current state.
+          const t = taskMgr.getTask(taskId);
+          if (t) broadcastSync({ type: 'TASK_UPDATE', payload: { task: t } });
         }
       } catch (err) {
         console.error('WebSocket message error:', err);

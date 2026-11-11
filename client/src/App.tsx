@@ -234,9 +234,11 @@ export const App: React.FC = () => {
     invoke('init_client_appdata').catch(() => {});
   }, []);
 
-  // Auto-discover runtime ports from `/runtime-ports.json` if user hasn't configured a custom host
+  // Auto-discover runtime ports from `/runtime-ports.json` whenever using localhost (unless user set a custom remote IP)
   useEffect(() => {
-    if (typeof window !== 'undefined' && localStorage.getItem('localgravity_brain_host')) {
+    const savedHost =
+      typeof window !== 'undefined' ? localStorage.getItem('localgravity_brain_host') : null;
+    if (savedHost && savedHost !== '127.0.0.1' && savedHost !== 'localhost') {
       return;
     }
     fetch('/runtime-ports.json')
@@ -249,7 +251,10 @@ export const App: React.FC = () => {
             window.location.hostname !== '127.0.0.1' &&
             window.location.hostname !== 'tauri.localhost';
           const host = isRemote ? window.location.hostname : '127.0.0.1';
-          setBrainConnection(host, String(cfg.daemonPort));
+          const curPort = localStorage.getItem('localgravity_brain_port');
+          if (!savedHost || curPort !== String(cfg.daemonPort)) {
+            setBrainConnection(host, String(cfg.daemonPort));
+          }
         }
       })
       .catch(() => {});
@@ -291,6 +296,13 @@ export const App: React.FC = () => {
           setIsConnected(false);
           setReconnectAttempt((prev) => prev + 1);
           setReconnectCountdown(3);
+          if ((brainHost === '127.0.0.1' || brainHost === 'localhost') && brainPort !== '3390') {
+            fetch('http://127.0.0.1:3390/health', { signal: AbortSignal.timeout(1200) })
+              .then((r) => {
+                if (!isDisposed && r.ok) setBrainConnection('127.0.0.1', '3390');
+              })
+              .catch(() => {});
+          }
         };
 
         ws.onerror = () => {
@@ -1521,20 +1533,38 @@ export const App: React.FC = () => {
           <AuxTabBar />
 
           {/* Active Workbench View Card */}
-          {activeTab !== 'none' && (
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
-              {activeTab === 'changes' && <ChangesTab />}
-              {activeTab === 'editor' && <WorkbenchEditor />}
-              {activeTab === 'terminal' && <IntegratedTerminal />}
-              {activeTab === 'preview' && <VisionPreviewTab />}
-              {activeTab === 'harness' && <HarnessWorkbenchTab />}
-              {activeTab === 'subagents' && <SubagentsTab />}
-              {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
-              {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
-              {activeTab === 'evidence' && <EvidenceDrawer />}
-              {activeTab === 'swarm' && <SwarmBoardTab />}
-            </div>
-          )}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
+            {activeTab === 'none' && (
+              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-3 text-[#8E8E93]">
+                <div className="text-xs font-medium text-[#E3E3E3]">Workspace Auxiliary Pane</div>
+                <p className="text-[11.5px] leading-relaxed max-w-[230px]">
+                  Pick a view above to inspect file diffs, artifacts, workspace files, terminal, subagents, or the swarm board.
+                </p>
+                <div className="flex flex-wrap justify-center gap-1.5 pt-1">
+                  {(['changes', 'plan', 'editor', 'terminal', 'subagents', 'swarm'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className="px-2.5 py-1 rounded-lg bg-[#222327] hover:bg-[#2A2B30] text-[11px] text-[#E3E3E3] border border-[#32343A] cursor-pointer capitalize"
+                    >
+                      {tab === 'changes' ? 'Review' : tab === 'plan' ? 'Artifacts' : tab === 'editor' ? 'Files' : tab}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {activeTab === 'changes' && <ChangesTab />}
+            {activeTab === 'editor' && <WorkbenchEditor />}
+            {activeTab === 'terminal' && <IntegratedTerminal />}
+            {activeTab === 'preview' && <VisionPreviewTab />}
+            {activeTab === 'harness' && <HarnessWorkbenchTab />}
+            {activeTab === 'subagents' && <SubagentsTab />}
+            {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
+            {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
+            {activeTab === 'evidence' && <EvidenceDrawer />}
+            {activeTab === 'swarm' && <SwarmBoardTab />}
+          </div>
         </aside>
       )}
 

@@ -577,7 +577,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           },
         });
 
-        const compactThreshold = params.tier === 'high' ? 38000 : 54000;
+        const compactThreshold = params.tier === 'high' ? 140000 : 54000;
         const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
         if (compactRes.didCompact) {
           chatMessages.splice(0, chatMessages.length, ...compactRes.messages);

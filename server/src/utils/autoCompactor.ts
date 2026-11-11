@@ -77,9 +77,18 @@ export function autoCompactMessages(
     const text = extractMessageText(msg.content);
 
     if (msg.role === 'user' && text.trim()) {
-      const clean = text.replace(/\s+/g, ' ').trim().slice(0, 220);
-      if (!clean.startsWith('[CONTEXT AUTO-COMPACTED')) {
-        userObjectives.push(clean);
+      const clean = text.replace(/\s+/g, ' ').trim();
+      if (clean.startsWith('[CONTEXT AUTO-COMPACTED')) {
+        // Carry forward prior user requests when re-compacting so objectives are never wiped
+        const reqMatches = text.match(/^\s{2}-\s+(.+)$/gm);
+        if (reqMatches) {
+          for (const line of reqMatches) {
+            const req = line.replace(/^\s{2}-\s+/, '').trim().slice(0, 260);
+            if (req && !req.startsWith('[ACTION REQUIRED')) userObjectives.push(req);
+          }
+        }
+      } else if (!clean.startsWith('[ACTION REQUIRED')) {
+        userObjectives.push(clean.slice(0, 260));
       }
     } else if (msg.role === 'assistant') {
       if (Array.isArray(msg.tool_calls)) {
@@ -113,6 +122,16 @@ export function autoCompactMessages(
     distilledLines.push(
       `• Earlier User Requests:\n  - ${userObjectives.slice(-5).join('\n  - ')}`
     );
+    const activeReq = userObjectives[userObjectives.length - 1];
+    const hasRecentRealUser = recentMessages.some(
+      (m) =>
+        m.role === 'user' &&
+        !extractMessageText(m.content).trim().startsWith('[ACTION REQUIRED') &&
+        !extractMessageText(m.content).trim().startsWith('[CONTEXT AUTO-COMPACTED')
+    );
+    if (!hasRecentRealUser && activeReq) {
+      distilledLines.push(`[ACTIVE USER REQUEST]: ${activeReq}`);
+    }
   }
   if (toolSummaries.length > 0) {
     const uniqueTools = Array.from(new Set(toolSummaries)).slice(-12);
