@@ -1,0 +1,11 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]: "3"
+    - generic [ref=e8]:
+      - generic [ref=e9]: Reconnecting
+      - generic [ref=e10]: "Attempt #2"
+  - generic [ref=e12]:
+    - generic [ref=e13]: "15"
+    - generic [ref=e18]:
+      - generic [ref=e19]: Downloading model
+      - generic [ref=e20]: E:/Models · Qwen3.8

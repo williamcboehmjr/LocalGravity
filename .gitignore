@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Frontend / Fastify Server
+node_modules/
+client/dist/
+client/public/runtime-ports.json
+server/dist/
+*.tsbuildinfo
+
+# Runtime & SQLite WAL
+.runtime/
+.localgravity/
+artifacts/
+*.db
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+server/pre.txt
+server/pre_hashes.txt
+
+# Tauri / Rust
+client/src-tauri/target/
+*.key
+*.key.enc
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# --- Repo hygiene (added during WIP commit pass) ---
+# Compiled tray binary (source: tray/*.cs, rebuildable)
+tray/*.exe
+# Refactor codemod scratch artifacts from server/scripts/build_refactor.mjs
+server/scripts/_*
+
+# Release binaries
+*.dmg
+*.msi
+*.sig
+*-setup.exe
