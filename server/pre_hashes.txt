@@ -1,0 +1,12 @@
+Resolve-Path : Cannot find path 'C:\Users\Sue\.gemini\antigravity\scratch\LocalGravity\server\.runtime\ports.json' 
+because it does not exist.
+At 
+C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psm1:110 
+char:36
++                 $pathsToProcess += Resolve-Path $Path | Foreach-Objec ...
++                                    ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\Sue\.g...time\ports.json:String) [Resolve-Path], ItemNotFoundE 
+   xception
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.ResolvePathCommand
+ 
+5E19D0DD905397D9DEF295DC11F234A925477841EE4A8801A17D1210C8FF808B

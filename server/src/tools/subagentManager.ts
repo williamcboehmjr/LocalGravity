@@ -1,5 +1,13 @@
 import type { TabbyEngine } from '../tabby/tabbyEngine.js';
 
+export interface SubagentMessageRecord {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  name?: string;
+  tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+  timestamp: number;
+}
+
 export interface SubagentTaskRecord {
   id: string;
   threadId: string;
@@ -10,6 +18,7 @@ export interface SubagentTaskRecord {
   maxSteps: number;
   summary: string;
   resultText?: string;
+  messages?: SubagentMessageRecord[];
   startedAt: number;
   completedAt?: number;
 }
@@ -100,6 +109,19 @@ export class SubagentManager {
     rec.summary = summary;
     this.notify(rec);
     return { ...rec };
+  }
+
+  public setSubagentMessages(id: string, messages: SubagentMessageRecord[]): SubagentTaskRecord | null {
+    const rec = this.tasks.get(id);
+    if (!rec) return null;
+    rec.messages = messages;
+    this.notify(rec);
+    return { ...rec };
+  }
+
+  public getTask(id: string): SubagentTaskRecord | null {
+    const rec = this.tasks.get(id);
+    return rec ? { ...rec } : null;
   }
 
   public completeSubagentTask(

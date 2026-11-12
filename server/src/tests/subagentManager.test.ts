@@ -49,8 +49,15 @@ async function runSubagentTests() {
   assert.ok(updates.some((u) => u.startsWith('running:')));
   assert.ok(updates.some((u) => u.startsWith('completed:')));
 
+  const threadTasks = manager.listTasks('test-thread-1');
+  assert.ok(threadTasks.length >= 1);
+  const recorded = manager.getTask(threadTasks[threadTasks.length - 1].id);
+  assert.ok(recorded && Array.isArray(recorded.messages) && recorded.messages.length >= 2);
+  assert.equal(recorded.messages[0].role, 'user');
+  assert.equal(recorded.messages[1].role, 'assistant');
+
   unsub();
-  console.log('✅ Piece 5 Unit Tests PASSED (8/8 assertions)');
+  console.log('✅ Piece 5 Unit Tests PASSED (11/11 assertions)');
 }
 
 runSubagentTests().catch((err) => {

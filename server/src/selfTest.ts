@@ -1,9 +1,11 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import WebSocket from 'ws';
 import { createDaemonServer, REPO_ROOT } from './index.js';
 import { isPortForbidden, isPortAvailable } from './portAllocator.js';
+import { TIER_SPECS } from './tabby/modelSpecs.js';
 
 async function runSelfTest() {
   console.log('==================================================================');
@@ -17,13 +19,25 @@ async function runSelfTest() {
   assert.strictEqual(await isPortAvailable(5001), false, 'Port 5001 must never be available');
   console.log('✅ [1/7] Port Guard Verified: Ports 5000 & 5001 strictly blocked.');
 
-  const testDbPath = path.join(REPO_ROOT, '.runtime', `selftest-${Date.now()}.sqlite`);
-  const ctx = await createDaemonServer({ dbPath: testDbPath });
-  await ctx.app.listen({ port: ctx.ports.daemonPort, host: '127.0.0.1' });
-  const baseUrl = `http://127.0.0.1:${ctx.ports.daemonPort}`;
+  // Isolated mode: dedicated temp DB + ephemeral OS-assigned ports, so this run
+  // never clobbers the live daemon's .runtime/ports.json / client runtime discovery
+  // files and never races with the running Central Brain on its allocated port.
+  const testDbPath = path.join(os.tmpdir(), `localgravity-selftest-${Date.now()}.sqlite`);
+  const ctx = await createDaemonServer({ dbPath: testDbPath, isolated: true });
+
+  // Listen on the ephemeral daemonPort (0) and read back the real OS-assigned port.
+  const addr = await ctx.app.listen({ port: ctx.ports.daemonPort, host: '127.0.0.1' });
+  const boundInfo = ctx.app.server.address();
+  const daemonPort = typeof boundInfo === 'object' && boundInfo ? boundInfo.port : ctx.ports.daemonPort;
+  // Reflect the real port in config so downstream WS/HTTP URLs are correct.
+  ctx.ports.daemonPort = daemonPort;
+  ctx.ports.localUrl = `http://localhost:${daemonPort}`;
+  ctx.ports.wsSyncUrl = `ws://127.0.0.1:${daemonPort}/ws/sync`;
+
+  const baseUrl = `http://127.0.0.1:${daemonPort}`;
 
   try {
-    assert(ctx.ports.daemonPort !== 5000 && ctx.ports.daemonPort !== 5001);
+    assert(daemonPort !== 5000 && daemonPort !== 5001, 'Bound daemon port must not be forbidden');
     assert(ctx.ports.tabbyPort !== 5000 && ctx.ports.tabbyPort !== 5001);
     assert(ctx.ports.vitePort !== 5000 && ctx.ports.vitePort !== 5001);
 
@@ -98,16 +112,17 @@ async function runSelfTest() {
       '✅ [3/7] 5-Table Hierarchy, 250ms Stream Rehydration, and File Checkpoint Undo Verified.'
     );
 
-    // 4. Verify TabbyAPI Config Enforcer, SysRAM Weight Pre-Warmer, and 3x3 Tier × Thinking Matrix
-    const tabbyConfigPath = path.join(REPO_ROOT, 'config', 'tabby_config.yml');
-    assert(fs.existsSync(tabbyConfigPath), 'config/tabby_config.yml must exist');
-    const tabbyConfigText = fs.readFileSync(tabbyConfigPath, 'utf-8');
-    assert(tabbyConfigText.includes('cache_mode: Q4'), 'Must enforce cache_mode: Q4');
-    assert(tabbyConfigText.includes('draft_mode: ngram'), 'Must enforce draft_mode: ngram');
-    assert(
-      tabbyConfigText.includes('hybrid_draft_tokens: 4'),
-      'Must enforce hybrid_draft_tokens: 4'
-    );
+    // 4. Verify Pure-Strata tier spec enforcement, SysRAM Weight Pre-Warmer, and 3x3 Tier × Thinking Matrix
+    // (TabbyAPI config.yml was purged in v2.2.4 — KV/draft settings are now enforced structurally via TIER_SPECS.)
+    for (const t of ['low', 'medium', 'high'] as const) {
+      assert.strictEqual(TIER_SPECS[t].cacheMode, 'Q4', `${t} tier must enforce cache_mode Q4`);
+      assert.strictEqual(TIER_SPECS[t].draftMode, 'ngram', `${t} tier must enforce draft_mode ngram`);
+      assert.strictEqual(
+        TIER_SPECS[t].hybridDraftTokens,
+        4,
+        `${t} tier must enforce hybrid_draft_tokens: 4`
+      );
+    }
 
     const prewarmRes = await fetch(`${baseUrl}/api/tabby/prewarm`, { method: 'POST' });
     const prewarmData = (await prewarmRes.json()) as any;

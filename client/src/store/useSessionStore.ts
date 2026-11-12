@@ -54,12 +54,14 @@ export interface SubagentTaskItem {
   thread_id: string;
   message_id: string;
   role: string;
+  prompt?: string;
   command: string;
   status: 'running' | 'completed' | 'error';
   step: number;
   maxSteps: number;
   summary: string;
   logs: string[];
+  messageCount?: number;
   timestamp: number;
 }
 
@@ -242,6 +244,7 @@ interface SessionState {
   isGenerating: boolean;
   activeTurn: ActiveTurnState | null;
   subagentTasks: SubagentTaskItem[];
+  selectedSubagentId: string | null;
   backgroundTasks: BackgroundTaskItem[];
   swarmState: SwarmState | null;
   dpiScale: number;
@@ -250,6 +253,7 @@ interface SessionState {
 
   setProjects: (projects: ProjectItem[], activeId?: string) => void;
   setActiveProjectId: (projectId: string) => void;
+  setSelectedSubagentId: (id: string | null) => void;
   setThreads: (threads: ThreadItem[], activeThreadId?: string) => void;
   hydrateMessagesFromServer: (serverMsgs: any[], activeStreams?: any[], threadStatus?: string, serverActiveTurn?: any) => void;
   setWorkspacePath: (path: string) => void;
@@ -415,6 +419,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isGenerating: false,
   activeTurn: null,
   subagentTasks: [],
+  selectedSubagentId: null,
   backgroundTasks: [],
   swarmState: null,
   dpiScale: getInitialDpiScale(),
@@ -505,6 +510,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         gitBranch: proj ? proj.git_branch : state.gitBranch,
       };
     }),
+  setSelectedSubagentId: (id) => set({ selectedSubagentId: id }),
 
   setThreads: (threads, activeThreadId) =>
     set((state) => {
@@ -820,8 +826,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           status: payload.status || existing.status,
           step: payload.step ?? existing.step,
           maxSteps: payload.maxSteps ?? existing.maxSteps,
+          prompt: payload.prompt ?? existing.prompt,
           summary: payload.summary || existing.summary,
           logs: newLogs.slice(-20),
+          messageCount: payload.messageCount ?? existing.messageCount,
           timestamp: payload.timestamp || Date.now(),
         };
       } else {
@@ -830,12 +838,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           thread_id: payload.thread_id || state.sessionId,
           message_id: payload.message_id || '',
           role: payload.role || 'Autonomous Engineer',
+          prompt: payload.prompt,
           command: payload.command || 'autonomous',
           status: payload.status || 'running',
           step: payload.step || 1,
           maxSteps: payload.maxSteps || 32,
           summary: payload.summary || 'Starting task...',
           logs: payload.summary ? [payload.summary] : [],
+          messageCount: payload.messageCount,
           timestamp: payload.timestamp || Date.now(),
         });
       }

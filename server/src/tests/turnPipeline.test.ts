@@ -6,6 +6,7 @@ import { LocalGravityDB } from '../db/database.js';
 import { autoCompactMessages } from '../utils/autoCompactor.js';
 import { measureMessageTextLength, pruneChatMessages, type PrunableMessage } from '../utils/messagePruning.js';
 import { createPromptTurnHandler, type ActiveTurnSnapshot } from '../agent/promptTurn.js';
+import { detectPrematureStop } from '../agent/prematureStop.js';
 
 async function runTurnPipelineTests() {
   console.log('Running Phase 1 Turn Pipeline & Compaction Safety Unit Tests...');
@@ -173,6 +174,24 @@ async function runTurnPipelineTests() {
 
   db.close();
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+
+  const hedgeResult = detectPrematureStop(
+    'I found the bug in SubagentsTab.tsx. Want me to implement the fix now?',
+    true,
+    0,
+    5,
+    'fix the subagent UI and build it'
+  );
+  assert.equal(hedgeResult.shouldContinue, true, 'Should block unnecessary permission question when user requested a fix');
+
+  const noHedgeResult = detectPrematureStop(
+    'Fixed SubagentsTab.tsx and verified the build passes.',
+    true,
+    0,
+    5,
+    'fix the subagent UI'
+  );
+  assert.equal(noHedgeResult.shouldContinue, false, 'Should allow clean final summary');
 
   console.log('✅ Phase 1 Turn Pipeline & Compaction Safety Unit Tests PASSED');
 }

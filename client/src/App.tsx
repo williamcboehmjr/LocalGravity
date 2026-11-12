@@ -90,6 +90,9 @@ export const App: React.FC = () => {
     setSwarmState,
     applySwarmEvent,
     setBackgroundTasks,
+    subagentTasks,
+    backgroundTasks,
+    setSelectedSubagentId,
     setModelState,
     autoNameSessionFromPrompt,
     messageQueue,
@@ -1462,9 +1465,9 @@ export const App: React.FC = () => {
           >
             <ChatFeed onQuickSend={(p) => handleSendPrompt(p)} />
             <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
-              {/* Antigravity Floating Pills (Review & Status) */}
-              {(totalTasks > 0 || isTurnActive) && (
-                <div className="flex items-center gap-2 mb-2 select-none overflow-x-auto">
+              {/* Antigravity Floating Pills (Pinned Tasks, Subagents & Status) */}
+              {(totalTasks > 0 || isTurnActive || subagentTasks.length > 0 || backgroundTasks.some((t) => t.status === 'running')) && (
+                <div className="flex items-center gap-2 mb-2 select-none overflow-x-auto pb-0.5">
                   {totalTasks > 0 && (
                     <button
                       type="button"
@@ -1476,14 +1479,69 @@ export const App: React.FC = () => {
                           setShowRightDrawer(true);
                         }
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#1C1D20] border border-[#2B2C30] hover:bg-[#25262B] transition-colors shadow-sm cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#1C1D20] border border-[#2B2C30] hover:bg-[#25262B] transition-colors shadow-sm cursor-pointer shrink-0"
                     >
                       <span>{totalTasks} tasks ({completedTasks} completed)</span>
                       <ChevronRight className="w-3 h-3 text-[#9AA0A6]" />
                     </button>
                   )}
+                  {subagentTasks.slice(0, 3).map((sa) => (
+                    <button
+                      key={sa.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedSubagentId(sa.id);
+                        setActiveTab('subagents');
+                        if (window.innerWidth < 768) {
+                          setMobileTab('workbench');
+                        } else {
+                          setShowRightDrawer(true);
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-colors shadow-sm cursor-pointer shrink-0 ${
+                        sa.status === 'running'
+                          ? 'text-[#C58AF9] bg-[#C58AF9]/10 border-[#C58AF9]/30 hover:bg-[#C58AF9]/20'
+                          : sa.status === 'error'
+                            ? 'text-rose-300 bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20'
+                            : 'text-[#E8EAED] bg-[#1C1D20] border-[#2B2C30] hover:bg-[#25262B]'
+                      }`}
+                      title={`Inspect ${sa.role} conversation`}
+                    >
+                      {sa.status === 'running' && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#C58AF9] animate-ping" />
+                      )}
+                      <span className="truncate max-w-[140px]">{sa.role}</span>
+                      <span className="text-[10px] font-mono opacity-75">
+                        {sa.step}/{sa.maxSteps}
+                      </span>
+                      <ChevronRight className="w-3 h-3 opacity-70" />
+                    </button>
+                  ))}
+                  {backgroundTasks
+                    .filter((t) => t.status === 'running')
+                    .slice(0, 2)
+                    .map((bg) => (
+                      <button
+                        key={bg.taskId}
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('subagents');
+                          if (window.innerWidth < 768) {
+                            setMobileTab('workbench');
+                          } else {
+                            setShowRightDrawer(true);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors shadow-sm cursor-pointer shrink-0"
+                        title={`Inspect running task: ${bg.title}`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        <span className="truncate max-w-[130px]">{bg.title}</span>
+                        <ChevronRight className="w-3 h-3 opacity-70" />
+                      </button>
+                    ))}
                   {isTurnActive && (
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#8AB4F8] bg-[#8AB4F8]/10 border border-[#8AB4F8]/20">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#8AB4F8] bg-[#8AB4F8]/10 border border-[#8AB4F8]/20 shrink-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#8AB4F8] animate-ping" />
                       <span>{activeStatusLabel || adaptiveCotLabel || 'Reasoning active'}</span>
                     </div>

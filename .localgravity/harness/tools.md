@@ -125,3 +125,31 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-11T18:27:00.743Z]**: Tool `run_terminal` (`run_terminal({"command":"git --no-pager -C "C:/Users/Sue/.gemini/antigravity/scr`) encountered error `fatal: ambiguous argument 'client/src/components/center-canvas/AuxTabBar.tsx': u`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-11T18:29:03.875Z]**: Tool `run_terminal` (`run_terminal({"command":"cd C:/Users/Sue/.gemini/antigravity/scratch/LocalGravit`) encountered error `[31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, fun`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:49:29.173Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:50:57.408Z]**: Tool `run_terminal` (`run_terminal({"command":"Get-Content .runtime/ports.json; Write-Output "=== list`) encountered error `#< CLIXML <Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T18:59:17.010Z]**: Tool `run_terminal` (`run_terminal({"command":"npm --prefix "C:/Users/Sue/.gemini/antigravity/scratch/`) encountered error `#< CLIXML <Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:00:31.883Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:00:43.866Z]**: Tool `run_terminal` (`run_terminal({"command":"npm --prefix server run test 2>&1; powershell -NoProfil`) encountered error `[TabbyEngine] Model load error: {"error": {"message": "not found"}} [Command tim`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:01:59.360Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:03:16.986Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:12:17.140Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:12:43.380Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Set-Location server; np`) encountered error `At line:1 char:89 + ... no-install tsx src/selfTest.ts *> ..full_out.txt; ('EXIT`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:13:08.447Z]**: Tool `run_terminal` (`bad-flag-cmd --fail`) encountered error `Error: unrecognized flag --fail`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T19:59:35.044Z]**: Tool `run_terminal` (`run_terminal({"command":"python -c "import json; d=json.load(open('C:/Users/Sue/`) encountered error `Could not find platform independent libraries <prefix> Python path configuration`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T20:00:26.903Z]**: Tool `run_terminal` (`run_terminal({"command":"findstr /C:""value"" C:UsersSueDownloadsmoss_dog_base.j`) encountered error `Exit code 1`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T20:01:34.223Z]**: Tool `mcp_comfy-mcp_nodes` (`mcp_comfy-mcp_nodes({"action":"search","query":"moss"})`) encountered error `Error executing tool nodes`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-11T20:02:39.798Z]**: Tool `mcp_comfy-mcp_download_model` (`mcp_comfy-mcp_download_model({"url":"https://huggingface.co/Comfy-Org/MOSS-Image`) encountered error `MCP tool execution timed out after 30000ms for comfy-mcp:download_model`. Fallback to safe cross-platform invocation.

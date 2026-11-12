@@ -487,6 +487,7 @@ const StepTimeline: React.FC<{
   stepNotes: string[];
   isActive: boolean;
   statusLabel?: string;
+  workingProse?: string;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
 }> = ({
   thought,
@@ -497,6 +498,7 @@ const StepTimeline: React.FC<{
   stepNotes,
   isActive,
   statusLabel,
+  workingProse,
   onOpenInWorkbench,
 }) => {
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
@@ -511,8 +513,12 @@ const StepTimeline: React.FC<{
     if (i < toolCalls.length) steps.push({ kind: 'tool', key: toolCalls[i].id, tool: toolCalls[i] });
   }
 
-  const expanded = userExpanded ?? isActive;
+  // Keep timeline collapsed by default (even while active) so the UI stays clean and compact.
+  const expanded = userExpanded ?? false;
   const latestIdx = steps.length - 1;
+  const activeWorkingPreview = isActive
+    ? (workingProse?.trim() || (stepNotes.length > 0 ? stepNotes[stepNotes.length - 1]?.trim() : '') || '')
+    : '';
 
   useEffect(() => {
     if (expanded && isActive && bodyRef.current) {
@@ -564,6 +570,12 @@ const StepTimeline: React.FC<{
           </span>
         )}
       </button>
+
+      {!expanded && isActive && activeWorkingPreview && (
+        <div className="px-3.5 pb-2.5 pt-0.5 text-[12px] text-[#9AA0A6] leading-snug line-clamp-2 border-t border-[#1E2024]/70">
+          {activeWorkingPreview}
+        </div>
+      )}
 
       {expanded && steps.length > 0 && (
         <div
@@ -959,6 +971,13 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
             );
           }
 
+          const showTransientInTimeline =
+            isCurrentlyGenerating &&
+            Boolean(content?.trim()) &&
+            content.trim().length < 220 &&
+            !/^\s{0,3}#{1,6}\s/m.test(content) &&
+            !content.includes('```');
+
           return (
             <div key={msg.id} className="space-y-3.5 px-1">
               {/* Single chronological step timeline + one authoritative status line */}
@@ -971,11 +990,12 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                 stepNotes={stepNotes}
                 isActive={isCurrentlyGenerating}
                 statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
+                workingProse={isCurrentlyGenerating ? content : undefined}
                 onOpenInWorkbench={handleOpenInWorkbench}
               />
 
               {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
-              {content && (
+              {content && !showTransientInTimeline && (
                 <div className="text-[16px] sm:text-[17px] text-[#E8EAED] leading-[1.75] pt-1 prose prose-invert max-w-none">
                   {splitAgentEmbeds(content).map((seg, segIdx) =>
                     seg.kind === 'embed' ? (

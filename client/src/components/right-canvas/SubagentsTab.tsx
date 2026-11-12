@@ -26,16 +26,52 @@ interface BgTask {
   recentLogs: string[];
 }
 
-/** Subagents & Background Tasks tab with logs, kill, and send_input support. */
+interface SubagentMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  name?: string;
+  tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+  timestamp?: number;
+}
+
+/** Subagents & Background Tasks tab with conversation inspector, logs, kill, and send_input support. */
 export const SubagentsTab: React.FC = () => {
   const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
   const subagentTasks = useSessionStore((s) => s.subagentTasks);
+  const selectedSubagentId = useSessionStore((s) => s.selectedSubagentId);
+  const setSelectedSubagentId = useSessionStore((s) => s.setSelectedSubagentId);
   const storeBgTasks = useSessionStore((s) => (s as any).backgroundTasks) as BgTask[] | undefined;
 
   const [fetchedBgTasks, setFetchedBgTasks] = useState<BgTask[]>([]);
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+  const [subagentConvos, setSubagentConvos] = useState<Record<string, SubagentMessage[]>>({});
+  const [loadingConvoId, setLoadingConvoId] = useState<string | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
+
+  const loadSubagentConversation = useCallback(
+    async (id: string) => {
+      setLoadingConvoId(id);
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/subagents/${encodeURIComponent(id)}/messages`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.messages)) {
+            setSubagentConvos((prev) => ({ ...prev, [id]: data.messages }));
+          }
+        }
+      } catch {}
+      setLoadingConvoId((curr) => (curr === id ? null : curr));
+    },
+    [apiBaseUrl]
+  );
+
+  useEffect(() => {
+    if (selectedSubagentId) {
+      setExpandedIds((prev) => ({ ...prev, [selectedSubagentId]: true }));
+      loadSubagentConversation(selectedSubagentId);
+    }
+  }, [selectedSubagentId, loadSubagentConversation]);
 
   const loadTasks = useCallback(async () => {
     setRefreshing(true);
@@ -115,14 +151,24 @@ export const SubagentsTab: React.FC = () => {
             <div className="space-y-1.5">
               {subagentTasks.map((sa) => {
                 const open = Boolean(expandedIds[sa.id]);
+                const isSelected = selectedSubagentId === sa.id;
+                const convo = subagentConvos[sa.id] || [];
+                const visibleMsgs = convo.filter((m) => m.role !== 'system');
                 return (
                   <div
                     key={sa.id}
-                    className="rounded-lg bg-[#17181B] border border-[#25262B] overflow-hidden"
+                    className={`rounded-lg bg-[#17181B] border overflow-hidden transition-colors ${
+                      isSelected ? 'border-[#8AB4F8]/60 ring-1 ring-[#8AB4F8]/25' : 'border-[#25262B]'
+                    }`}
                   >
                     <button
                       type="button"
-                      onClick={() => toggleExpand(sa.id)}
+                      onClick={() => {
+                        const nextOpen = !open;
+                        toggleExpand(sa.id);
+                        setSelectedSubagentId(nextOpen ? sa.id : null);
+                        if (nextOpen) loadSubagentConversation(sa.id);
+                      }}
                       className="w-full flex items-center justify-between gap-2 p-2 text-left hover:bg-[#1E1F24] cursor-pointer"
                     >
                       <div className="flex items-center gap-2 min-w-0">
@@ -151,13 +197,49 @@ export const SubagentsTab: React.FC = () => {
                       </div>
                     )}
 
-                    {open && sa.logs && sa.logs.length > 0 && (
-                      <div className="px-2.5 py-2 border-t border-[#222328] bg-[#101113] font-mono text-[10.5px] text-[#BDC1C6] max-h-36 overflow-y-auto space-y-0.5">
-                        {sa.logs.map((line, i) => (
-                          <div key={i} className="whitespace-pre-wrap">
-                            {line}
+                    {open && (
+                      <div className="border-t border-[#222328] bg-[#101113] p-2.5 space-y-2 max-h-72 overflow-y-auto">
+                        {loadingConvoId === sa.id && visibleMsgs.length === 0 ? (
+                          <div className="text-[11px] text-[#8E8E93] flex items-center gap-1.5">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>Loading subagent conversation...</span>
                           </div>
-                        ))}
+                        ) : visibleMsgs.length > 0 ? (
+                          visibleMsgs.map((m, idx) => (
+                            <div
+                              key={idx}
+                              className={`rounded-md px-2.5 py-1.5 text-[11px] leading-relaxed ${
+                                m.role === 'user'
+                                  ? 'bg-[#1D1F24] border border-[#2C2F36] text-[#E8EAED]'
+                                  : m.role === 'tool'
+                                    ? 'bg-[#14161A] border border-[#22252C] text-[#9AA0A6] font-mono text-[10.5px]'
+                                    : 'bg-[#171920] border border-[#252A36] text-[#D2E3FC]'
+                              }`}
+                            >
+                              <div className="text-[9.5px] uppercase tracking-wider font-semibold text-[#70757A] mb-0.5 flex items-center justify-between">
+                                <span>{m.role === 'tool' ? `tool: ${m.name || 'output'}` : m.role}</span>
+                                {m.tool_calls && m.tool_calls.length > 0 && (
+                                  <span className="text-[#8AB4F8] font-mono lowercase">
+                                    {m.tool_calls.map((tc) => tc.function?.name).filter(Boolean).join(', ')}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                                {m.content || (m.tool_calls?.length ? '(dispatched tool calls)' : '')}
+                              </div>
+                            </div>
+                          ))
+                        ) : sa.logs && sa.logs.length > 0 ? (
+                          <div className="font-mono text-[10.5px] text-[#BDC1C6] space-y-0.5">
+                            {sa.logs.map((line, i) => (
+                              <div key={i} className="whitespace-pre-wrap">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-[#6E6E73]">Waiting for subagent output...</div>
+                        )}
                       </div>
                     )}
                   </div>

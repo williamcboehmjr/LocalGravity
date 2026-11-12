@@ -91,10 +91,13 @@ export async function createDaemonServer(options?: {
   dbPath?: string;
   preferredDaemonPort?: number;
   preferredTabbyPort?: number;
+  /** Isolated mode for the self-test suite: skip writing runtime port files and use OS-assigned ephemeral ports. */
+  isolated?: boolean;
 }): Promise<DaemonContext> {
   const ports = await allocateRuntimePorts(REPO_ROOT, {
     preferredDaemonPort: options?.preferredDaemonPort,
     preferredTabbyPort: options?.preferredTabbyPort,
+    skipPortFileWrite: options?.isolated,
   });
 
   if (isPortForbidden(ports.daemonPort) || isPortForbidden(ports.tabbyPort)) {
@@ -201,12 +204,14 @@ export async function createDaemonServer(options?: {
         thread_id: task.threadId,
         message_id: task.id,
         role: task.role,
+        prompt: task.prompt,
         command: 'invoke_subagent',
         status: task.status === 'failed' ? 'error' : task.status,
         step: task.step,
         maxSteps: task.maxSteps,
         summary: task.summary,
         logs: task.resultText ? [task.resultText] : [task.summary],
+        messageCount: task.messages?.length ?? 0,
         timestamp: Date.now(),
       },
     });
@@ -285,6 +290,25 @@ export async function createDaemonServer(options?: {
     return {
       tasks: taskMgr.listTasks(),
       subagents: subagentMgr.listTasks(),
+    };
+  });
+
+  app.get('/api/subagents/:id/messages', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = subagentMgr.getTask(id);
+    if (!task) {
+      return reply.code(404).send({ error: 'Subagent task not found' });
+    }
+    return {
+      id: task.id,
+      role: task.role,
+      status: task.status,
+      step: task.step,
+      maxSteps: task.maxSteps,
+      prompt: task.prompt,
+      summary: task.summary,
+      resultText: task.resultText,
+      messages: task.messages || [],
     };
   });
 

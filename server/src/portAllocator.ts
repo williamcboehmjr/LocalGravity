@@ -135,11 +135,21 @@ export async function allocateRuntimePorts(
     preferredDaemonPort?: number;
     preferredTabbyPort?: number;
     preferredVitePort?: number;
+    /**
+     * Isolated mode (used by the self-test suite): do NOT write
+     * `.runtime/ports.json` or `client/public/runtime-ports.json`, so a test run
+     * can never clobber the live daemon's GUI port-discovery files. Ephemeral
+     * ports (0) are honored for OS-assigned binding to avoid TOCTOU races with
+     * the running Central Brain.
+     */
+    skipPortFileWrite?: boolean;
   }
 ): Promise<RuntimePortsConfig> {
+  const isolated = options?.skipPortFileWrite === true;
+
   // Check if launch.py already pre-allocated and wrote a valid .runtime/ports.json
   const existingPortsPath = path.join(repoRoot, '.runtime', 'ports.json');
-  if (process.env.LOCALGRAVITY_REUSE_PORTS === '1' && fs.existsSync(existingPortsPath)) {
+  if (!isolated && process.env.LOCALGRAVITY_REUSE_PORTS === '1' && fs.existsSync(existingPortsPath)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(existingPortsPath, 'utf-8')) as RuntimePortsConfig;
       if (
@@ -160,11 +170,23 @@ export async function allocateRuntimePorts(
 
   const reserved = new Set<number>([5000, 5001]);
 
-  const startDaemon = Number(process.env.LOCALGRAVITY_DAEMON_PORT) || options?.preferredDaemonPort || 3390;
-  const startVite = Number(process.env.LOCALGRAVITY_VITE_PORT) || options?.preferredVitePort || 5173;
+  let daemonPort: number;
+  let vitePort: number;
 
-  const daemonPort = await findFreePort(startDaemon, reserved);
-  const vitePort = await findFreePort(startVite, reserved);
+  if (isolated) {
+    // Ephemeral OS-assigned ports: the kernel hands out a guaranteed-free port at
+    // bind time, eliminating TOCTOU races with the live Central Brain's allocated
+    // port. The self-test reads back the real bound port from server.address().
+    daemonPort = 0;
+    vitePort = 0;
+  } else {
+    const startDaemon = Number(process.env.LOCALGRAVITY_DAEMON_PORT) || options?.preferredDaemonPort || 3390;
+    const startVite = Number(process.env.LOCALGRAVITY_VITE_PORT) || options?.preferredVitePort || 5173;
+
+    daemonPort = await findFreePort(startDaemon, reserved);
+    vitePort = await findFreePort(startVite, reserved);
+  }
+
   const tabbyPort = 8080;
 
   const lanIp = detectLanIp();
@@ -183,6 +205,8 @@ export async function allocateRuntimePorts(
     forbiddenPorts: [5000, 5001],
   };
 
-  writeRuntimePortsAtomically(repoRoot, config);
+  if (!isolated) {
+    writeRuntimePortsAtomically(repoRoot, config);
+  }
   return config;
 }

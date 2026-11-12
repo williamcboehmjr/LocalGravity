@@ -67,6 +67,27 @@ export function detectPrematureStop(
     };
   }
 
+  // 3c. UNNECESSARY PERMISSION / CONFIRMATION HEDGING GUARD:
+  // If the user's prompt already requested execution (or confirmed "yes"/"continue"),
+  // do not allow the model to stop and ask "Want me to implement...?" / "Should I proceed?".
+  const userRequestedExecution =
+    Boolean(userPrompt) &&
+    (/\b(fix|implement|build|create|write|edit|update|finish|complete|publish|release|push|audit|refactor|add|remove|wire|hook|solve|execute|do|continue|proceed|go ahead)\b/i.test(
+      userPrompt!
+    ) ||
+      /^(yes|yep|yeah|sure|ok|okay|do it|go ahead|proceed|continue)\b/i.test(userPrompt!.trim()));
+
+  const permissionHedgingRegex =
+    /(?:would you like me to|do you want me to|want me to|should i|shall i|would you like to proceed|let me know if you(?:'d| would) like me to|if you want, i can|say the word|ready to (?:implement|proceed|apply|build|fix)[^.?!]*\?)/i;
+
+  if (userRequestedExecution && (permissionHedgingRegex.test(trailingSentence) || permissionHedgingRegex.test(lastLine))) {
+    return {
+      shouldContinue: true,
+      continuationPrompt:
+        '[ACTION REQUIRED]: The user already instructed you to complete this task. Do NOT stop to ask for permission or confirmation ("Want me to...?", "Should I...?"). Execute the implementation and verification tools now.',
+    };
+  }
+
   // 4. THEATRICAL SIMULATION / ZERO-TOOL HALLUCINATION GUARD:
   // If NO tools have been executed in this turn, check if the model is narrating/roleplaying tool actions in text!
   if (!hasExecutedTools) {

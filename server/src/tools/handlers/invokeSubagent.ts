@@ -127,6 +127,19 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
             },
             { role: 'user', content: prompt },
           ];
+          const syncMessages = () => {
+            manager.setSubagentMessages(
+              task.id,
+              messages.map((m) => ({
+                role: m.role as 'system' | 'user' | 'assistant' | 'tool',
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+                name: m.name,
+                tool_calls: m.tool_calls,
+                timestamp: Date.now(),
+              }))
+            );
+          };
+          syncMessages();
 
           report = await SwarmTurnScheduler.getInstance().acquireGpuTurn(2, `subagent:${role}`, async () => {
             let finalText = '';
@@ -164,7 +177,13 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
               });
 
               finalText = (res.content || '').trim();
-              if (executed.length === 0) break;
+              if (executed.length === 0) {
+                if (finalText) {
+                  messages.push({ role: 'assistant', content: finalText });
+                  syncMessages();
+                }
+                break;
+              }
 
               messages.push({
                 role: 'assistant',
@@ -183,6 +202,7 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
                   content: e.output,
                 });
               }
+              syncMessages();
             }
             return finalText;
           });
@@ -196,6 +216,10 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       manager.updateSubagentStep(task.id, 1, `[${role}] Scanning workspace files...`);
       report = fallbackKeywordScan(prompt, role, ctx.workspaceRoot, targetDir);
       manager.updateSubagentStep(task.id, 2, `[${role}] Synthesizing distilled findings...`);
+      manager.setSubagentMessages(task.id, [
+        { role: 'user', content: prompt, timestamp: startMs },
+        { role: 'assistant', content: report, timestamp: Date.now() },
+      ]);
     }
 
     manager.completeSubagentTask(task.id, report, 'completed');

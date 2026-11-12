@@ -6,7 +6,7 @@
     "prompt": "/vision Inspect Strata Qwen 3.8 Flash-Next health and verify vision readiness.",
     "tier": "high",
     "enabled": true,
-    "lastRunAt": null
+    "lastRunAt": "2026-11-12T14:00:46.159Z"
   },
   {
     "id": "auto-harness-compact",
