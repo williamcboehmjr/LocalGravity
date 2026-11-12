@@ -153,3 +153,5 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-11T20:01:34.223Z]**: Tool `mcp_comfy-mcp_nodes` (`mcp_comfy-mcp_nodes({"action":"search","query":"moss"})`) encountered error `Error executing tool nodes`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-11T20:02:39.798Z]**: Tool `mcp_comfy-mcp_download_model` (`mcp_comfy-mcp_download_model({"url":"https://huggingface.co/Comfy-Org/MOSS-Image`) encountered error `MCP tool execution timed out after 30000ms for comfy-mcp:download_model`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-12T20:10:58.900Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Write-Host '=== JAVA ==`) encountered error `At line:1 char:74 + ... === JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOM`. Fallback to safe cross-platform invocation.

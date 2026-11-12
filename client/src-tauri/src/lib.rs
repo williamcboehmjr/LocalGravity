@@ -1,10 +1,26 @@
+pub mod edge_tools;
 pub mod file_ops;
 pub mod harness;
 pub mod policy;
 pub mod runner;
 pub mod ws_client;
 
+use edge_tools::{EdgeIdentity, EdgeToolOutput};
 use harness::{ClientAppDataState, HarnessEngine};
+
+#[tauri::command]
+fn get_edge_identity() -> EdgeIdentity {
+    edge_tools::get_identity()
+}
+
+#[tauri::command]
+async fn execute_edge_tool(
+    tool_name: String,
+    args: serde_json::Value,
+    workspace_root: String,
+) -> EdgeToolOutput {
+    edge_tools::execute(&tool_name, args, &workspace_root).await
+}
 
 #[tauri::command]
 fn get_system_platform() -> String {
@@ -171,6 +187,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_system_platform,
+            get_edge_identity,
+            execute_edge_tool,
             init_client_appdata,
             init_workspace_harness,
             install_dmg_update,

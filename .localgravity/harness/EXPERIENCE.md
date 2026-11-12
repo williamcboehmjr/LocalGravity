@@ -459,3 +459,10 @@
 - **[PPC Auto-Tool Rule 2026-11-11T20:02:39.798Z]**: Tool `mcp_comfy-mcp_download_model` (`mcp_comfy-mcp_download_model({"url":"https://huggingface.co/Comfy-Org/MOSS-Image`) encountered error `MCP tool execution timed out after 30000ms for comfy-mcp:download_model`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for mcp_comfy-mcp_download_model with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-12T20:10:58.900Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"Write-Host '=== JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOME=' + $env:JAVA_HOME); Write-Host '=== ANDROID ENV ==='; Write-Host ('ANDROID_HOME=' + $env:ANDROID_HOME); Write-Host ('ANDROID_SDK_ROOT=' + $env:ANDROID_SDK_ROOT); Write-Host '=== SDK DIRS ==='; foreach($p in @('C:\\Android','C:\\Users\\Sue\\AppData\\Local\\Android\\Sdk','C:\\Program Files\\Android','C:\\Program Files (x86)\\Android')){ if(Test-Path $p){ Get-ChildItem $p | ForEach-Object { Write-Host ($p + '\\' + $_.Name) } } else { Write-Host ('MISSING: ' + $p) } }; Write-Host '=== PATH TOOLS ==='; foreach($t in @('adb','sdkmanager','gradle','emulator')){ $c = Get-Command $t -ErrorAction SilentlyContinue; if($c){ Write-Host ($t + ' -> ' + $c.Source) } else { Write-Host ('NO ' + $t) } }; Write-Host '=== NODE ==='; node --version 2>&1; npm --version 2>&1\"","cwd":"C:\\Users\\Sue"})`)
+- **Initial Failure Telemetry**: `At line:1 char:74 + ... === JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOME=' + C:\Prog ... +                                                             `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-12T20:10:58.900Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Write-Host '=== JAVA ==`) encountered error `At line:1 char:74 + ... === JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOM`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

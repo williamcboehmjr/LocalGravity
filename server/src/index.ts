@@ -63,6 +63,7 @@ import {
 } from './tools/builtinTools.js';
 import { BackgroundTaskManager } from './tools/taskManager.js';
 import { SubagentManager } from './tools/subagentManager.js';
+import { EdgeBridgeManager } from './bridge/edgeBridge.js';
 import { ArtifactManager } from './tools/artifactManager.js';
 import {
   Harness2Manager,
@@ -1492,8 +1493,21 @@ export async function createDaemonServer(options?: {
               },
             })
           );
+        } else if (type === 'EDGE_REGISTER') {
+          if (payload?.client_id) {
+            EdgeBridgeManager.getInstance().registerClient(String(payload.client_id), socket, {
+              hostname: String(payload.hostname || 'unknown-host'),
+              platform: String(payload.platform || 'unknown'),
+              homeDir: payload.home_dir ? String(payload.home_dir) : undefined,
+            });
+          }
+        } else if (type === 'EDGE_TOOL_RESULT') {
+          EdgeBridgeManager.getInstance().handleToolResult(payload || {});
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
+          if (payload?.client_id && threadId) {
+            EdgeBridgeManager.getInstance().bindThread(threadId, String(payload.client_id));
+          }
           const tier: ModelTier = payload.tier || 'high';
           const budget: ThinkingBudget = payload.thinking_budget || 'fast';
           void handlePromptTurn({
@@ -1580,6 +1594,7 @@ export async function createDaemonServer(options?: {
 
     socket.on('close', () => {
       syncClients.delete(socket);
+      EdgeBridgeManager.getInstance().unregisterSocket(socket);
     });
   };
 

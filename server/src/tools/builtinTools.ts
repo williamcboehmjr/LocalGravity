@@ -12,6 +12,7 @@ import { extractJpegsFromPdf } from '../files/attachmentManager.js';
 import { createRequire } from 'node:module';
 import { HANDLER_REGISTRY } from './handlers/index.js';
 import { applyFuzzyPatch } from '../utils/patchDoctor.js';
+import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 const require = createRequire(import.meta.url);
 
 export interface ToolExecutionContext {
@@ -148,6 +149,20 @@ export class BuiltinToolExecutor {
     }
 
     try {
+      const edgeBridge = EdgeBridgeManager.getInstance();
+      if (edgeBridge.isHostTool(toolName)) {
+        const remoteClient = edgeBridge.getRemoteClientForThread(ctx.threadId);
+        if (remoteClient) {
+          return await edgeBridge.executeRemoteTool(
+            remoteClient,
+            toolName,
+            args,
+            ctx.workspaceRoot,
+            ctx.abortSignal
+          );
+        }
+      }
+
       // Registry-first dispatch (Strangler-Fig): migrated tools live in ./handlers.
       const handler = HANDLER_REGISTRY[toolName];
       if (handler) {

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { BUILTIN_TOOLS_SCHEMA } from '../tools/builtinTools.js';
 import { SWARM_TOOLS_SCHEMA } from '../tools/builtinToolsSchema.js';
 import { SwarmManager } from '../swarm/swarmManager.js';
+import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 import { SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
 import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
 import fs from 'node:fs';
@@ -289,9 +290,15 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
+      const remoteClient = EdgeBridgeManager.getInstance().getRemoteClientForThread(thread.id);
+      const remoteHostNote = remoteClient
+        ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools in this turn execute natively on the connected client host "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}). Any local paths or run_terminal commands (including Python, Node, PowerShell, etc.) run directly on "${remoteClient.hostname}".\n`
+        : '';
+
       const systemDirective =
         `You are LocalGravity (Google Antigravity 2.0 Local Architecture), running directly on the user's workstation with TabbyAPI EXL2/EXL3.\n` +
         `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
+        remoteHostNote +
         `Workstation Paths:\n` +
         `- User Folders: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}"\n` +
         `- Strata Engine: Active on port 8080 serving "Swift 1.5 Flash-Next" (IQ2_XS + Vision) with 65,536 context, spec=6, and multimodal vision projector mmproj-Qwen3.8-Flash-Next-BF16.gguf! Input modalities: ["text", "image"].\n` +

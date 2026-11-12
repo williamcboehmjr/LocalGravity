@@ -55,6 +55,18 @@ import { UpdateNotificationBanner } from './components/common/UpdateNotification
 import { checkForAppUpdates, UpdateInfo } from './services/updaterService';
 import { DpiScaleControl } from './components/center-canvas/DpiScaleControl';
 
+const getOrCreateEdgeClientId = (): string => {
+  try {
+    const existing = localStorage.getItem('lg_edge_client_id');
+    if (existing) return existing;
+    const created = `edge-${crypto.randomUUID()}`;
+    localStorage.setItem('lg_edge_client_id', created);
+    return created;
+  } catch {
+    return `edge-${Date.now()}`;
+  }
+};
+
 export const App: React.FC = () => {
   const {
     projects,
@@ -290,6 +302,27 @@ export const App: React.FC = () => {
           setIsConnected(true);
           setReconnectAttempt(0);
           setReconnectCountdown(0);
+          // Register this Tauri desktop host with Central Brain for Remote Host Bridge execution
+          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+            import('@tauri-apps/api/core')
+              .then(({ invoke }) => invoke<{ hostname: string; platform: string; home_dir: string }>('get_edge_identity'))
+              .then((identity) => {
+                if (!isDisposed && ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(
+                    JSON.stringify({
+                      type: 'EDGE_REGISTER',
+                      payload: {
+                        client_id: getOrCreateEdgeClientId(),
+                        hostname: identity.hostname,
+                        platform: identity.platform,
+                        home_dir: identity.home_dir,
+                      },
+                    })
+                  );
+                }
+              })
+              .catch(() => {});
+          }
           // Note: The server automatically sends full initial SYNC_STATE on `/ws/sync` connect.
           // Do not send fake placeholder IDs (`thread-default`) which would overwrite server state.
         };
@@ -336,6 +369,59 @@ export const App: React.FC = () => {
                   curTurn.messageId &&
                   curTurn.messageId !== evtMessageId)
             );
+
+            if (type === 'EDGE_TOOL_REQUEST') {
+              const reqId = payload?.request_id;
+              const toolName = payload?.tool_name;
+              const toolArgs = payload?.args || {};
+              const wsRoot = payload?.workspace_root || useSessionStore.getState().workspacePath || '.';
+              if (reqId && toolName && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+                import('@tauri-apps/api/core')
+                  .then(({ invoke }) =>
+                    invoke<{ stdout: string; stderr: string; exit_code: number; duration_ms: number }>(
+                      'execute_edge_tool',
+                      {
+                        toolName,
+                        args: toolArgs,
+                        workspaceRoot: wsRoot,
+                      }
+                    )
+                  )
+                  .then((res) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      ws.send(
+                        JSON.stringify({
+                          type: 'EDGE_TOOL_RESULT',
+                          payload: {
+                            request_id: reqId,
+                            stdout: res.stdout,
+                            stderr: res.stderr,
+                            exit_code: res.exit_code,
+                            duration_ms: res.duration_ms,
+                          },
+                        })
+                      );
+                    }
+                  })
+                  .catch((err) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      ws.send(
+                        JSON.stringify({
+                          type: 'EDGE_TOOL_RESULT',
+                          payload: {
+                            request_id: reqId,
+                            stdout: '',
+                            stderr: `Tauri edge tool error: ${err?.message || String(err)}`,
+                            exit_code: 1,
+                            duration_ms: 0,
+                          },
+                        })
+                      );
+                    }
+                  });
+              }
+              return;
+            }
 
             if (type === 'SYNC_STATE') {
               if (payload.projects?.length > 0) {
@@ -825,6 +911,7 @@ export const App: React.FC = () => {
           payload: {
             thread_id: activeThreadId,
             session_id: activeThreadId,
+            client_id: getOrCreateEdgeClientId(),
             prompt: text,
             images,
             attachments,
