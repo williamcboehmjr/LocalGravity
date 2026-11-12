@@ -139,6 +139,7 @@ async fn install_dmg_update(dmg_url: String) -> Result<String, String> {
 async fn install_msi_update(msi_url: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
 
         let temp_dir = std::env::temp_dir();
@@ -148,6 +149,7 @@ async fn install_msi_update(msi_url: String) -> Result<String, String> {
 
         let curl_out = Command::new("curl.exe")
             .args(["-s", "-L", "-f", "-o", &temp_msi_str, &msi_url])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|e| format!("curl.exe execution failed: {}", e))?;
 
@@ -165,6 +167,7 @@ async fn install_msi_update(msi_url: String) -> Result<String, String> {
         );
         let _ = Command::new("powershell.exe")
             .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_cmd])
+            .creation_flags(0x08000000)
             .spawn();
 
         std::process::exit(0);

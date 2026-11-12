@@ -35,6 +35,7 @@ impl CommandRunner {
         let mut cmd = {
             let mut c = Command::new("powershell.exe");
             c.args(["-NoProfile", "-NonInteractive", "-Command", cmd_string]);
+            c.creation_flags(0x08000000);
             c
         };
 

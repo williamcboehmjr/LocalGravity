@@ -466,3 +466,31 @@
 - **[PPC Auto-Tool Rule 2026-11-12T20:10:58.900Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Write-Host '=== JAVA ==`) encountered error `At line:1 char:74 + ... === JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOM`. Fallback to safe cross-platform invocation.
 - **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
 
+### [PPC Composed Fix • 2026-11-12T21:19:21.482Z]
+- **Failed Tool**: `write_file` (`write_file({"path":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/peek.ps1","content":"Add-Type -AssemblyName System.IO.Compression.FileSystem\n$base = 'C:\\Users\\Mandy\\Documents\\Antigravity Proj\\fb new acct'\nGet-ChildItem $base -Filter *.zip | ForEach-Object {\n    Write-Output (\"==== \" + $_.Name)\n    $a = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)\n    Write-Output (\"TOTAL ENTRIES: \" + $a.Entries.Count)\n    $a.Entries | Where-Object { $_.FullName -notmatch '\\.(jpg|jpeg|png|mp4|m4v)$' } | Select-Object -First 25 FullName | ForEach-Object { Write-Output $_ }\n    $a.Dispose()\n}\n"})`)
+- **Initial Failure Telemetry**: `Failed to create parent dir: Access is denied. (os error 5)`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:21.482Z]**: Tool `write_file` (`write_file({"path":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/peek.p`) encountered error `Failed to create parent dir: Access is denied. (os error 5)`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for write_file with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-12T21:19:30.320Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"python -c \"import zipfile,glob;[print('====',f,zipfile.ZipFile(f).namelist()[:5]) for f in glob.glob(r'C:\\Users\\Mandy\\Documents\\Antigravity Proj\\fb new acct\\*.zip')]\""})`)
+- **Initial Failure Telemetry**: `python : The term 'python' is not recognized as the name of a cmdlet, function, script file, or operable program.  Check the spelling of the name, or if a path `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:30.320Z]**: Tool `run_terminal` (`run_terminal({"command":"python -c "import zipfile,glob;[print('====',f,zipfile.`) encountered error `python : The term 'python' is not recognized as the name of a cmdlet, function, `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-12T21:19:57.515Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command \"$PSVersionTable.PSVersion\""})`)
+- **Initial Failure Telemetry**: `System.Collections.Hashtable.PSVersion : The term 'System.Collections.Hashtable.PSVersion' is not recognized as the  name of a cmdlet, function, script file, or`
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:57.515Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "PSVersionTable.PSVersio`) encountered error `System.Collections.Hashtable.PSVersion : The term 'System.Collections.Hashtable.`. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+
+### [PPC Composed Fix • 2026-11-12T22:57:38.961Z]
+- **Failed Tool**: `run_terminal` (`run_terminal({"command":"node --version; python --version","cwd":"C:\\Users\\Mandy\\Documents\\Antigravity Proj\\fb new acct"})`)
+- **Initial Failure Telemetry**: `python : The term 'python' is not recognized as the name of a cmdlet, function, script file, or operable program.  Check the spelling of the name, or if a path `
+- **Harness Adjustment**: Updated `tools.md`
+- **[PPC Auto-Tool Rule 2026-11-12T22:57:38.961Z]**: Tool `run_terminal` (`run_terminal({"command":"node --version; python --version","cwd":"C:UsersMandyDo`) encountered error `python : The term 'python' is not recognized as the name of a cmdlet, function, `. Fallback to safe cross-platform invocation.
+- **Probe Verification**: Exit code `0` (Probe succeeded for run_terminal with updated tools.md)
+

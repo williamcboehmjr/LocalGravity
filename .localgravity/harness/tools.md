@@ -155,3 +155,11 @@ The terminal on this box is **PowerShell**, but most of my errors come from writ
 - **[PPC Auto-Tool Rule 2026-11-11T20:02:39.798Z]**: Tool `mcp_comfy-mcp_download_model` (`mcp_comfy-mcp_download_model({"url":"https://huggingface.co/Comfy-Org/MOSS-Image`) encountered error `MCP tool execution timed out after 30000ms for comfy-mcp:download_model`. Fallback to safe cross-platform invocation.
 
 - **[PPC Auto-Tool Rule 2026-11-12T20:10:58.900Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "Write-Host '=== JAVA ==`) encountered error `At line:1 char:74 + ... === JAVA ==='; java -version 2>&1; Write-Host ('JAVA_HOM`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:21.482Z]**: Tool `write_file` (`write_file({"path":"C:/Users/Sue/.gemini/antigravity/scratch/LocalGravity/peek.p`) encountered error `Failed to create parent dir: Access is denied. (os error 5)`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:30.320Z]**: Tool `run_terminal` (`run_terminal({"command":"python -c "import zipfile,glob;[print('====',f,zipfile.`) encountered error `python : The term 'python' is not recognized as the name of a cmdlet, function, `. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-12T21:19:57.515Z]**: Tool `run_terminal` (`run_terminal({"command":"powershell -NoProfile -Command "PSVersionTable.PSVersio`) encountered error `System.Collections.Hashtable.PSVersion : The term 'System.Collections.Hashtable.`. Fallback to safe cross-platform invocation.
+
+- **[PPC Auto-Tool Rule 2026-11-12T22:57:38.961Z]**: Tool `run_terminal` (`run_terminal({"command":"node --version; python --version","cwd":"C:UsersMandyDo`) encountered error `python : The term 'python' is not recognized as the name of a cmdlet, function, `. Fallback to safe cross-platform invocation.

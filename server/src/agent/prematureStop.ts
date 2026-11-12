@@ -26,8 +26,8 @@ export function detectPrematureStop(
     };
   }
 
-  // 2. Output is a very short transitional line (< 140 chars) ending with colon ":"
-  if (trimmed.endsWith(':') && trimmed.length < 140) {
+  // 2. Output is a transitional preamble ending with colon ":" (e.g. "Let me use write_file... verbatim:")
+  if (trimmed.endsWith(':') && trimmed.length < 500 && !trimmed.includes('```')) {
     return {
       shouldContinue: true,
       continuationPrompt:
@@ -45,7 +45,7 @@ export function detectPrematureStop(
   const trailingSentence = sentences.length > 0 ? sentences[sentences.length - 1] : lastLine;
 
   const actionIntentRegex =
-    /(?:^|\b)(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|confirm|call|invoke|query|probe|execute|dispatch|try|validate|install|setup|proceed|continue|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build|grab|locate|trace|diagnose|finish|complete|wire|hook|commit|push|publish|release|ship|apply|patch|compile|stage|resolve)\b/i;
+    /(?:^|\b)(let me|now let me|i'll|i will|let's|i am going to|i need to|starting|executing|working on)\s+(use|read|check|inspect|dump|run|test|split|refactor|create|write|edit|update|look|examine|verify|confirm|call|invoke|query|probe|execute|dispatch|try|validate|install|setup|proceed|continue|pull|fetch|search|analyze|map|list|explore|open|review|implement|fix|build|grab|locate|trace|diagnose|finish|complete|wire|hook|commit|push|publish|release|ship|apply|patch|compile|stage|resolve|extract|unzip|parse|copy|move|delete|remove|mkdir|generate|design|plan|summarize|scan|count|save|load)\b/i;
 
   if (actionIntentRegex.test(trailingSentence) || (trimmed.length < 400 && actionIntentRegex.test(trimmed))) {
     const matchedSnippet = trailingSentence.slice(0, 100);

@@ -18,7 +18,7 @@ export function resolveDefaultShell(): { bin: string; isPwsh: boolean } {
     if (c && fs.existsSync(c)) return { bin: c, isPwsh: true };
   }
   try {
-    execSync('where pwsh', { stdio: 'ignore' });
+    execSync('where pwsh', { stdio: 'ignore', windowsHide: true });
     return { bin: 'pwsh.exe', isPwsh: true };
   } catch {}
   return { bin: 'powershell.exe', isPwsh: false };
@@ -53,6 +53,7 @@ export class SharedTerminalManager {
         TERM: 'xterm-256color',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     });
 
     const welcomeBanner = `\x1b[38;2;138;180;248m⚡ LocalGravity Shared Interactive Shell (${shellBin})\x1b[0m\r\n\x1b[90mWorking directory: ${this.cwd}\x1b[0m\r\n`;
@@ -162,6 +163,7 @@ export class SharedTerminalManager {
         cwd: targetCwd,
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
       });
 
       const onAbort = () => {
@@ -170,7 +172,7 @@ export class SharedTerminalManager {
           clearTimeout(timer);
           try {
             if (isWin && child.pid) {
-              spawn('taskkill', ['/pid', String(child.pid), '/f', '/t']);
+              spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { windowsHide: true });
             } else {
               child.kill('SIGTERM');
             }

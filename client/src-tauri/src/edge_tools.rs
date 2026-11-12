@@ -24,8 +24,13 @@ pub fn get_identity() -> EdgeIdentity {
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| {
-            std::process::Command::new("hostname")
-                .output()
+            let mut cmd = std::process::Command::new("hostname");
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            cmd.output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
                 .map(|s| s.trim().to_string())
@@ -424,6 +429,7 @@ pub async fn execute(tool_name: &str, args: Value, workspace_root: &str) -> Edge
             let mut cmd = {
                 let mut c = Command::new("powershell.exe");
                 c.args(["-NoProfile", "-NonInteractive", "-Command", cmd_str]);
+                c.creation_flags(0x08000000);
                 c
             };
             #[cfg(not(target_os = "windows"))]

@@ -1,15 +1,15 @@
 {
-  "version": "v2.3.4",
-  "notes": "v2.3.4: Remote Host Bridge (EdgeBridgeManager + Tauri edge_tools) so every desktop client executes file and terminal tools on its own host while sharing Central Brain models",
-  "pub_date": "2026-11-12T21:13:07.951Z",
+  "version": "v2.3.5",
+  "notes": "v2.3.5: Hide flashing console windows (CREATE_NO_WINDOW + windowsHide) on Central Brain and Tauri client, plus expanded premature-stop preamble guard",
+  "pub_date": "2026-11-12T23:07:14.722Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelpTalhzSnVQeUlZekhITlFZMG05OThVQVhFaGxhS3p0a0M2elhPK1BiNGVEY0tKZm13aXBSdmdRYU9QWHZZa3VEWmNodlZOcVQralJMcVpWZjlHTHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTE3OTg3CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy40X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuNAp4OHlnQitpbmdUZnlKQTloT084cHFKekFockpoYlhXMk5IOHpURHZRUXp5YU5IRGdEQndxRmVLODQwWUw1R3BCRnVaU1ZtOENURUc5aUxSS3ZvK1lDdz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.4/LocalGravity_2.3.4_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemExL2xIU25Makg4ZEZaQk5Gb3hHSEhMeUZHbUlNb043c095UEs2V1hqRTluaWFGN09ESXRMNTBEbWtSWlovZ3RXSHNWdzFuNUVQMGhMd0JJTVpNQXdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTI0ODMzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy41X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuNQpnc1cwR3Zodll5eHh6ZFAzdXJvWnA0QjhnWGVtMEp4OHZKRE5zeG03d1RxWmdDVWRPVmM2RUxvdXE1a01pckw4OG9QWHczZzJldVRTMmNKaFNxbldBQT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.5/LocalGravity_2.3.5_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemRqeHNhak4wRFVKK25KZ09Dc2o2dDZuUWpIbTAzODZuMXpUUjBPUlcwOHBnQUlxcndkeGszdHFXSGJuTDUrVWZkcHR5dTlFditZTDJrU296MURNUkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTE3OTg3CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy40X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjQKcXFIRUt0N01sbTVQNC9KT3lUenhrTlp6Ym1oU2VMTWpLN2hJS0VkL01yTEFNQmRlQTAvWCszc3R5QTgwZ1RoS2srWHVWZ3l1ZTYyOVVBQW1JTHpmREE9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.4/LocalGravity_2.3.4_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelZpQTdFZklXZG5qSFRRNUZ6MVYxUi9LV2Jvdkk2VE5mRktUUVhSUVVoQVBLdDNBTU1DUGJQTUl2Sy83TmZvVnhhSjIyc2NGVFZHamoveHViemlxZ2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTI0ODM0CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy41X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjUKWExEWHdsMjl3RW1tNGZiajVuVXlsTnpLOHNLM0hQckNlQkkwL2ZNOHdyVHdMa3FTMUVwVjZaQ0lRZjBuc04vVGZoY0I5T1I4Ymo0UVhtVzFNWU1uRGc9PQo=",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.5/LocalGravity_2.3.5_aarch64.dmg"
     }
   }
 }

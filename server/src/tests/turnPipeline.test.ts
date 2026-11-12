@@ -193,6 +193,15 @@ async function runTurnPipelineTests() {
   );
   assert.equal(noHedgeResult.shouldContinue, false, 'Should allow clean final summary');
 
+  const colonPreambleResult = detectPrematureStop(
+    'The $ characters are being stripped from terminal commands (known PPC issue on this host). Let me use write_file with an absolute path, which preserves content verbatim:',
+    false,
+    0,
+    5,
+    'extract the zips'
+  );
+  assert.equal(colonPreambleResult.shouldContinue, true, 'Should catch "Let me use ..." colon-ending preamble');
+
   console.log('✅ Phase 1 Turn Pipeline & Compaction Safety Unit Tests PASSED');
 }
 

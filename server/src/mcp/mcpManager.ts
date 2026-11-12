@@ -406,6 +406,7 @@ export class McpClientManager {
       shell: useShell,
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
+      windowsHide: true,
     });
 
     const session: PersistentMcpSession = {

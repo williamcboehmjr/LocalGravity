@@ -27,7 +27,7 @@ export function queryHostHardwareTelemetry(activeTier: ModelTier): HostHardwareT
   try {
     const smi = execSync(
       'nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits',
-      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 800 }
+      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 800, windowsHide: true }
     )
       .toString()
       .trim()
