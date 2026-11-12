@@ -34,7 +34,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.2';
+  let currentVersion = '2.3.3';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
