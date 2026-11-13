@@ -48,3 +48,5 @@ server/scripts/_*
 *.msi
 *.sig
 *-setup.exe
+*.apk
+*.aab

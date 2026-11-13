@@ -1160,7 +1160,7 @@ export class BuiltinToolExecutor {
 
           if (action === 'restart') {
             try {
-              execSync('powershell -Command "Get-Process strata -ErrorAction SilentlyContinue | Stop-Process -Force"', { timeout: 5000 });
+              execSync('powershell -Command "Get-Process strata -ErrorAction SilentlyContinue | Stop-Process -Force"', { timeout: 5000, windowsHide: true });
               await new Promise(r => setTimeout(r, 1000));
               const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
               const configPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.json');
@@ -1172,6 +1172,7 @@ export class BuiltinToolExecutor {
                 cwd: strataCwd,
                 detached: true,
                 stdio: 'ignore',
+                windowsHide: true,
               });
               child.unref();
 
@@ -1280,7 +1281,7 @@ export class BuiltinToolExecutor {
             try {
               const out = execSync(
                 'nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu --format=csv,noheader,nounits',
-                { timeout: 4000 }
+                { timeout: 4000, windowsHide: true }
               )
                 .toString()
                 .trim();
@@ -1317,7 +1318,7 @@ export class BuiltinToolExecutor {
               const psScript = `Get-NetTCPConnection -State Listen | Select-Object -First 25 LocalAddress, LocalPort, OwningProcess | ConvertTo-Json`;
               const out = execSync(
                 `powershell.exe -NoProfile -NonInteractive -Command "${psScript}"`,
-                { timeout: 5000 }
+                { timeout: 5000, windowsHide: true }
               )
                 .toString()
                 .trim();
@@ -1348,7 +1349,7 @@ export class BuiltinToolExecutor {
               const psScript = `Get-Process | Where-Object { $_.ProcessName -like "*${target}*" } | Select-Object Id, ProcessName, WorkingSet64 | ConvertTo-Json`;
               const out = execSync(
                 `powershell.exe -NoProfile -NonInteractive -Command "${psScript}"`,
-                { timeout: 5000 }
+                { timeout: 5000, windowsHide: true }
               )
                 .toString()
                 .trim();
@@ -1627,7 +1628,7 @@ Write-Output "$($bounds.Width)x$($bounds.Height)|$b64"
 
       const out = execSync(
         `powershell.exe -NoProfile -NonInteractive -Command "${psScript.replace(/\r?\n/g, '; ')}"`,
-        { timeout: 5000, maxBuffer: 15 * 1024 * 1024 }
+        { timeout: 5000, maxBuffer: 15 * 1024 * 1024, windowsHide: true }
       )
         .toString()
         .trim();

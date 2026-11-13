@@ -128,8 +128,7 @@ export async function createDaemonServer(options?: {
     tabbyBaseUrl: ports.tabbyBaseUrl,
   });
 
-  // Trigger non-blocking SysRAM pre-warming of inactive EXL2/EXL3 tiers
-  void tabby.prewarmInactiveTiersInSysRam();
+  // Stay in 0 MB VRAM standby on Brain startup; models warm & load only once a client checks in.
 
   const attachmentManager = new AttachmentManager(REPO_ROOT);
   const mcp = new McpClientManager(REPO_ROOT);
@@ -1158,6 +1157,7 @@ export async function createDaemonServer(options?: {
         input: 'protocol=https\nhost=github.com\n\n',
         encoding: 'utf-8',
         timeout: 3000,
+        windowsHide: true,
       });
       if (res.stdout) {
         for (const line of res.stdout.split('\n')) {
@@ -1430,8 +1430,45 @@ export async function createDaemonServer(options?: {
   });
 
   // ==================== WEBSOCKET MULTIPLEXING (`/ws/sync`, `/ws/agent/:sessionId`, `/ws/terminal`) ====================
+  let clientWakeInFlight: Promise<void> | null = null;
+  const ensureModelsWarmedOnClientConnect = () => {
+    if (!tabby.getIdleStatus().isOffloaded) return;
+    if (clientWakeInFlight) return;
+
+    clientWakeInFlight = (async () => {
+      try {
+        console.log('[Strata] Client connected — waking Strata & loading models into RAM/VRAM...');
+        broadcastSync({
+          type: 'MODEL_STATE',
+          payload: {
+            status: 'swapping',
+            active_tier: tabby.getTelemetry().activeTier,
+            active_model: 'waking',
+            text: 'Waking Strata GPU Engine...',
+          },
+        });
+        void tabby.prewarmInactiveTiersInSysRam();
+        const ok = await tabby.wakeGpu();
+        broadcastSync({
+          type: 'MODEL_STATE',
+          payload: {
+            status: ok ? 'ready' : 'error',
+            active_tier: tabby.getTelemetry().activeTier,
+            active_model: 'Qwen 3.8 Flash-Next High',
+            text: ok ? 'GPU Active & Ready' : 'Failed to wake GPU',
+          },
+        });
+      } catch (err) {
+        console.error('[Strata] Client-connect wake error:', err);
+      } finally {
+        clientWakeInFlight = null;
+      }
+    })();
+  };
+
   const handleWsConnection = (socket: WebSocket, initialThreadId?: string) => {
     syncClients.add(socket);
+    void ensureModelsWarmedOnClientConnect();
 
     const projects = db.listProjects();
     const activeProject = projects[0] || db.ensureDefaultProject(REPO_ROOT);

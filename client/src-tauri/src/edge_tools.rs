@@ -21,6 +21,17 @@ pub struct EdgeToolOutput {
 }
 
 pub fn get_identity() -> EdgeIdentity {
+    #[cfg(target_os = "android")]
+    let hostname = std::process::Command::new("getprop")
+        .args(["ro.product.model"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Android-Device".to_string());
+
+    #[cfg(not(target_os = "android"))]
     let hostname = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| {
@@ -42,7 +53,9 @@ pub fn get_identity() -> EdgeIdentity {
     let platform = "windows".to_string();
     #[cfg(target_os = "macos")]
     let platform = "macos".to_string();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    let platform = "android".to_string();
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
     let platform = "linux".to_string();
 
     let home_dir = dirs::home_dir()
@@ -432,7 +445,13 @@ pub async fn execute(tool_name: &str, args: Value, workspace_root: &str) -> Edge
                 c.creation_flags(0x08000000);
                 c
             };
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "android")]
+            let mut cmd = {
+                let mut c = Command::new("/system/bin/sh");
+                c.args(["-c", cmd_str]);
+                c
+            };
+            #[cfg(not(any(target_os = "windows", target_os = "android")))]
             let mut cmd = {
                 let mut c = Command::new("/bin/zsh");
                 c.args(["-c", cmd_str]);

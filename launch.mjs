@@ -216,12 +216,15 @@ async function main() {
       console.log(`  Local Desktop URL       : ${portsCfg.localUrl}`);
       console.log(`  LAN / Remote Web URL    : ${portsCfg.lanUrl}`);
       console.log(`  WebSocket Multiplexer   : ${portsCfg.wsSyncUrl}`);
-      console.log(`  Strata Inference Engine : http://127.0.0.1:8080 (Qwen 3.8 Flash-Next)`);
+      console.log(`  Strata Inference Engine : http://127.0.0.1:8080 (Standby — auto-wakes on demand)`);
       console.log(`  Port Safety Verification: Ports 5000 & 5001 UNTOUCHED`);
       console.log('------------------------------------------------------------------');
 
-      // Proactively ensure Strata Local Inference Engine is running
-      await ensureStrataRunning();
+      // Only pre-launch Strata on startup if explicitly requested (--with-strata);
+      // otherwise Brain starts in 0 MB VRAM standby so games/apps aren't disrupted.
+      if (args.includes('--with-strata')) {
+        await ensureStrataRunning();
+      }
 
       console.log('------------------------------------------------------------------');
       console.log('  [RUNNING IN FOREGROUND]');
@@ -258,7 +261,9 @@ async function main() {
       await new Promise(() => {});
     } else {
       // Detached Daemon Execution
-      await ensureStrataRunning();
+      if (args.includes('--with-strata')) {
+        await ensureStrataRunning();
+      }
       const child = spawn(process.execPath, [distEntry], {
         cwd: SERVER_DIR,
         env: {

@@ -34,7 +34,7 @@ export class TabbyEngine {
   private adminKey: string;
   private modelsRootDirs: string[];
   private activeTier: ModelTier = 'high';
-  private swapStatus: 'idle' | 'swapping' | 'ready' | 'generating' | 'error' = 'ready';
+  private swapStatus: 'idle' | 'swapping' | 'ready' | 'generating' | 'error' = 'idle';
   private lastSwapDurationMs = 840;
   private tokensPerSec = 68.4;
   private connected = false;

@@ -292,6 +292,7 @@ export class LocalGravityDB {
           cwd: rootPath,
           stdio: ['ignore', 'pipe', 'ignore'],
           timeout: 1500,
+          windowsHide: true,
         })
           .toString()
           .trim();

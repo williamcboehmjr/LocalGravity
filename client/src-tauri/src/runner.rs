@@ -39,7 +39,14 @@ impl CommandRunner {
             c
         };
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "android")]
+        let mut cmd = {
+            let mut c = Command::new("/system/bin/sh");
+            c.args(["-c", cmd_string]);
+            c
+        };
+
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let mut cmd = {
             let mut c = Command::new("/bin/zsh");
             c.args(["-c", cmd_string]);

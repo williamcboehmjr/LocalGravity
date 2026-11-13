@@ -19,7 +19,7 @@ export const execute: BuiltinToolHandler = async (args, ctx) => {
 
   return new Promise((resolve) => {
     const start = Date.now();
-    exec(cmd, { cwd: rootDir, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    exec(cmd, { cwd: rootDir, maxBuffer: 10 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const durationMs = Date.now() - start;
       if (error) {
         resolve({

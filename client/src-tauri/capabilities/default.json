@@ -7,10 +7,6 @@
     "core:default",
     "shell:default",
     "fs:default",
-    "updater:allow-check",
-    "updater:allow-download",
-    "updater:allow-download-and-install",
-    "updater:allow-install",
     "process:allow-restart",
     "process:allow-exit"
   ]

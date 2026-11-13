@@ -28,7 +28,9 @@ fn get_system_platform() -> String {
     return "windows".to_string();
     #[cfg(target_os = "macos")]
     return "macos".to_string();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return "android".to_string();
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
     return "linux".to_string();
 }
 
@@ -183,11 +185,15 @@ async fn install_msi_update(msi_url: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_system_platform,
             get_edge_identity,

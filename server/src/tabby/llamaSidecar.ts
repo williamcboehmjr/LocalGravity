@@ -175,14 +175,17 @@ export class LlamaMoESidecar {
 
     // 2. Safely find and terminate any process listening strictly on port 8080 (never 5000/5001)
     try {
-      const netstatOutput = execSync(`netstat -ano -p tcp | findstr :${this.port}`, { encoding: 'utf-8' });
+      const netstatOutput = execSync(`netstat -ano -p tcp | findstr :${this.port}`, {
+        encoding: 'utf-8',
+        windowsHide: true,
+      });
       for (const line of netstatOutput.split(/\r?\n/)) {
         if (line.includes(`:${this.port}`) && line.includes('LISTENING')) {
           const parts = line.trim().split(/\s+/);
           const pid = parts[parts.length - 1];
           if (pid && /^\d+$/.test(pid) && pid !== '0' && pid !== String(process.pid)) {
             console.log(`[LlamaMoE] Terminating port ${this.port} process PID ${pid}...`);
-            execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
+            execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
           }
         }
       }

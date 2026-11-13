@@ -207,6 +207,7 @@ export class SwarmManager {
         cwd: baseRoot,
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 2000,
+        windowsHide: true,
       })
         .toString()
         .trim();
@@ -220,6 +221,7 @@ export class SwarmManager {
           cwd: baseRoot,
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: 8000,
+          windowsHide: true,
         });
         return targetDir;
       } catch {
@@ -249,6 +251,7 @@ export class SwarmManager {
         cwd: baseRoot,
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 4000,
+        windowsHide: true,
       });
     } catch {}
     try {
