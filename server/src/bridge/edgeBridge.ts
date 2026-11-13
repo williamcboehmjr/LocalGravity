@@ -85,6 +85,26 @@ export class EdgeBridgeManager {
     }
   }
 
+  public getBrainHostname(): string {
+    return os.hostname();
+  }
+
+  public isRemoteHost(hostName?: string): boolean {
+    if (!hostName || !hostName.trim()) return false;
+    return hostName.trim().toLowerCase() !== os.hostname().toLowerCase();
+  }
+
+  public getClientByHost(hostName: string): EdgeClientInfo | null {
+    const target = hostName.trim().toLowerCase();
+    if (!target || target === os.hostname().toLowerCase()) return null;
+    for (const client of this.clients.values()) {
+      if (client.hostname.trim().toLowerCase() === target) {
+        return client;
+      }
+    }
+    return null;
+  }
+
   public getRemoteClientForThread(threadId: string): EdgeClientInfo | null {
     const clientId = this.threadToClientId.get(threadId);
     if (!clientId) return null;

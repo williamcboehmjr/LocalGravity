@@ -165,6 +165,7 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
                         threadId: ctx.threadId,
                         messageId: `${ctx.messageId}:${task.id}:${step}`,
                         workspaceRoot: scopedRoot,
+                        projectHost: ctx.projectHost,
                         abortSignal: ctx.abortSignal,
                       });
                       executed.push({

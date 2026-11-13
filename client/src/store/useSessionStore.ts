@@ -79,6 +79,7 @@ export interface ProjectItem {
   id: string;
   name: string;
   root_path: string;
+  host_name?: string;
   git_branch: string;
   default_model_tier: ModelTier;
   default_thinking_budget: ThinkingBudget;
@@ -246,6 +247,9 @@ interface SessionState {
   subagentTasks: SubagentTaskItem[];
   selectedSubagentId: string | null;
   backgroundTasks: BackgroundTaskItem[];
+  localHostName: string;
+  brainHostname: string;
+  edgeHosts: Array<{ clientId: string; hostname: string; platform: string }>;
   swarmState: SwarmState | null;
   dpiScale: number;
   threadHistory: string[];
@@ -254,6 +258,11 @@ interface SessionState {
   setProjects: (projects: ProjectItem[], activeId?: string) => void;
   setActiveProjectId: (projectId: string) => void;
   setSelectedSubagentId: (id: string | null) => void;
+  setLocalHostName: (name: string) => void;
+  setHostPresence: (
+    brainHostname?: string,
+    edgeHosts?: Array<{ clientId: string; hostname: string; platform: string }>
+  ) => void;
   setThreads: (threads: ThreadItem[], activeThreadId?: string) => void;
   hydrateMessagesFromServer: (serverMsgs: any[], activeStreams?: any[], threadStatus?: string, serverActiveTurn?: any) => void;
   setWorkspacePath: (path: string) => void;
@@ -421,6 +430,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   subagentTasks: [],
   selectedSubagentId: null,
   backgroundTasks: [],
+  localHostName: '',
+  brainHostname: '',
+  edgeHosts: [],
   swarmState: null,
   dpiScale: getInitialDpiScale(),
   threadHistory: [initialSessionId],
@@ -511,6 +523,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     }),
   setSelectedSubagentId: (id) => set({ selectedSubagentId: id }),
+  setLocalHostName: (name) => set({ localHostName: name }),
+  setHostPresence: (brainHostname, edgeHosts) =>
+    set((state) => ({
+      brainHostname: brainHostname ?? state.brainHostname,
+      edgeHosts: edgeHosts ?? state.edgeHosts,
+    })),
 
   setThreads: (threads, activeThreadId) =>
     set((state) => {

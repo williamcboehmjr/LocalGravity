@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 export type ModelTier = 'low' | 'medium' | 'high';
@@ -13,6 +14,7 @@ export interface ProjectRecord {
   id: string;
   name: string;
   root_path: string;
+  host_name?: string;
   git_branch: string;
   default_model_tier: ModelTier;
   default_thinking_budget: ThinkingBudget;
@@ -154,6 +156,7 @@ export class LocalGravityDB {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         root_path TEXT NOT NULL,
+        host_name TEXT NOT NULL DEFAULT '',
         git_branch TEXT NOT NULL DEFAULT 'main',
         default_model_tier TEXT NOT NULL DEFAULT 'high',
         default_thinking_budget TEXT NOT NULL DEFAULT 'fast',
@@ -266,6 +269,13 @@ export class LocalGravityDB {
       CREATE INDEX IF NOT EXISTS idx_swarm_members_swarm ON swarm_members(swarm_id);
       CREATE INDEX IF NOT EXISTS idx_swarm_messages_swarm_seq ON swarm_messages(swarm_id, seq);
     `);
+
+    try {
+      this.db.exec(`ALTER TABLE projects ADD COLUMN host_name TEXT NOT NULL DEFAULT ''`);
+    } catch {}
+    try {
+      this.db.prepare(`UPDATE projects SET host_name = ? WHERE host_name = '' OR host_name IS NULL`).run(os.hostname());
+    } catch {}
   }
 
   public getPragmas(): { journal_mode: string; synchronous: number; foreign_keys: number } {
@@ -325,6 +335,7 @@ export class LocalGravityDB {
     id?: string;
     name: string;
     root_path: string;
+    host_name?: string;
     git_branch?: string;
     default_model_tier?: ModelTier;
     default_thinking_budget?: ThinkingBudget;
@@ -335,12 +346,14 @@ export class LocalGravityDB {
     const id = input.id || crypto.randomUUID();
     const now = new Date().toISOString();
     const normalizedPath = input.root_path.replace(/\\/g, '/');
+    const hostName = (input.host_name || '').trim() || os.hostname();
     const gitBranch = input.git_branch || this.detectGitBranch(normalizedPath);
 
     const record: ProjectRecord = {
       id,
       name: input.name,
       root_path: normalizedPath,
+      host_name: hostName,
       git_branch: gitBranch,
       default_model_tier: input.default_model_tier || 'high',
       default_thinking_budget: input.default_thinking_budget || 'fast',
@@ -354,10 +367,10 @@ export class LocalGravityDB {
     this.db
       .prepare(
         `INSERT INTO projects (
-          id, name, root_path, git_branch, default_model_tier, default_thinking_budget,
+          id, name, root_path, host_name, git_branch, default_model_tier, default_thinking_budget,
           custom_instructions, enabled_mcp_servers, pinned_files, last_opened_at, created_at
         ) VALUES (
-          @id, @name, @root_path, @git_branch, @default_model_tier, @default_thinking_budget,
+          @id, @name, @root_path, @host_name, @git_branch, @default_model_tier, @default_thinking_budget,
           @custom_instructions, @enabled_mcp_servers, @pinned_files, @last_opened_at, @created_at
         )`
       )
@@ -371,6 +384,7 @@ export class LocalGravityDB {
     updates: Partial<{
       name: string;
       root_path: string;
+      host_name: string;
       git_branch: string;
       default_model_tier: ModelTier;
       default_thinking_budget: ThinkingBudget;
@@ -392,6 +406,7 @@ export class LocalGravityDB {
       ...existing,
       name: updates.name ?? existing.name,
       root_path: nextRoot,
+      host_name: updates.host_name !== undefined ? updates.host_name : existing.host_name,
       git_branch: nextBranch,
       default_model_tier: updates.default_model_tier ?? existing.default_model_tier,
       default_thinking_budget: updates.default_thinking_budget ?? existing.default_thinking_budget,
@@ -410,6 +425,7 @@ export class LocalGravityDB {
         `UPDATE projects SET
           name = @name,
           root_path = @root_path,
+          host_name = @host_name,
           git_branch = @git_branch,
           default_model_tier = @default_model_tier,
           default_thinking_budget = @default_thinking_budget,

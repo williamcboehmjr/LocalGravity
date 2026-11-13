@@ -529,6 +529,14 @@ const StepTimeline: React.FC<{
   if (steps.length === 0 && !isActive) return null;
 
   const runningTool = toolCalls.find((t) => t.status === 'running');
+  const latestTool = runningTool || (toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : undefined);
+  const elapsedSec = thoughtElapsedMs ? Math.max(1, Math.round(thoughtElapsedMs / 1000)) : 0;
+  const elapsedLabel =
+    elapsedSec >= 60
+      ? `${Math.floor(elapsedSec / 60)}m${elapsedSec % 60 ? ` ${elapsedSec % 60}s` : ''}`
+      : elapsedSec > 0
+      ? `${elapsedSec}s`
+      : '';
   const headline = isActive
     ? statusLabel ||
       (runningTool
@@ -539,48 +547,65 @@ const StepTimeline: React.FC<{
         : thoughtStreaming
         ? 'Thinking…'
         : 'Working…')
-    : `Completed${toolCalls.length > 0 ? ` • ${toolCalls.length} action${toolCalls.length === 1 ? '' : 's'}` : ''}`;
+    : `${elapsedLabel ? `Worked for ${elapsedLabel}` : 'Completed'}${
+        toolCalls.length > 0 ? ` • ${toolCalls.length} action${toolCalls.length === 1 ? '' : 's'}` : ''
+      }`;
 
   return (
-    <div className="my-2 rounded-xl border border-[#26282C] bg-[#141518] overflow-hidden shadow-sm">
+    <div className="my-1">
       <button
         type="button"
         onClick={() => setUserExpanded(!expanded)}
         disabled={steps.length === 0}
-        className="w-full flex items-center justify-between gap-2.5 px-3.5 py-2 text-xs text-left hover:bg-[#1C1D21] transition-colors cursor-pointer select-none disabled:cursor-default"
+        className="inline-flex items-center gap-1.5 py-0.5 text-[13px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer select-none disabled:cursor-default"
       >
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          {isActive ? (
-            <Loader2 className="w-4 h-4 text-[#8AB4F8] animate-spin shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span
-            className={`text-[13.5px] truncate ${
-              isActive ? 'font-semibold text-[#E8EAED]' : 'font-medium text-[#BDC1C6]'
-            }`}
-          >
-            {headline}
-          </span>
-        </div>
+        {isActive && <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />}
+        <span className={isActive ? 'font-medium text-[#BDC1C6]' : 'font-normal text-[#8E8E93]'}>
+          {headline}
+        </span>
         {steps.length > 0 && (
-          <span className="text-[12px] text-[#8AB4F8] font-medium flex items-center gap-0.5 shrink-0">
-            {expanded ? 'Hide' : 'Details'}
-            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          </span>
+          expanded ? (
+            <ChevronDown className="w-3.5 h-3.5 text-[#6E6E73] shrink-0" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5 text-[#6E6E73] shrink-0" />
+          )
         )}
       </button>
 
-      {!expanded && isActive && activeWorkingPreview && (
-        <div className="px-3.5 pb-2.5 pt-0.5 text-[12px] text-[#9AA0A6] leading-snug line-clamp-2 border-t border-[#1E2024]/70">
-          {activeWorkingPreview}
+      {!expanded && isActive && (
+        <div className="mt-1.5 space-y-1.5">
+          {activeWorkingPreview && (
+            <div className="text-[14px] text-[#E8EAED] leading-[1.65] line-clamp-3">
+              {activeWorkingPreview}
+            </div>
+          )}
+          {latestTool && (
+            <button
+              type="button"
+              onClick={() => setUserExpanded(true)}
+              className="inline-flex items-center gap-1.5 text-[13px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer"
+            >
+              {latestTool.status === 'running' ? (
+                <Loader2 className="w-3 h-3 text-[#8AB4F8] animate-spin shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-3 h-3 text-emerald-400/80 shrink-0" />
+              )}
+              <span className="truncate max-w-md">
+                {(() => {
+                  const { prefix, target } = formatCompactToolLabel(latestTool);
+                  return `${prefix} ${target}`;
+                })()}
+              </span>
+              <ChevronRight className="w-3 h-3 text-[#6E6E73] shrink-0" />
+            </button>
+          )}
         </div>
       )}
 
       {expanded && steps.length > 0 && (
         <div
           ref={bodyRef}
-          className="px-3 pb-2.5 pt-1.5 border-t border-[#222327] max-h-72 overflow-y-auto space-y-0.5 bg-[#101113]"
+          className="mt-1.5 pl-3 border-l border-[#26282C] max-h-72 overflow-y-auto space-y-1"
         >
           {steps.map((s, idx) => {
             const isLatest = idx === latestIdx && isActive;
@@ -913,7 +938,7 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
           if (msg.role === 'user') {
             return (
               <div key={msg.id} className="w-full">
-                <div className="w-full bg-[#1C1D20] border border-[#2B2C30] rounded-2xl px-5 py-4 text-[16px] sm:text-[17px] text-[#E8EAED] space-y-2.5 shadow-sm">
+                <div className="w-full bg-[#1C1D20] border border-[#2B2C30] rounded-2xl px-4 py-2.5 text-[14px] text-[#E8EAED] space-y-2 shadow-sm">
                   {/* File & Image Attachments */}
                   {((msg.images && msg.images.length > 0) || (msg.attachments && msg.attachments.length > 0)) && (
                     <div className="flex flex-wrap items-center gap-2.5 overflow-x-auto pb-1">
@@ -996,7 +1021,7 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
 
               {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
               {content && !showTransientInTimeline && (
-                <div className="text-[16px] sm:text-[17px] text-[#E8EAED] leading-[1.75] pt-1 prose prose-invert max-w-none">
+                <div className="text-[14px] text-[#E8EAED] leading-[1.65] pt-0.5 prose prose-invert max-w-none">
                   {splitAgentEmbeds(content).map((seg, segIdx) =>
                     seg.kind === 'embed' ? (
                       <AgentEmbedWidget
@@ -1011,28 +1036,28 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                         urlTransform={(u) => u}
                         components={{
                           p({ children }) {
-                            return <p className="my-3 leading-[1.75] text-[16px] sm:text-[17px] text-[#E8EAED]">{children}</p>;
+                            return <p className="my-2.5 leading-[1.65] text-[14px] text-[#E8EAED]">{children}</p>;
                           },
                           ul({ children }) {
-                            return <ul className="list-disc pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
+                            return <ul className="list-disc pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
                           },
                           ol({ children }) {
-                            return <ol className="list-decimal pl-5 sm:pl-6 my-3.5 space-y-2 text-[16px] sm:text-[17px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
+                            return <ol className="list-decimal pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
                           },
                           li({ children }) {
-                            return <li className="leading-[1.75] text-[#E8EAED] pl-0.5">{children}</li>;
+                            return <li className="leading-[1.65] text-[#E8EAED] pl-0.5">{children}</li>;
                           },
                           h1({ children }) {
-                            return <h1 className="text-[22px] sm:text-[24px] font-semibold text-white mt-6 mb-3.5 pb-1.5 border-b border-[#26282C]">{children}</h1>;
+                            return <h1 className="text-[18px] font-semibold text-white mt-5 mb-2.5 pb-1 border-b border-[#26282C]">{children}</h1>;
                           },
                           h2({ children }) {
-                            return <h2 className="text-[19px] sm:text-[21px] font-semibold text-white mt-5 mb-3">{children}</h2>;
+                            return <h2 className="text-[16px] font-semibold text-white mt-4 mb-2">{children}</h2>;
                           },
                           h3({ children }) {
-                            return <h3 className="text-[17.5px] sm:text-[18.5px] font-semibold text-white mt-4 mb-2">{children}</h3>;
+                            return <h3 className="text-[15px] font-semibold text-white mt-3.5 mb-1.5">{children}</h3>;
                           },
                           h4({ children }) {
-                            return <h4 className="text-[16px] sm:text-[17px] font-semibold text-[#E8EAED] mt-3 mb-1.5">{children}</h4>;
+                            return <h4 className="text-[14px] font-semibold text-[#E8EAED] mt-3 mb-1">{children}</h4>;
                           },
                           hr() {
                             return <hr className="my-5 border-t border-[#26282C]" />;

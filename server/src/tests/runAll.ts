@@ -14,6 +14,7 @@ const tests = [
   'artifactManager.test.js',
   'turnPipeline.test.js',
   'swarmManager.test.js',
+  'edgeBridge.test.js',
 ];
 
 console.log('==============================================================');

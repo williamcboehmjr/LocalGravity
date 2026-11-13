@@ -12,6 +12,7 @@ import {
   Folder,
   FolderPlus,
   ListFilter,
+  Monitor,
 } from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 
@@ -40,6 +41,9 @@ export const SessionList: React.FC<SessionListProps> = ({
     setActiveProjectId,
     setProjects,
     apiBaseUrl,
+    localHostName,
+    brainHostname,
+    edgeHosts,
     sessions,
     sessionId,
     switchSession,
@@ -56,6 +60,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [newProjName, setNewProjName] = useState('');
   const [newProjPath, setNewProjPath] = useState(workspacePath || '.');
   const [viewMode, setViewMode] = useState<'projects' | 'history'>('projects');
+  const [localOnly, setLocalOnly] = useState(false);
 
   // Global Cmd/Ctrl+N shortcut for New Conversation
   useEffect(() => {
@@ -100,7 +105,11 @@ export const SessionList: React.FC<SessionListProps> = ({
       const res = await fetch(`${apiBaseUrl}/api/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, root_path: newProjPath.trim() }),
+        body: JSON.stringify({
+          name,
+          root_path: newProjPath.trim(),
+          host_name: localHostName || brainHostname || undefined,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -273,6 +282,20 @@ export const SessionList: React.FC<SessionListProps> = ({
           {viewMode === 'history' ? 'All Conversations' : 'Projects'}
         </span>
         <div className="flex items-center gap-1">
+          {viewMode !== 'history' && (
+            <button
+              type="button"
+              onClick={() => setLocalOnly((v) => !v)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                localOnly
+                  ? 'bg-[#8AB4F8]/15 text-[#8AB4F8] border border-[#8AB4F8]/30'
+                  : 'text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#1E1E20]'
+              }`}
+              title={localOnly ? 'Showing only this computer' : 'Showing all computers'}
+            >
+              {localOnly ? 'This PC' : 'All PCs'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setViewMode(viewMode === 'history' ? 'projects' : 'history')}
@@ -335,51 +358,102 @@ export const SessionList: React.FC<SessionListProps> = ({
             {filteredSessions.map((s) => renderSessionRow(s))}
           </div>
         ) : (
-          projects.map((proj) => {
-            const isProjActive = proj.id === activeProjectId;
-            return (
-              <div key={proj.id} className="space-y-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveProjectId(proj.id);
-                    onSelectProject?.(proj.id);
-                  }}
-                  className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-xs text-left transition-colors ${
-                    isProjActive
-                      ? 'text-[#A0A0A5] font-medium'
-                      : 'text-[#6E6E73] hover:text-[#A0A0A5]'
-                  }`}
-                  title={proj.root_path}
-                >
-                  <Folder className="w-3.5 h-3.5 shrink-0 text-[#6E6E73]" />
-                  <span className="truncate">{proj.name}</span>
-                </button>
+          (() => {
+            const myHost = (localHostName || brainHostname || '').trim().toLowerCase();
+            const isHostOnline = (host: string) => {
+              const h = host.trim().toLowerCase();
+              if (!h || h === brainHostname.trim().toLowerCase()) return true;
+              return edgeHosts.some((e) => e.hostname.trim().toLowerCase() === h);
+            };
+            const hostMap = new Map<string, typeof projects>();
+            for (const p of projects) {
+              const owner = (p.host_name || brainHostname || 'Local').trim();
+              if (localOnly && myHost && owner.toLowerCase() !== myHost) continue;
+              const arr = hostMap.get(owner) || [];
+              arr.push(p);
+              hostMap.set(owner, arr);
+            }
+            const sortedHosts = Array.from(hostMap.keys()).sort((a, b) => {
+              const aLocal = myHost && a.toLowerCase() === myHost;
+              const bLocal = myHost && b.toLowerCase() === myHost;
+              if (aLocal && !bLocal) return -1;
+              if (!aLocal && bLocal) return 1;
+              return a.localeCompare(b);
+            });
 
-                {isProjActive ? (
-                  <div className="pl-2 space-y-0.5">
-                    {filteredSessions.length > 0 ? (
-                      filteredSessions.map((s) => renderSessionRow(s))
-                    ) : (
-                      <div className="px-2.5 py-1 text-[11px] text-[#55555A]">
-                        No conversations yet
+            return sortedHosts.map((hostName) => {
+              const hostProjs = hostMap.get(hostName) || [];
+              const isLocal = Boolean(myHost && hostName.toLowerCase() === myHost);
+              const online = isHostOnline(hostName);
+              return (
+                <div key={hostName} className="space-y-1.5">
+                  <div className="flex items-center justify-between px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6E6E73]">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <Monitor className="w-3 h-3 shrink-0" />
+                      <span className="truncate">{isLocal ? `${hostName} (This PC)` : hostName}</span>
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 text-[9.5px] font-normal lowercase ${
+                        online ? 'text-emerald-400' : 'text-[#55555A]'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          online ? 'bg-emerald-400' : 'bg-[#55555A]'
+                        }`}
+                      />
+                      {online ? 'online' : 'offline'}
+                    </span>
+                  </div>
+                  {hostProjs.map((proj) => {
+                    const isProjActive = proj.id === activeProjectId;
+                    return (
+                      <div key={proj.id} className="space-y-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveProjectId(proj.id);
+                            onSelectProject?.(proj.id);
+                          }}
+                          className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-xs text-left transition-colors ${
+                            isProjActive
+                              ? 'text-[#A0A0A5] font-medium'
+                              : 'text-[#6E6E73] hover:text-[#A0A0A5]'
+                          }`}
+                          title={`${proj.root_path} (${hostName})`}
+                        >
+                          <Folder className="w-3.5 h-3.5 shrink-0 text-[#6E6E73]" />
+                          <span className="truncate">{proj.name}</span>
+                        </button>
+
+                        {isProjActive ? (
+                          <div className="pl-2 space-y-0.5">
+                            {filteredSessions.length > 0 ? (
+                              filteredSessions.map((s) => renderSessionRow(s))
+                            ) : (
+                              <div className="px-2.5 py-1 text-[11px] text-[#55555A]">
+                                No conversations yet
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => {
+                              setActiveProjectId(proj.id);
+                              onSelectProject?.(proj.id);
+                            }}
+                            className="pl-4.5 px-2.5 py-0.5 text-[11px] text-[#55555A] hover:text-[#8E8E93] cursor-pointer truncate"
+                          >
+                            Switch to view conversations
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ) : (
-                  <div
-                    onClick={() => {
-                      setActiveProjectId(proj.id);
-                      onSelectProject?.(proj.id);
-                    }}
-                    className="pl-4.5 px-2.5 py-0.5 text-[11px] text-[#55555A] hover:text-[#8E8E93] cursor-pointer truncate"
-                  >
-                    Switch to view conversations
-                  </div>
-                )}
-              </div>
-            );
-          })
+                    );
+                  })}
+                </div>
+              );
+            });
+          })()
         )}
       </div>
     </div>

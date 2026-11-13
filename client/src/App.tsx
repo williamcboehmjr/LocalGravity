@@ -307,6 +307,7 @@ export const App: React.FC = () => {
             import('@tauri-apps/api/core')
               .then(({ invoke }) => invoke<{ hostname: string; platform: string; home_dir: string }>('get_edge_identity'))
               .then((identity) => {
+                useSessionStore.getState().setLocalHostName(identity.hostname);
                 if (!isDisposed && ws && ws.readyState === WebSocket.OPEN) {
                   ws.send(
                     JSON.stringify({
@@ -423,7 +424,15 @@ export const App: React.FC = () => {
               return;
             }
 
+            if (type === 'EDGE_HOSTS_UPDATE') {
+              useSessionStore.getState().setHostPresence(payload?.brainHost, payload?.edgeHosts);
+              return;
+            }
+
             if (type === 'SYNC_STATE') {
+              if (payload.brainHost || payload.edgeHosts) {
+                useSessionStore.getState().setHostPresence(payload.brainHost, payload.edgeHosts);
+              }
               if (payload.projects?.length > 0) {
                 setProjects(payload.projects, payload.activeProject?.id);
               }

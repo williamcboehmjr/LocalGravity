@@ -19,6 +19,7 @@ export interface ToolExecutionContext {
   threadId: string;
   messageId: string;
   workspaceRoot: string;
+  projectHost?: string;
   abortSignal?: AbortSignal;
   swarmAgentName?: string;
   onStdoutChunk?: (chunk: string) => void;
@@ -151,15 +152,35 @@ export class BuiltinToolExecutor {
     try {
       const edgeBridge = EdgeBridgeManager.getInstance();
       if (edgeBridge.isHostTool(toolName)) {
-        const remoteClient = edgeBridge.getRemoteClientForThread(ctx.threadId);
-        if (remoteClient) {
+        if (ctx.projectHost && edgeBridge.isRemoteHost(ctx.projectHost)) {
+          const targetClient = edgeBridge.getClientByHost(ctx.projectHost);
+          if (!targetClient) {
+            return {
+              stdout: '',
+              stderr: `Host "${ctx.projectHost}" is currently offline. Open LocalGravity on "${ctx.projectHost}" to run tools on this project.`,
+              exitCode: 1,
+              durationMs: 0,
+            };
+          }
           return await edgeBridge.executeRemoteTool(
-            remoteClient,
+            targetClient,
             toolName,
             args,
             ctx.workspaceRoot,
             ctx.abortSignal
           );
+        }
+        if (!ctx.projectHost) {
+          const remoteClient = edgeBridge.getRemoteClientForThread(ctx.threadId);
+          if (remoteClient) {
+            return await edgeBridge.executeRemoteTool(
+              remoteClient,
+              toolName,
+              args,
+              ctx.workspaceRoot,
+              ctx.abortSignal
+            );
+          }
         }
       }
 

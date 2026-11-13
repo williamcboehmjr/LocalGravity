@@ -13,6 +13,7 @@ export interface ToolExecutionContext {
   threadId: string;
   messageId: string;
   workspaceRoot: string;
+  projectHost?: string;
   abortSignal?: AbortSignal;
   swarmAgentName?: string;
   onStdoutChunk?: (chunk: string) => void;

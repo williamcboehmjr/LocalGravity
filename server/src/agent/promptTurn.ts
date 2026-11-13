@@ -290,10 +290,15 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
-      const remoteClient = EdgeBridgeManager.getInstance().getRemoteClientForThread(thread.id);
+      const edgeBridge = EdgeBridgeManager.getInstance();
+      const remoteClient = project.host_name
+        ? edgeBridge.getClientByHost(project.host_name)
+        : edgeBridge.getRemoteClientForThread(thread.id);
       const remoteHostNote = remoteClient
         ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools in this turn execute natively on the connected client host "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}). Any local paths or run_terminal commands (including Python, Node, PowerShell, etc.) run directly on "${remoteClient.hostname}".\n`
-        : '';
+        : project.host_name && edgeBridge.isRemoteHost(project.host_name)
+          ? `\n[REMOTE HOST OFFLINE]: This project belongs to "${project.host_name}", which is currently offline. Do not attempt local file or terminal operations on the Central Brain host.\n`
+          : '';
 
       const systemDirective =
         `You are LocalGravity, an autonomous AI engineering assistant running directly on the user's workstation.\n` +
@@ -709,6 +714,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 threadId: thread!.id,
                 messageId: assistantMsg.id,
                 workspaceRoot: project.root_path,
+                projectHost: project.host_name || undefined,
                 onStdoutChunk: (chunk) => {
                   send({
                     type: 'TOOL_STREAM',

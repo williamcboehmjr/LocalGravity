@@ -643,10 +643,17 @@ export async function createDaemonServer(options?: {
     const body = (req.body || {}) as any;
     const resolvedRoot =
       body.root_path && body.root_path !== '.' ? body.root_path : REPO_ROOT;
-    harness.ensureWorkspaceHarness(resolvedRoot);
+    const hostName =
+      typeof body.host_name === 'string' && body.host_name.trim()
+        ? body.host_name.trim()
+        : os.hostname();
+    if (!EdgeBridgeManager.getInstance().isRemoteHost(hostName)) {
+      harness.ensureWorkspaceHarness(resolvedRoot);
+    }
     const project = db.createProject({
       name: body.name || path.basename(resolvedRoot) || 'Workspace',
       root_path: resolvedRoot,
+      host_name: hostName,
       default_model_tier: body.default_model_tier || 'high',
       default_thinking_budget: body.default_thinking_budget || 'fast',
       custom_instructions: body.custom_instructions || '',
@@ -1457,6 +1464,8 @@ export async function createDaemonServer(options?: {
           backgroundTasks: taskMgr.listTasks(),
           artifacts: artifactMgr.listArtifacts(targetThreadId),
           swarm: targetThreadId ? swarmMgr.getSwarmSnapshot(targetThreadId) : null,
+          brainHost: os.hostname(),
+          edgeHosts: EdgeBridgeManager.getInstance().listClients(),
         },
       })
     );
@@ -1490,6 +1499,8 @@ export async function createDaemonServer(options?: {
                 backgroundTasks: taskMgr.listTasks(),
                 artifacts: artifactMgr.listArtifacts(reqThreadId),
                 swarm: reqThreadId ? swarmMgr.getSwarmSnapshot(reqThreadId) : null,
+                brainHost: os.hostname(),
+                edgeHosts: EdgeBridgeManager.getInstance().listClients(),
               },
             })
           );
@@ -1499,6 +1510,13 @@ export async function createDaemonServer(options?: {
               hostname: String(payload.hostname || 'unknown-host'),
               platform: String(payload.platform || 'unknown'),
               homeDir: payload.home_dir ? String(payload.home_dir) : undefined,
+            });
+            broadcastSync({
+              type: 'EDGE_HOSTS_UPDATE',
+              payload: {
+                brainHost: os.hostname(),
+                edgeHosts: EdgeBridgeManager.getInstance().listClients(),
+              },
             });
           }
         } else if (type === 'EDGE_TOOL_RESULT') {
@@ -1595,6 +1613,13 @@ export async function createDaemonServer(options?: {
     socket.on('close', () => {
       syncClients.delete(socket);
       EdgeBridgeManager.getInstance().unregisterSocket(socket);
+      broadcastSync({
+        type: 'EDGE_HOSTS_UPDATE',
+        payload: {
+          brainHost: os.hostname(),
+          edgeHosts: EdgeBridgeManager.getInstance().listClients(),
+        },
+      });
     });
   };
 
