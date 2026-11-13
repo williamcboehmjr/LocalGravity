@@ -56,6 +56,7 @@ export const SessionList: React.FC<SessionListProps> = ({
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [confirmDeleteProjectId, setConfirmDeleteProjectId] = useState<string | null>(null);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [newProjName, setNewProjName] = useState('');
   const [newProjPath, setNewProjPath] = useState(workspacePath || '.');
@@ -121,6 +122,24 @@ export const SessionList: React.FC<SessionListProps> = ({
     } catch {}
     setIsAddingProject(false);
     setNewProjName('');
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/projects/${projectId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const remaining = projects.filter((p) => p.id !== projectId);
+        const nextActive =
+          activeProjectId === projectId ? (remaining[0]?.id ?? '') : activeProjectId;
+        setProjects(remaining, nextActive || undefined);
+        if (activeProjectId === projectId && nextActive) {
+          onSelectProject?.(nextActive);
+        }
+      }
+    } catch {}
+    setConfirmDeleteProjectId(null);
   };
 
   const filteredSessions = sessions.filter((s) =>
@@ -407,24 +426,67 @@ export const SessionList: React.FC<SessionListProps> = ({
                   </div>
                   {hostProjs.map((proj) => {
                     const isProjActive = proj.id === activeProjectId;
+                    const isConfirmingDelete = confirmDeleteProjectId === proj.id;
                     return (
                       <div key={proj.id} className="space-y-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveProjectId(proj.id);
-                            onSelectProject?.(proj.id);
-                          }}
-                          className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-xs text-left transition-colors ${
-                            isProjActive
-                              ? 'text-[#A0A0A5] font-medium'
-                              : 'text-[#6E6E73] hover:text-[#A0A0A5]'
-                          }`}
-                          title={`${proj.root_path} (${hostName})`}
-                        >
-                          <Folder className="w-3.5 h-3.5 shrink-0 text-[#6E6E73]" />
-                          <span className="truncate">{proj.name}</span>
-                        </button>
+                        <div className="group/proj flex items-center justify-between gap-1 px-2 py-1 rounded-md hover:bg-[#1C1C1F] transition-colors">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmDeleteProjectId(null);
+                              setActiveProjectId(proj.id);
+                              onSelectProject?.(proj.id);
+                            }}
+                            className={`flex-1 min-w-0 flex items-center gap-2 text-xs text-left transition-colors ${
+                              isProjActive
+                                ? 'text-[#A0A0A5] font-medium'
+                                : 'text-[#6E6E73] group-hover/proj:text-[#A0A0A5]'
+                            }`}
+                            title={`${proj.root_path} (${hostName})`}
+                          >
+                            <Folder className="w-3.5 h-3.5 shrink-0 text-[#6E6E73]" />
+                            <span className="truncate">{proj.name}</span>
+                          </button>
+
+                          {isConfirmingDelete ? (
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDeleteProject(proj.id);
+                                }}
+                                className="p-1 text-red-400 hover:text-red-300 rounded transition-colors"
+                                title="Confirm delete project"
+                              >
+                                <Check className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteProjectId(null);
+                                }}
+                                className="p-1 text-[#6E6E73] hover:text-[#E3E3E3] rounded transition-colors"
+                                title="Cancel"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteProjectId(proj.id);
+                              }}
+                              className="opacity-0 group-hover/proj:opacity-100 p-1 text-[#6E6E73] hover:text-red-400 rounded transition-all shrink-0"
+                              title="Delete project"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
 
                         {isProjActive ? (
                           <div className="pl-2 space-y-0.5">

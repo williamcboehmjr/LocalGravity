@@ -1,15 +1,15 @@
 {
-  "version": "v2.3.6",
-  "notes": "Host-siloed projects with cross-client remote control, edgeBridge unit tests, and borderless smart-collapsing chat timeline with uniform 14px typography.",
-  "pub_date": "2026-11-13T00:26:32.283Z",
+  "version": "v2.3.7",
+  "notes": "Add inline project deletion with confirmation and cross-client PROJECT_DELETED WebSocket sync.",
+  "pub_date": "2026-11-13T01:07:32.913Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelJ4N2loR2NPSmMrMUpBYVpOcGtva0RHY3J2TU0xcUxpUldjOW82OXR1VlJNa1RoaGZVWjdqaWVBT1hBeW0yVzR2V24wNC8rdUorRDc2eGVIUTZzV0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTI5NTkwCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy42X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuNgo5WWZkN0l3cG9pNzFOSHpnc3FVUkJJQzRtTEtycGxUK1VibVJqb3FNVzFtWGEyM3NiMUlmdGFoaU9Vb0hVMTVIOFJ3OUJzNEorZTBsRGE0UkJFZ2pDZz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.6/LocalGravity_2.3.6_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelJVYlBYMDVVVC9nUUYrQjJ6R2lXM1dXOW92bCtBd0Y3R0paWkNGUU5EbEdHYWFHVlpzajVCK2E1UXJDa3g0c3hvOHQ5cEl6OVVRWUlkeTRXVmZsYndnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTMyMDUxCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy43X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuNwo4Qmc5MXdQbjAwVmxBWllFOFgzNnk3dC8zWGtyZVVjWk9nSy9OOVJobzFVeTZuYU5YMlpXNEE3UFZGWVZaSndOYzVhQytCOS9wNnQvRy9ieEI3Z1RBUT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.7/LocalGravity_2.3.7_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelRxQkNOQ01FQ0gvdHhkS2E3TEJnUldjOFREVWVGazVxNTFHUUFmVk9reFVkdmJRNVNiOFUrNyt6Y2VkY1Vta0hZand3RWxtRkVieDhyU003cW1JMndrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTI5NTkyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy42X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjYKN2t4bUFnVk9QdWRoek9ReTc5WnpZTmpBS0RHbXYrV0owZmdkV2ZXcTBqd3lhM3FraHpRaGhZdlJaemEvOXhFVlFQV1dPQXJ2MGtLOWtmNmhnV3NCRGc9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.6/LocalGravity_2.3.6_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelNYUmtJN01xWTlNTUJNVlE0MUhKd0RjODl3UEExVkQ2QWxpNnZ5SWVvS1VFTnduVTZBaTBicDljZUhwVFlWbE1jY20vZWFueDZSU3Rla002b2FLZUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTMyMDUyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy43X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjcKVkpQcHVtTVVDcEFiK0xaOTdLSHJCTE5ZZ2FsVFErTHh5K3lDYnVDNnNYeGRzMWZQVzl2OTN6SndzZE1XMHN3YzRjQWZwaUUybnJ6elVPc3dEUmNaQ3c9PQo=",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.7/LocalGravity_2.3.7_aarch64.dmg"
     }
   }
 }

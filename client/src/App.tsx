@@ -429,6 +429,17 @@ export const App: React.FC = () => {
               return;
             }
 
+            if (type === 'PROJECT_DELETED' && payload?.projectId) {
+              const store = useSessionStore.getState();
+              const remaining = store.projects.filter((p) => p.id !== payload.projectId);
+              const nextActive =
+                store.activeProjectId === payload.projectId
+                  ? (remaining[0]?.id ?? undefined)
+                  : store.activeProjectId ?? undefined;
+              store.setProjects(remaining, nextActive);
+              return;
+            }
+
             if (type === 'SYNC_STATE') {
               if (payload.brainHost || payload.edgeHosts) {
                 useSessionStore.getState().setHostPresence(payload.brainHost, payload.edgeHosts);
