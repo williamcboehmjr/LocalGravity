@@ -53,6 +53,7 @@ import {
 import {
   TabbyEngine,
   TIER_SPECS,  deduplicateRepeatedSequences,} from './tabby/tabbyEngine.js';
+import type { BrainProviderId, GoogleModelId } from './google/googleAiEngine.js';
 import { LlamaMoESidecar } from './tabby/llamaSidecar.js';
 import { McpClientManager } from './mcp/mcpManager.js';
 import { SkillManager, SKILL_TOOLS_SCHEMA } from './skills/skillManager.js';
@@ -399,6 +400,63 @@ export async function createDaemonServer(options?: {
       mcpServers: mcp.listServers(),
       ports,
     };
+  });
+
+  // ==================== BRAIN PROVIDER (STRATA vs GOOGLE AI STUDIO) ====================
+  const applyBrainProviderUpdate = (update: {
+    provider?: BrainProviderId;
+    googleApiKey?: string;
+    selectedGoogleModel?: GoogleModelId;
+  }) => {
+    const prevProvider = tabby.getBrainProviderConfig().provider;
+    const nextPublic = tabby.updateBrainProviderConfig(update);
+
+    if (prevProvider !== nextPublic.provider) {
+      if (nextPublic.provider === 'google_ai_studio') {
+        if (!tabby.getIdleStatus().isOffloaded) {
+          void tabby.offloadGpu('google_ai_studio_active');
+        }
+      } else if (nextPublic.provider === 'strata') {
+        void ensureModelsWarmedOnClientConnect();
+      }
+    }
+
+    broadcastSync({
+      type: 'BRAIN_PROVIDER_UPDATED',
+      payload: nextPublic,
+    });
+
+    broadcastSync({
+      type: 'MODEL_STATE',
+      payload: {
+        status: 'ready',
+        active_tier: tabby.getTelemetry().activeTier,
+        active_model:
+          nextPublic.provider === 'google_ai_studio'
+            ? nextPublic.activeDisplayName
+            : 'Qwen 3.8 Flash-Next High',
+        tokens_per_sec: tabby.getTelemetry().tokensPerSec,
+        status_text:
+          nextPublic.provider === 'google_ai_studio'
+            ? `Google AI Studio (${nextPublic.activeDisplayName})`
+            : 'GPU Active & Ready',
+      },
+    });
+
+    return nextPublic;
+  };
+
+  app.get('/api/brain/provider', async () => {
+    return tabby.getBrainProviderPublicConfig();
+  });
+
+  app.post('/api/brain/provider', async (req) => {
+    const body = (req.body || {}) as {
+      provider?: BrainProviderId;
+      googleApiKey?: string;
+      selectedGoogleModel?: GoogleModelId;
+    };
+    return applyBrainProviderUpdate(body);
   });
 
   // ==================== GPU LIFECYCLE & SELF-RESTART ENDPOINTS ====================
@@ -1343,8 +1401,12 @@ export async function createDaemonServer(options?: {
       prompt: string;
       tier?: ModelTier;
       thinking_budget?: ThinkingBudget;
+      google_model?: GoogleModelId;
       attachments?: any[];
     };
+    if (body.google_model) {
+      applyBrainProviderUpdate({ selectedGoogleModel: body.google_model });
+    }
     const thread = db.getThread(id);
     const tier = body.tier || thread?.active_model_tier || 'high';
     const budget = body.thinking_budget || thread?.active_thinking_budget || 'fast';
@@ -1432,6 +1494,7 @@ export async function createDaemonServer(options?: {
   // ==================== WEBSOCKET MULTIPLEXING (`/ws/sync`, `/ws/agent/:sessionId`, `/ws/terminal`) ====================
   let clientWakeInFlight: Promise<void> | null = null;
   const ensureModelsWarmedOnClientConnect = () => {
+    if (tabby.getBrainProviderConfig().provider === 'google_ai_studio') return;
     if (!tabby.getIdleStatus().isOffloaded) return;
     if (clientWakeInFlight) return;
 
@@ -1495,6 +1558,7 @@ export async function createDaemonServer(options?: {
           checkpoints,
           mcpServers: mcp.listServers(),
           tabby: tabbyTel,
+          brainProvider: tabby.getBrainProviderPublicConfig(),
           telemetry: hw,
           harnessComponents: harness.listHarnessComponents(activeProject.root_path),
           ppcHistory: harness.getPpcHistory(),
@@ -1530,6 +1594,7 @@ export async function createDaemonServer(options?: {
                 checkpoints: reqThreadId ? db.listFileCheckpoints(reqThreadId) : [],
                 mcpServers: mcp.listServers(),
                 tabby: tabby.getTelemetry(),
+                brainProvider: tabby.getBrainProviderPublicConfig(),
                 telemetry: queryHostHardwareTelemetry(tabby.getTelemetry().activeTier),
                 harnessComponents: harness.listHarnessComponents(activeProject.root_path),
                 ppcHistory: harness.getPpcHistory(),
@@ -1558,10 +1623,19 @@ export async function createDaemonServer(options?: {
           }
         } else if (type === 'EDGE_TOOL_RESULT') {
           EdgeBridgeManager.getInstance().handleToolResult(payload || {});
+        } else if (type === 'BRAIN_PROVIDER_SWITCH') {
+          applyBrainProviderUpdate({
+            provider: payload?.provider,
+            googleApiKey: payload?.googleApiKey,
+            selectedGoogleModel: payload?.selectedGoogleModel,
+          });
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
           if (payload?.client_id && threadId) {
             EdgeBridgeManager.getInstance().bindThread(threadId, String(payload.client_id));
+          }
+          if (payload?.google_model) {
+            applyBrainProviderUpdate({ selectedGoogleModel: payload.google_model });
           }
           const tier: ModelTier = payload.tier || 'high';
           const budget: ThinkingBudget = payload.thinking_budget || 'fast';

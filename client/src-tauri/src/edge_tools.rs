@@ -20,15 +20,20 @@ pub struct EdgeToolOutput {
     pub duration_ms: u128,
 }
 
-pub fn get_identity() -> EdgeIdentity {
-    #[cfg(target_os = "android")]
-    let hostname = std::process::Command::new("getprop")
-        .args(["ro.product.model"])
+#[cfg(target_os = "android")]
+fn read_android_prop(prop: &str) -> Option<String> {
+    std::process::Command::new("getprop")
+        .args([prop])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+pub fn get_identity() -> EdgeIdentity {
+    #[cfg(target_os = "android")]
+    let hostname = read_android_prop("ro.product.model")
         .unwrap_or_else(|| "Android-Device".to_string());
 
     #[cfg(not(target_os = "android"))]
@@ -54,10 +59,23 @@ pub fn get_identity() -> EdgeIdentity {
     #[cfg(target_os = "macos")]
     let platform = "macos".to_string();
     #[cfg(target_os = "android")]
-    let platform = "android".to_string();
+    let platform = {
+        let release = read_android_prop("ro.build.version.release").unwrap_or_default();
+        let sdk = read_android_prop("ro.build.version.sdk_full")
+            .or_else(|| read_android_prop("ro.build.version.sdk"))
+            .unwrap_or_default();
+        match (release.is_empty(), sdk.is_empty()) {
+            (false, false) => format!("Android {} (API {})", release, sdk),
+            (false, true) => format!("Android {}", release),
+            _ => "android".to_string(),
+        }
+    };
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
     let platform = "linux".to_string();
 
+    #[cfg(target_os = "android")]
+    let home_dir = "/storage/emulated/0".to_string();
+    #[cfg(not(target_os = "android"))]
     let home_dir = dirs::home_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -69,16 +87,44 @@ pub fn get_identity() -> EdgeIdentity {
     }
 }
 
+fn default_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        Some(PathBuf::from("/storage/emulated/0"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        dirs::home_dir()
+    }
+}
+
+fn effective_workspace_root(workspace_root: &str) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let trimmed = workspace_root.trim();
+        let is_win_drive = trimmed.as_bytes().get(1) == Some(&b':');
+        if trimmed.is_empty() || trimmed == "." || is_win_drive || !Path::new(trimmed).exists() {
+            return PathBuf::from("/storage/emulated/0");
+        }
+        PathBuf::from(trimmed)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        PathBuf::from(workspace_root)
+    }
+}
+
 fn resolve_path(workspace_root: &str, raw: Option<&str>) -> PathBuf {
+    let base_root = effective_workspace_root(workspace_root);
     let input = raw.unwrap_or("").trim();
     if input.is_empty() || input == "." {
-        return PathBuf::from(workspace_root);
+        return base_root;
     }
     if input == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(workspace_root));
+        return default_home_dir().unwrap_or(base_root);
     }
     if let Some(rest) = input.strip_prefix("~/").or_else(|| input.strip_prefix("~\\")) {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = default_home_dir() {
             return home.join(rest);
         }
     }
@@ -86,7 +132,7 @@ fn resolve_path(workspace_root: &str, raw: Option<&str>) -> PathBuf {
     if p.is_absolute() {
         p.to_path_buf()
     } else {
-        Path::new(workspace_root).join(p)
+        base_root.join(p)
     }
 }
 
@@ -449,6 +495,7 @@ pub async fn execute(tool_name: &str, args: Value, workspace_root: &str) -> Edge
             let mut cmd = {
                 let mut c = Command::new("/system/bin/sh");
                 c.args(["-c", cmd_str]);
+                c.env("HOME", "/storage/emulated/0");
                 c
             };
             #[cfg(not(any(target_os = "windows", target_os = "android")))]
@@ -460,6 +507,9 @@ pub async fn execute(tool_name: &str, args: Value, workspace_root: &str) -> Edge
 
             if cwd.exists() {
                 cmd.current_dir(&cwd);
+            } else {
+                #[cfg(target_os = "android")]
+                cmd.current_dir("/storage/emulated/0");
             }
 
             match cmd.output().await {

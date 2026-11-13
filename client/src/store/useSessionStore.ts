@@ -2,6 +2,57 @@ import { create } from 'zustand';
 import { ModelTier, ThinkingBudget, ModelStateStatus } from '../types/protocol';
 import { cleanHostAndPort } from '../utils/connectionTester';
 
+export type BrainProviderId = 'strata' | 'google_ai_studio';
+export type GoogleModelId =
+  | 'orchestrator'
+  | 'gemini-4-hydrogen'
+  | 'gemini-4-carbon'
+  | 'gemini-4-argon'
+  | 'gemini-3.8-flash';
+
+export interface GoogleModelOption {
+  id: GoogleModelId;
+  name: string;
+  shortName: string;
+  sub: string;
+}
+
+export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
+  {
+    id: 'orchestrator',
+    name: 'Orchestrator',
+    shortName: 'Orchestrator',
+    sub: 'Decisions API → Argon/Carbon Plan → Hydrogen Execute',
+  },
+  {
+    id: 'gemini-4-hydrogen',
+    name: 'Gemini 4 Hydrogen',
+    shortName: 'Hydrogen',
+    sub: 'Fast Execution & Tool Coding Model',
+  },
+  {
+    id: 'gemini-4-carbon',
+    name: 'Gemini 4 Carbon',
+    shortName: 'Carbon',
+    sub: 'Deepest Frontier Reasoning & Architecture',
+  },
+  {
+    id: 'gemini-4-argon',
+    name: 'Gemini 4 Argon',
+    shortName: 'Argon',
+    sub: 'Balanced Frontier Planning & Reasoning',
+  },
+  {
+    id: 'gemini-3.8-flash',
+    name: 'Gemini 3.8 Flash',
+    shortName: 'Flash 3.8',
+    sub: 'Lightweight Fast Multimodal Flash',
+  },
+];
+
+export const getGoogleModelOption = (id?: string): GoogleModelOption =>
+  GOOGLE_MODEL_OPTIONS.find((m) => m.id === id) || GOOGLE_MODEL_OPTIONS[0];
+
 export interface ToolCallItemData {
   id: string;
   toolName?: string;
@@ -230,6 +281,10 @@ interface SessionState {
   brainHost: string;
   brainPort: string;
   isConnected: boolean;
+  brainProvider: BrainProviderId;
+  selectedGoogleModel: GoogleModelId;
+  googleHasApiKey: boolean;
+  googleMaskedApiKey: string;
   selectedTier: ModelTier;
   thinkingBudget: ThinkingBudget;
   executionPolicy: 'always_proceed' | 'request_review';
@@ -271,6 +326,12 @@ interface SessionState {
   setApiBaseUrl: (url: string) => void;
   setBrainConnection: (host: string, port?: string) => void;
   setIsConnected: (connected: boolean) => void;
+  setBrainProviderState: (patch: {
+    provider?: BrainProviderId;
+    selectedGoogleModel?: GoogleModelId;
+    hasApiKey?: boolean;
+    maskedApiKey?: string;
+  }) => void;
   setSelectedTier: (tier: ModelTier) => void;
   setThinkingBudget: (budget: ThinkingBudget) => void;
   setExecutionPolicy: (policy: 'always_proceed' | 'request_review') => void;
@@ -413,6 +474,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hostUrl: `ws://${initialConn.host}:${initialConn.port}`,
   apiBaseUrl: `http://${initialConn.host}:${initialConn.port}`,
   isConnected: false,
+  brainProvider: 'strata',
+  selectedGoogleModel: 'orchestrator',
+  googleHasApiKey: false,
+  googleMaskedApiKey: '',
   selectedTier: 'high',
   thinkingBudget: 'fast',
   executionPolicy: 'always_proceed',
@@ -717,6 +782,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   setApiBaseUrl: (url) => set({ apiBaseUrl: url }),
   setIsConnected: (connected) => set({ isConnected: connected }),
+  setBrainProviderState: (patch) =>
+    set(() => ({
+      ...(patch.provider ? { brainProvider: patch.provider } : {}),
+      ...(patch.selectedGoogleModel ? { selectedGoogleModel: patch.selectedGoogleModel } : {}),
+      ...(patch.hasApiKey !== undefined ? { googleHasApiKey: patch.hasApiKey } : {}),
+      ...(patch.maskedApiKey !== undefined ? { googleMaskedApiKey: patch.maskedApiKey } : {}),
+    })),
   setSelectedTier: (tier) => set({ selectedTier: tier }),
   setThinkingBudget: (budget) => set({ thinkingBudget: budget }),
   setExecutionPolicy: (policy) => set({ executionPolicy: policy }),

@@ -186,6 +186,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       });
     };
 
+    const brainProviderCfg = tabby.getBrainProviderConfig();
+    const resolvedModelDisplayName = tabby.resolveDiskModelName(params.tier);
+
     send({
       type: 'TURN_STARTED',
       payload: {
@@ -194,6 +197,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         assistantMessage: assistantMsg,
         tier: params.tier,
         thinkingBudget: params.thinkingBudget,
+        active_model: resolvedModelDisplayName,
+        brain_provider: brainProviderCfg.provider,
       },
     });
     emitPhase('queued', 'Starting turn...');
@@ -295,10 +300,21 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         ? edgeBridge.getClientByHost(project.host_name)
         : edgeBridge.getRemoteClientForThread(thread.id);
       const remoteHostNote = remoteClient
-        ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools in this turn execute natively on the connected client host "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}). Any local paths or run_terminal commands (including Python, Node, PowerShell, etc.) run directly on "${remoteClient.hostname}".\n`
+        ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools in this turn execute natively on the connected client host "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}). Any local paths or run_terminal commands (including Python, Node, PowerShell, etc.) run directly on "${remoteClient.hostname}".` +
+          (remoteClient.platform.toLowerCase().includes('android')
+            ? `\n[ANDROID HOST NOTE]: Shared storage (~ and default workspace root) is "/storage/emulated/0" ("/sdcard"), containing DCIM, Pictures, Download, Documents, etc. The true Android OS version is already reported above via getprop ro.build.version.release (do not confuse "uname -r" GKI kernel branch names like "android15" with the Android OS release).`
+            : '') +
+          `\n`
         : project.host_name && edgeBridge.isRemoteHost(project.host_name)
           ? `\n[REMOTE HOST OFFLINE]: This project belongs to "${project.host_name}", which is currently offline. Do not attempt local file or terminal operations on the Central Brain host.\n`
           : '';
+
+      const engineDirectiveLine =
+        brainProviderCfg.provider === 'google_ai_studio'
+          ? `- Active Brain Inference Provider: Google AI Studio API (${resolvedModelDisplayName}) — orchestrated by LocalGravity Central Brain without local Strata GPU.`
+          : `- Strata Engine: Active on port 8080 serving "Swift 1.5 Flash-Next" (IQ2_XS + Vision) with 65,536 context, spec=6, and multimodal vision projector mmproj-Qwen3.8-Flash-Next-BF16.gguf! Input modalities: ["text", "image"].\n` +
+            `- Strata Root: "${path.join(process.env.LOCALAPPDATA || path.join(userHome, 'AppData', 'Local'), 'Strata').replace(/\\/g, '/')}" (engine binaries in components/engine/, launch profiles in install/, serve/server.py)\n` +
+            `- Local Models Directory: "E:/Models/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS" (holds main GGUFs and mmproj projector)`;
 
       const systemDirective =
         `You are LocalGravity, an autonomous AI engineering assistant running directly on the user's workstation.\n` +
@@ -306,9 +322,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         remoteHostNote +
         `Workstation Paths:\n` +
         `- User Folders: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}"\n` +
-        `- Strata Engine: Active on port 8080 serving "Swift 1.5 Flash-Next" (IQ2_XS + Vision) with 65,536 context, spec=6, and multimodal vision projector mmproj-Qwen3.8-Flash-Next-BF16.gguf! Input modalities: ["text", "image"].\n` +
-        `- Strata Root: "${path.join(process.env.LOCALAPPDATA || path.join(userHome, 'AppData', 'Local'), 'Strata').replace(/\\/g, '/')}" (engine binaries in components/engine/, launch profiles in install/, serve/server.py)\n` +
-        `- Local Models Directory: "E:/Models/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS" (holds main GGUFs and mmproj projector)\n\n` +
+        `${engineDirectiveLine}\n\n` +
         `=== UNRESTRICTED SYSTEM ACCESS & AUTONOMOUS TOOL SUITE ===
 === WEB SEARCH MANDATE: NEVER BE SHY ABOUT SEARCHING ===
 1. SEARCH THE WEB FIRST: Never be shy about searching! The live internet is your fastest and most reliable path whenever you do not know something, are not 100% certain of exact details, need current documentation, or encounter an unfamiliar problem.
@@ -509,7 +523,11 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           status: 'running',
           step: 1,
           maxSteps: MAX_TOOL_STEPS,
-          summary: `Starting ${slashInfo.subagentRole} (${params.tier.toUpperCase()} • ${effectiveThinkingBudget.toUpperCase()})`,
+          summary: `Starting ${slashInfo.subagentRole} (${
+            brainProviderCfg.provider === 'google_ai_studio'
+              ? resolvedModelDisplayName
+              : params.tier.toUpperCase()
+          } • ${effectiveThinkingBudget.toUpperCase()})`,
           timestamp: Date.now(),
         },
       });
@@ -1148,6 +1166,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           messageId: assistantMsg.id,
           message_id: assistantMsg.id,
           final_content: committedFinalContent,
+          active_model: resolvedModelDisplayName,
+          brain_provider: brainProviderCfg.provider,
           thread: updatedThread,
         },
       });

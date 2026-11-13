@@ -43,6 +43,7 @@ impl CommandRunner {
         let mut cmd = {
             let mut c = Command::new("/system/bin/sh");
             c.args(["-c", cmd_string]);
+            c.env("HOME", "/storage/emulated/0");
             c
         };
 
@@ -54,7 +55,15 @@ impl CommandRunner {
         };
 
         if let Some(dir) = cwd {
-            cmd.current_dir(dir);
+            if std::path::Path::new(dir).exists() {
+                cmd.current_dir(dir);
+            } else {
+                #[cfg(target_os = "android")]
+                cmd.current_dir("/storage/emulated/0");
+            }
+        } else {
+            #[cfg(target_os = "android")]
+            cmd.current_dir("/storage/emulated/0");
         }
 
         cmd.stdout(Stdio::piped());

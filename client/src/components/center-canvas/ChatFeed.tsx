@@ -21,7 +21,13 @@ import {
   Map,
   Cpu,
 } from 'lucide-react';
-import { useSessionStore, ToolCallItemData, selectIsTurnActive, selectStatusLabel } from '../../store/useSessionStore';
+import {
+  useSessionStore,
+  ToolCallItemData,
+  selectIsTurnActive,
+  selectStatusLabel,
+  getGoogleModelOption,
+} from '../../store/useSessionStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useArtifactStore, WorkbenchTab, ArtifactRecord } from '../../store/useArtifactStore';
 import { ThoughtAccordion } from './ThoughtAccordion';
@@ -785,6 +791,8 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     currentThoughtTokens,
     isThinkingFinished,
     activeModelName,
+    brainProvider,
+    selectedGoogleModel,
   } = useSessionStore();
   const activeTurn = useSessionStore((s) => s.activeTurn);
   const turnActive = useSessionStore(selectIsTurnActive);
@@ -1217,8 +1225,15 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 font-mono text-[10.5px] text-[#5F6368]">
-                    <span>{msg.modelName || (activeModelName ? `Swift 1.5 (${activeModelName})` : 'Swift 1.5 Flash-Next (Vision)')}</span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-[#5F6368]">
+                    <span className="truncate max-w-[200px] sm:max-w-none">
+                      {msg.modelName ||
+                        (brainProvider === 'google_ai_studio'
+                          ? getGoogleModelOption(selectedGoogleModel).name
+                          : activeModelName
+                          ? `Swift 1.5 (${activeModelName})`
+                          : 'Swift 1.5 Flash-Next (Vision)')}
+                    </span>
                     {Boolean(msg.outputTokens && msg.outputTokens > 0) && (
                       <>
                         <span>•</span>

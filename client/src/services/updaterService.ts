@@ -34,11 +34,19 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.8';
+  let currentVersion = '2.3.9';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
     } catch {}
+  }
+
+  // Android APKs do not use the desktop self-updater
+  if (typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '')) {
+    return {
+      available: false,
+      currentVersion,
+    };
   }
 
   // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)

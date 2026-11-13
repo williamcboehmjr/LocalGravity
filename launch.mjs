@@ -222,7 +222,7 @@ async function main() {
 
       // Only pre-launch Strata on startup if explicitly requested (--with-strata);
       // otherwise Brain starts in 0 MB VRAM standby so games/apps aren't disrupted.
-      if (args.includes('--with-strata')) {
+      if (process.argv.includes('--with-strata')) {
         await ensureStrataRunning();
       }
 
@@ -261,7 +261,7 @@ async function main() {
       await new Promise(() => {});
     } else {
       // Detached Daemon Execution
-      if (args.includes('--with-strata')) {
+      if (process.argv.includes('--with-strata')) {
         await ensureStrataRunning();
       }
       const child = spawn(process.execPath, [distEntry], {

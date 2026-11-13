@@ -26,6 +26,7 @@ import {
   selectStatusLabel,
   isPhaseProtocolActive,
   applyDpiScaleToDom,
+  getGoogleModelOption,
 } from './store/useSessionStore';
 import { useArtifactStore } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
@@ -78,6 +79,8 @@ export const App: React.FC = () => {
     brainHost,
     brainPort,
     isConnected,
+    brainProvider,
+    selectedGoogleModel,
     setBrainConnection,
     setIsConnected,
     selectedTier,
@@ -147,6 +150,14 @@ export const App: React.FC = () => {
   const [rightDrawerWidth, setRightDrawerWidth] = useState(340);
   const [showLeftRail, setShowLeftRail] = useState(window.innerWidth > 900);
   const [showRightDrawer, setShowRightDrawer] = useState(window.innerWidth > 1100);
+
+  useEffect(() => {
+    const onResize = () => {
+      setShowLeftRail(window.innerWidth > 900);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteOpen, setIsRemoteOpen] = useState(false);
   const [isAutomationsOpen, setIsAutomationsOpen] = useState(false);
@@ -486,6 +497,9 @@ export const App: React.FC = () => {
               if (payload.mcpServers) {
                 setMcpServers(payload.mcpServers);
               }
+              if (payload.brainProvider) {
+                useSessionStore.getState().setBrainProviderState(payload.brainProvider);
+              }
               if (Array.isArray(payload.backgroundTasks)) {
                 setBackgroundTasks(payload.backgroundTasks);
               }
@@ -514,6 +528,8 @@ export const App: React.FC = () => {
                   lanUrl: payload.ports?.lanUrl ?? window.location.origin,
                 });
               }
+            } else if (type === 'BRAIN_PROVIDER_UPDATED') {
+              useSessionStore.getState().setBrainProviderState(payload || {});
             } else if (type === 'MODEL_STATE') {
               setModelState(payload.status, payload.active_model, payload.status_text);
               if (payload.active_tier) setSelectedTier(payload.active_tier);
@@ -912,11 +928,13 @@ export const App: React.FC = () => {
       tier,
       thinkingBudget: budget,
       modelName:
-        tier === 'low'
+        storeSnap.brainProvider === 'google_ai_studio'
+          ? getGoogleModelOption(storeSnap.selectedGoogleModel).name
+          : tier === 'low'
           ? 'Qwen3.5-4B-EXL3-4.0bpw'
           : tier === 'medium'
           ? 'Qwen3.8-27B-EXL3-11.5GB'
-          : 'Qwen 3.8 Flash-Next (Strata IQ3_S + Vision)',
+          : 'Swift 1.5 Flash-Next',
       timestamp: Date.now(),
       toolCalls: [],
     });
@@ -937,6 +955,8 @@ export const App: React.FC = () => {
             attachments,
             tier,
             thinking_budget: budget,
+            brain_provider: storeSnap.brainProvider,
+            google_model: storeSnap.selectedGoogleModel,
             execution_policy: policy,
             executionPolicy: policy,
           },
@@ -1203,10 +1223,15 @@ export const App: React.FC = () => {
       <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         {/* 1. LEFT SIDEBAR (LocalGravity Navigation Rail) */}
       {showLeftRail && (
-        <aside
-          style={{ width: `${leftRailWidth}px` }}
-          className="shrink-0 h-full bg-[#101012] border-r border-[#222225] hidden md:flex flex-col px-2.5 pb-2 pt-1.5 select-none"
-        >
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 z-30 md:hidden"
+            onClick={() => setShowLeftRail(false)}
+          />
+          <aside
+            style={{ width: `${leftRailWidth}px` }}
+            className="shrink-0 h-full bg-[#101012] border-r border-[#222225] flex fixed md:static inset-y-0 left-0 z-40 flex-col px-2.5 pb-2 pt-1.5 select-none shadow-2xl md:shadow-none"
+          >
           {/* Top Utility Toolbar matching Screenshot 1 (Sidebar toggle, Back, Forward, Search) */}
           <div className="h-8 flex items-center justify-between px-1 mb-1.5">
             <div className="flex items-center gap-1">
@@ -1306,6 +1331,7 @@ export const App: React.FC = () => {
           {/* Bottom Settings & Brain Status Bar */}
           <NodeStatusBadge onOpenSettings={() => setIsSettingsOpen(true)} />
         </aside>
+        </>
       )}
 
       {showLeftRail && (
@@ -1371,22 +1397,28 @@ export const App: React.FC = () => {
             )}
 
             {/* DPI / UI Scale Control Pill (+ / -) */}
-            <DpiScaleControl />
+            <div className="hidden sm:flex">
+              <DpiScaleControl />
+            </div>
 
             {/* Brain & GPU Lifecycle Status Pill */}
             <button
               type="button"
               onClick={() => setIsSettingsOpen(true)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border ${
-                isConnected
-                  ? gpuStatus.gpuState === 'active'
-                    ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
-                    : 'bg-[#151821] border-[#252E3E] text-[#7DD3FC] hover:text-[#BAE6FD]'
-                  : 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:bg-amber-900/50'
+                !isConnected
+                  ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:bg-amber-900/50'
+                  : brainProvider === 'google_ai_studio'
+                  ? 'bg-sky-950/40 border-sky-700/50 text-sky-200 hover:bg-sky-900/50'
+                  : gpuStatus.gpuState === 'active'
+                  ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
+                  : 'bg-[#151821] border-[#252E3E] text-[#7DD3FC] hover:text-[#BAE6FD]'
               }`}
               title={
                 !isConnected
                   ? `Disconnected from ${brainHost}:${brainPort} — Click to configure & test`
+                  : brainProvider === 'google_ai_studio'
+                  ? `Connected (${brainHost}:${brainPort}) — Processing via Google AI Studio API (${getGoogleModelOption(selectedGoogleModel).name}); Strata GPU bypassed.`
                   : gpuStatus.gpuState === 'active'
                   ? `Connected (${brainHost}:${brainPort}) — GPU Active in VRAM. Auto-offloads after ${gpuStatus.idleTimeoutMinutes}m idle to free 100% VRAM.`
                   : gpuStatus.gpuState === 'waking'
@@ -1398,6 +1430,8 @@ export const App: React.FC = () => {
                 className={`w-1.5 h-1.5 rounded-full ${
                   !isConnected
                     ? 'bg-amber-400 animate-pulse'
+                    : brainProvider === 'google_ai_studio'
+                    ? 'bg-sky-400'
                     : gpuStatus.gpuState === 'active'
                     ? 'bg-emerald-400'
                     : gpuStatus.gpuState === 'waking'
@@ -1408,6 +1442,8 @@ export const App: React.FC = () => {
               <span className="hidden sm:inline font-mono">
                 {!isConnected
                   ? 'Connect Brain'
+                  : brainProvider === 'google_ai_studio'
+                  ? `${brainHost}:${brainPort} • Google AI (${getGoogleModelOption(selectedGoogleModel).shortName})`
                   : gpuStatus.gpuState === 'active'
                   ? `${brainHost}:${brainPort} • GPU Active${gpuStatus.secondsRemaining > 0 ? ` (${Math.ceil(gpuStatus.secondsRemaining / 60)}m)` : ''}`
                   : gpuStatus.gpuState === 'waking'

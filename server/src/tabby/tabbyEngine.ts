@@ -6,6 +6,11 @@ import { LlamaMoESidecar } from './llamaSidecar.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
 import { computeAdaptiveThinkingConfig } from '../agent/adaptiveCot.js';
 import { SwarmTurnScheduler, type GpuTurnPriority } from '../swarm/swarmScheduler.js';
+import {
+  GoogleAiEngine,
+  type BrainProviderConfig,
+  type BrainProviderPublicConfig,
+} from '../google/googleAiEngine.js';
 
 // Pure text-normalization helpers extracted to a side-effect-free module.
 export { hasConsecutiveRepetition, deduplicateRepeatedSequences } from './textNormalizers.js';
@@ -43,9 +48,11 @@ export class TabbyEngine {
   private idleTimeoutTimer: NodeJS.Timeout | null = null;
   private idleTimeoutMs: number = Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 15) * 60 * 1000;
   private idleDeadlineEpochMs: number = Date.now() + Number(process.env.LOCALGRAVITY_IDLE_TIMEOUT_MINUTES || 15) * 60 * 1000;
+  private googleEngine: GoogleAiEngine;
 
   constructor(options: { repoRoot: string; tabbyPort: number; tabbyBaseUrl?: string; apiKey?: string; idleTimeoutMinutes?: number }) {
     this.repoRoot = options.repoRoot;
+    this.googleEngine = new GoogleAiEngine(this.repoRoot);
     this.tabbyPort = options.tabbyPort;
     this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:8080';
     this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';
@@ -108,7 +115,26 @@ export class TabbyEngine {
     return '';
   }
 
+  public getGoogleEngine(): GoogleAiEngine {
+    return this.googleEngine;
+  }
+
+  public getBrainProviderConfig(): BrainProviderConfig {
+    return this.googleEngine.getConfig();
+  }
+
+  public getBrainProviderPublicConfig(): BrainProviderPublicConfig {
+    return this.googleEngine.getPublicConfig();
+  }
+
+  public updateBrainProviderConfig(update: Partial<BrainProviderConfig>): BrainProviderPublicConfig {
+    return this.googleEngine.updateConfig(update);
+  }
+
   public resolveDiskModelName(tier: ModelTier): string {
+    if (this.googleEngine.getProvider() === 'google_ai_studio') {
+      return this.googleEngine.getActiveDisplayName();
+    }
     const spec = TIER_SPECS[tier];
     for (const rootDir of this.modelsRootDirs) {
       if (!fs.existsSync(rootDir)) continue;
@@ -504,14 +530,17 @@ export class TabbyEngine {
 
   public getTelemetry(): TabbyEngineTelemetry {
     const spec = TIER_SPECS[this.activeTier];
+    const isGoogle = this.googleEngine.getProvider() === 'google_ai_studio';
     return {
-      connected: this.connected,
+      connected: isGoogle ? true : this.connected,
       tabbyUrl: this.tabbyBaseUrl,
       activeTier: this.activeTier,
       activeModel: this.resolveDiskModelName(this.activeTier),
-      swapStatus: this.swapStatus,
+      swapStatus: isGoogle ? 'ready' : this.swapStatus,
       lastSwapDurationMs: this.lastSwapDurationMs,
-      tokensPerSec: this.tokensPerSec,
+      tokensPerSec: isGoogle
+        ? this.googleEngine.getLastTokensPerSec() || this.tokensPerSec
+        : this.tokensPerSec,
       cacheMode: spec.cacheMode,
       autosplitReserveMb: spec.autosplitReserve[0],
       draftMode: spec.draftMode,
@@ -553,6 +582,16 @@ export class TabbyEngine {
     if (this.idleTimeoutTimer) {
       clearTimeout(this.idleTimeoutTimer);
       this.idleTimeoutTimer = null;
+    }
+
+    if (this.googleEngine.getProvider() === 'google_ai_studio') {
+      const prevStatus = this.swapStatus;
+      this.swapStatus = 'generating';
+      try {
+        return await this.googleEngine.streamChatCompletion(params);
+      } finally {
+        this.swapStatus = prevStatus === 'idle' ? 'idle' : 'ready';
+      }
     }
 
         // Ensure target model is loaded in TabbyAPI VRAM

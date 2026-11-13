@@ -152,29 +152,36 @@ export class BuiltinToolExecutor {
     try {
       const edgeBridge = EdgeBridgeManager.getInstance();
       if (edgeBridge.isHostTool(toolName)) {
-        if (ctx.projectHost && edgeBridge.isRemoteHost(ctx.projectHost)) {
-          const targetClient = edgeBridge.getClientByHost(ctx.projectHost);
-          if (!targetClient) {
-            return {
-              stdout: '',
-              stderr: `Host "${ctx.projectHost}" is currently offline. Open LocalGravity on "${ctx.projectHost}" to run tools on this project.`,
-              exitCode: 1,
-              durationMs: 0,
-            };
-          }
-          return await edgeBridge.executeRemoteTool(
-            targetClient,
-            toolName,
-            args,
-            ctx.workspaceRoot,
-            ctx.abortSignal
-          );
+        const targetClient =
+          ctx.projectHost && edgeBridge.isRemoteHost(ctx.projectHost)
+            ? edgeBridge.getClientByHost(ctx.projectHost)
+            : !ctx.projectHost
+              ? edgeBridge.getRemoteClientForThread(ctx.threadId)
+              : null;
+
+        if (ctx.projectHost && edgeBridge.isRemoteHost(ctx.projectHost) && !targetClient) {
+          return {
+            stdout: '',
+            stderr: `Host "${ctx.projectHost}" is currently offline. Open LocalGravity on "${ctx.projectHost}" to run tools on this project.`,
+            exitCode: 1,
+            durationMs: 0,
+          };
         }
-        if (!ctx.projectHost) {
-          const remoteClient = edgeBridge.getRemoteClientForThread(ctx.threadId);
-          if (remoteClient) {
+
+        if (targetClient) {
+          // If the remote host is non-Windows (e.g. Android) but the tool explicitly targets a
+          // Windows Central Brain path (e.g. C:/Users/.../.runtime/uploads) or powershell.exe,
+          // execute it locally on the Windows Central Brain instead of failing on the phone.
+          const isRemoteNonWin = !targetClient.platform.toLowerCase().includes('win');
+          const rawPath = String(args?.path || args?.file_path || args?.directory || args?.cwd || '');
+          const rawCmd = String(args?.command || '');
+          const targetsWinBrain =
+            isRemoteNonWin &&
+            (/^[A-Za-z]:[\\/]/.test(rawPath) || /^\s*powershell(\.exe)?\b/i.test(rawCmd));
+
+          if (!targetsWinBrain) {
             return await edgeBridge.executeRemoteTool(
-              remoteClient,
+              targetClient,
               toolName,
               args,
               ctx.workspaceRoot,
@@ -1626,8 +1633,9 @@ $bmp.Dispose()
 Write-Output "$($bounds.Width)x$($bounds.Height)|$b64"
       `.trim();
 
+      const encodedPs = Buffer.from(psScript, 'utf16le').toString('base64');
       const out = execSync(
-        `powershell.exe -NoProfile -NonInteractive -Command "${psScript.replace(/\r?\n/g, '; ')}"`,
+        `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodedPs}`,
         { timeout: 5000, maxBuffer: 15 * 1024 * 1024, windowsHide: true }
       )
         .toString()

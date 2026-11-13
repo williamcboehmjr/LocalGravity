@@ -30,7 +30,14 @@ import {
   ShieldCheck,
   Network,
 } from 'lucide-react';
-import { useSessionStore, QueuedMessage, FileAttachmentItem } from '../../store/useSessionStore';
+import {
+  useSessionStore,
+  QueuedMessage,
+  FileAttachmentItem,
+  GOOGLE_MODEL_OPTIONS,
+  getGoogleModelOption,
+  GoogleModelId,
+} from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { ModelTier, ThinkingBudget } from '../../types/protocol';
@@ -182,6 +189,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setExecutionPolicy,
     isGenerating: isGeneratingLegacy,
     activeTurn,
+    brainProvider,
+    selectedGoogleModel,
+    setBrainProviderState,
+    apiBaseUrl,
   } = useSessionStore();
   // Stop button / queue mode follow the authoritative server turn state.
   const isGenerating = activeTurn ? activeTurn.isActive : isGeneratingLegacy;
@@ -426,6 +437,22 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setSelectedTier(tier);
     onTierChange?.(tier);
     setShowModelMenu(false);
+  };
+
+  const handleSelectGoogleModel = async (modelId: GoogleModelId) => {
+    setBrainProviderState({ selectedGoogleModel: modelId });
+    setShowModelMenu(false);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/brain/provider`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectedGoogleModel: modelId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBrainProviderState(data);
+      }
+    } catch {}
   };
 
   const mentionCandidates = [
@@ -709,7 +736,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             <Slash className="w-3.5 h-3.5" />
           </button>
 
-          {/* Model Tier Pill (LocalGravity Style) */}
+          {/* Model Tier Pill (Strata vs Google AI Studio) */}
           <div className="relative">
             <button
               type="button"
@@ -719,26 +746,54 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               }}
               className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#222327] border border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A] transition-all"
             >
-              <span className="truncate max-w-[150px] sm:max-w-[180px]">{TIER_LABELS[selectedTier].name}</span>
+              <span className="truncate max-w-[150px] sm:max-w-[180px]">
+                {brainProvider === 'google_ai_studio'
+                  ? getGoogleModelOption(selectedGoogleModel).name
+                  : TIER_LABELS[selectedTier].name}
+              </span>
               <ChevronDown className="w-3 h-3 text-[#9AA0A6]" />
             </button>
 
             {showModelMenu && (
-              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
-                {(['high'] as ModelTier[]).map((tier) => (
-                  <button
-                    key={tier}
-                    type="button"
-                    onClick={() => handleSelectTier(tier)}
-                    className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors bg-[#28282C] text-[#E3E3E3]"
-                  >
-                    <div>
-                      <div className="font-medium">{TIER_LABELS[tier].name}</div>
-                      <div className="text-[10px] text-emerald-400 font-mono">{TIER_LABELS[tier].sub}</div>
-                    </div>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  </button>
-                ))}
+              <div className="absolute bottom-full left-0 mb-1.5 w-72 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                {brainProvider === 'google_ai_studio' ? (
+                  GOOGLE_MODEL_OPTIONS.map((opt) => {
+                    const isActive = selectedGoogleModel === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handleSelectGoogleModel(opt.id)}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                          isActive
+                            ? 'bg-[#28282C] text-[#E3E3E3]'
+                            : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="font-medium truncate">{opt.name}</div>
+                          <div className="text-[10px] text-sky-400 font-mono truncate">{opt.sub}</div>
+                        </div>
+                        {isActive && <Check className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+                      </button>
+                    );
+                  })
+                ) : (
+                  (['high'] as ModelTier[]).map((tier) => (
+                    <button
+                      key={tier}
+                      type="button"
+                      onClick={() => handleSelectTier(tier)}
+                      className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors bg-[#28282C] text-[#E3E3E3]"
+                    >
+                      <div>
+                        <div className="font-medium">{TIER_LABELS[tier].name}</div>
+                        <div className="text-[10px] text-emerald-400 font-mono">{TIER_LABELS[tier].sub}</div>
+                      </div>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>

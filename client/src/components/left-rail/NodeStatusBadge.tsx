@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Cpu, HardDrive, Plug, Zap, RefreshCw, Settings, ChevronUp, ChevronDown } from 'lucide-react';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
-import { useSessionStore } from '../../store/useSessionStore';
+import { useSessionStore, getGoogleModelOption } from '../../store/useSessionStore';
 
 interface NodeStatusBadgeProps {
   onOpenSettings?: () => void;
@@ -20,8 +20,15 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
     setMcpServers,
   } = useTelemetryStore();
 
-  const { isConnected, activeModelName, apiBaseUrl, brainHost, brainPort } =
-    useSessionStore();
+  const {
+    isConnected,
+    activeModelName,
+    apiBaseUrl,
+    brainHost,
+    brainPort,
+    brainProvider,
+    selectedGoogleModel,
+  } = useSessionStore();
 
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -110,8 +117,14 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
               </div>
               <div className="grid grid-cols-1 gap-1">
                 <div className="px-2 py-0.5 rounded text-[9.5px] font-mono flex items-center justify-between border bg-[#262629] border-[#3E3E44] text-[#E3E3E3]">
-                  <span className="font-semibold text-emerald-400">Swift 1.5 IQ2_XS + Vision</span>
-                  <span className="text-[#9A9A9E]">VRAM Active</span>
+                  <span className={`font-semibold ${brainProvider === 'google_ai_studio' ? 'text-sky-400' : 'text-emerald-400'}`}>
+                    {brainProvider === 'google_ai_studio'
+                      ? `Google AI Studio (${getGoogleModelOption(selectedGoogleModel).name})`
+                      : 'Swift 1.5 IQ2_XS + Vision'}
+                  </span>
+                  <span className="text-[#9A9A9E]">
+                    {brainProvider === 'google_ai_studio' ? 'API Active' : 'VRAM Active'}
+                  </span>
                 </div>
               </div>
             </div>

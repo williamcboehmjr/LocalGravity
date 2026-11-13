@@ -15,8 +15,15 @@ import {
   Download,
   ExternalLink,
   ZoomIn,
+  KeyRound,
+  Cloud,
 } from 'lucide-react';
-import { useSessionStore } from '../../store/useSessionStore';
+import {
+  useSessionStore,
+  GOOGLE_MODEL_OPTIONS,
+  BrainProviderId,
+  GoogleModelId,
+} from '../../store/useSessionStore';
 import { testBrainConnection, cleanHostAndPort } from '../../utils/connectionTester';
 import {
   checkForAppUpdates,
@@ -40,11 +47,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     executionPolicy,
     setExecutionPolicy,
     apiBaseUrl,
+    brainProvider,
+    selectedGoogleModel,
+    googleHasApiKey,
+    googleMaskedApiKey,
+    setBrainProviderState,
   } = useSessionStore();
 
   const [inputHost, setInputHost] = useState(brainHost || '127.0.0.1');
   const [inputPort, setInputPort] = useState(brainPort || '3390');
   const [gpuActionStatus, setGpuActionStatus] = useState<string | null>(null);
+  const [googleKeyInput, setGoogleKeyInput] = useState('');
+  const [providerStatusMsg, setProviderStatusMsg] = useState<string | null>(null);
+  const [savingProvider, setSavingProvider] = useState(false);
 
   const [testState, setTestState] = useState<{
     status: 'idle' | 'testing' | 'success' | 'error';
@@ -56,7 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.8');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.9');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; statusText: string }>({ percent: 0, statusText: '' });
@@ -70,9 +85,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         })
         .catch(() => {});
     }
-  }, [isOpen]);
+    if (isOpen && apiBaseUrl) {
+      fetch(`${apiBaseUrl}/api/brain/provider`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) setBrainProviderState(data);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen, apiBaseUrl]);
 
   if (!isOpen) return null;
+
+  const updateBrainProviderOnServer = async (patch: {
+    provider?: BrainProviderId;
+    googleApiKey?: string;
+    selectedGoogleModel?: GoogleModelId;
+  }) => {
+    setSavingProvider(true);
+    setProviderStatusMsg(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/brain/provider`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBrainProviderState(data);
+        if (patch.googleApiKey) {
+          setGoogleKeyInput('');
+          setProviderStatusMsg('Google AI Studio key saved on Central Brain');
+        } else if (patch.provider === 'google_ai_studio') {
+          setProviderStatusMsg('Switched to Google AI Studio API (Strata bypassed)');
+        } else if (patch.provider === 'strata') {
+          setProviderStatusMsg('Switched to Strata Local GPU');
+        } else {
+          setProviderStatusMsg('Google AI Studio settings updated');
+        }
+      } else {
+        setProviderStatusMsg('Failed to update provider on Central Brain');
+      }
+    } catch {
+      setProviderStatusMsg('Central Brain unreachable');
+    } finally {
+      setSavingProvider(false);
+    }
+  };
 
   const isTauri = isTauriEnvironment();
   const { host: resolvedHost, port: resolvedPort } = cleanHostAndPort(inputHost, inputPort);
@@ -320,6 +379,130 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <span className="text-accent-blue truncate">http://{resolvedHost}:{resolvedPort}</span>
               </div>
             </div>
+          </div>
+
+          {/* Brain Inference Provider (Strata Local GPU vs Google AI Studio API) */}
+          <div className="space-y-2.5 pt-3 border-t border-border-subtle/50">
+            <div className="flex items-center justify-between gap-2">
+              <label className="flex items-center gap-1.5 font-semibold text-text-primary text-xs">
+                <Cloud className="w-4 h-4 text-sky-400" />
+                <span>Brain Inference Provider</span>
+              </label>
+              {providerStatusMsg ? (
+                <span className="text-[10px] font-mono text-emerald-400 truncate max-w-[200px]">
+                  {providerStatusMsg}
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-text-muted">
+                  {brainProvider === 'google_ai_studio' ? 'Google AI API Active' : 'Strata Local GPU'}
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-text-muted leading-relaxed">
+              The Central Brain still manages workspaces, Harness², EdgeBridge tools, and thread state. Switch between local Strata GPU or Google AI Studio API.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={savingProvider}
+                onClick={() => updateBrainProviderOnServer({ provider: 'strata' })}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  brainProvider === 'strata'
+                    ? 'bg-emerald-500/15 border-emerald-500/60 text-text-primary'
+                    : 'bg-canvas border-border-subtle text-text-secondary hover:border-border-strong'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs">Strata (Local GPU)</span>
+                  {brainProvider === 'strata' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+                </div>
+                <div className="text-[10px] text-text-muted mt-0.5">Swift 1.5 Flash-Next • Port 8080</div>
+              </button>
+
+              <button
+                type="button"
+                disabled={savingProvider}
+                onClick={() => updateBrainProviderOnServer({ provider: 'google_ai_studio' })}
+                className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                  brainProvider === 'google_ai_studio'
+                    ? 'bg-sky-500/15 border-sky-500/60 text-text-primary'
+                    : 'bg-canvas border-border-subtle text-text-secondary hover:border-border-strong'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs">Google AI Studio API</span>
+                  {brainProvider === 'google_ai_studio' && <CheckCircle2 className="w-3.5 h-3.5 text-sky-400" />}
+                </div>
+                <div className="text-[10px] text-text-muted mt-0.5">Decisions Orchestrator • Gemini 4 / 3.8</div>
+              </button>
+            </div>
+
+            {brainProvider === 'google_ai_studio' && (
+              <div className="p-3 rounded-lg bg-canvas border border-sky-500/30 space-y-2.5 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-primary">
+                    <KeyRound className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Google AI Studio API Key</span>
+                  </span>
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                      googleHasApiKey
+                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                    }`}
+                  >
+                    {googleHasApiKey ? `Configured (${googleMaskedApiKey})` : 'API Key Required'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={googleKeyInput}
+                    onChange={(e) => setGoogleKeyInput(e.target.value)}
+                    placeholder={googleHasApiKey ? `Enter new key to replace ${googleMaskedApiKey}` : 'Paste AIza... API key'}
+                    className="flex-1 bg-surface border border-border-subtle rounded-md px-2.5 py-1.5 font-mono text-xs text-text-primary outline-none focus:border-sky-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={savingProvider || !googleKeyInput.trim()}
+                    onClick={() =>
+                      updateBrainProviderOnServer({
+                        provider: 'google_ai_studio',
+                        googleApiKey: googleKeyInput.trim(),
+                      })
+                    }
+                    className="px-3 py-1.5 rounded-md bg-sky-500 hover:bg-sky-400 disabled:opacity-40 text-black font-semibold text-xs transition-colors cursor-pointer shrink-0"
+                  >
+                    Save Key
+                  </button>
+                </div>
+
+                <div className="space-y-1 pt-1">
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider font-medium">
+                    Active Google AI Studio Model
+                  </label>
+                  <select
+                    value={selectedGoogleModel}
+                    onChange={(e) =>
+                      updateBrainProviderOnServer({
+                        provider: 'google_ai_studio',
+                        selectedGoogleModel: e.target.value as GoogleModelId,
+                      })
+                    }
+                    className="w-full bg-surface border border-border-subtle rounded-md px-2.5 py-1.5 text-xs text-text-primary outline-none focus:border-sky-400 cursor-pointer"
+                  >
+                    {GOOGLE_MODEL_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name} — {opt.sub}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* App Updates Section */}

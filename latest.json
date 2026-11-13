@@ -1,15 +1,15 @@
 {
-  "version": "v2.3.8",
-  "notes": "Client-connect-only Strata wake (0 MB VRAM standby on Brain startup), hide all remaining Windows console popups, and Tauri Android client support.",
-  "pub_date": "2026-11-13T04:12:50.001Z",
+  "version": "v2.3.9",
+  "notes": "Google AI Studio Brain Provider, Decisions API Orchestrator, and Android 17 & foldable UI fixes",
+  "pub_date": "2026-11-13T23:08:26.279Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelkyZW91NWZpVTl0MFNhQ01LeHViSkE5VWNjbWVFNG4zNUUvODB0MWNlWmM0VWc5ZGw4TFM3YTlBY3RyNUJBc1U1SVFpVXFBd1hHL1dWNFpjRWlCcGdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTQzMTY5CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy44X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuOAp3b0lJakM4UlNFUTRHZFJsbVdJS3c5d09SQy9uK0dLRTFaamFxNDltV3JmempReC9JRVdOMXRtWjdIdzVRMFc4R1FEYkdOUUJyZXFoOEUrY05SK1FDZz09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.8/LocalGravity_2.3.8_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelc3TlNIcEs0VjUzU29xdGlQdllsR2VIVy9WS1JOQ0RKVTVTQWszdUtaWWZiUEhPNzhqYkJrdUJHK2RVZXNWdVJLUUR2Y3lndTRJYU0wR1NFQ2tjY2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjExMzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy45X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuOQoramlleFNpdkV2ckxrQkRKaEx5K2hxTXgxNTVjYXRDUjkwaVJvNTh4N3ZmL2xhcm9FZEUyOXVYZnNGd1dkN2ZoTEJvSGdlbm5GZGI2YWJCRVBlbG9DUT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.9/LocalGravity_2.3.9_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelgwdHFZVDhySi9kbEU1eE5LY21IMm1NZUlCbXByTDVBV1NqN1l5eWg4LzArWUNhRDB2NnUwUkovWlpIaEk4VnRtU1R2dEtXZk5vdzVVNmh6Zm91SkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTQzMTY5CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy44X2FhcmNoNjQuZG1nCXZlcnNpb246Mi4zLjgKQkhBWGJvVDVRa0FuNCtBaVFmeGZ2RFBVWTlEMlgydkppR1BVRFJKUmdQdVhPdXZUTDdjWC9reWlBakJUMXZxL0lzSFo4SVV2QTNFTEVlTXRyejJtQVE9PQo=",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.8/LocalGravity_2.3.8_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelc3TlNIcEs0VjUzU29xdGlQdllsR2VIVy9WS1JOQ0RKVTVTQWszdUtaWWZiUEhPNzhqYkJrdUJHK2RVZXNWdVJLUUR2Y3lndTRJYU0wR1NFQ2tjY2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjExMzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy45X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuOQoramlleFNpdkV2ckxrQkRKaEx5K2hxTXgxNTVjYXRDUjkwaVJvNTh4N3ZmL2xhcm9FZEUyOXVYZnNGd1dkN2ZoTEJvSGdlbm5GZGI2YWJCRVBlbG9DUT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.9/LocalGravity_2.3.9_aarch64.dmg"
     }
   }
 }
