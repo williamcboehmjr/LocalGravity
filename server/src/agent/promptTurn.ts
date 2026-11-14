@@ -538,6 +538,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       let committedFinalContent = '';
       const collectedStepNotes: string[] = [];
       let lastStepHadToolError = false;
+      const MAX_STEP_WINDOWS = 4; // Up to 4 × MAX_TOOL_STEPS (128 steps) via automatic context compaction
+      let stepWindowCount = 0;
+      let consecutiveErrorSteps = 0;
+      let lastToolSignature = '';
+      let repeatedSignatureCount = 0;
+      let hitStuckLoop = false;
       emitSubagentEvents = ['/goal', '/teamwork', '/swarm'].includes(slashInfo.command || '');
 
       // Broadcast active subagent start to Overview drawer only for explicit multi-step/agent slash modes
@@ -1005,6 +1011,20 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
         // Track whether any tool in this step errored so orchestrator tiers can re-enable thinking on recovery
         lastStepHadToolError = executedToolsThisStep.some((t) => Boolean(t.hadError));
+        if (executedToolsThisStep.length > 0 && executedToolsThisStep.every((t) => Boolean(t.hadError))) {
+          consecutiveErrorSteps++;
+        } else {
+          consecutiveErrorSteps = 0;
+        }
+        const currentSig = executedToolsThisStep
+          .map((t) => `${t.toolName}:${JSON.stringify(t.arguments)}`)
+          .join('|');
+        if (currentSig && currentSig === lastToolSignature) {
+          repeatedSignatureCount++;
+        } else {
+          lastToolSignature = currentSig;
+          repeatedSignatureCount = 1;
+        }
 
         // Feed tool outputs back to the model for next turn reasoning
         db.updateThread(thread.id, { status: 'thinking' });
@@ -1049,12 +1069,53 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             });
           }
         }
+
+        // If a 32-step window finished mid-task, auto-compact and continue unless stuck in a failing loop
+        if (!abortController.signal.aborted && step >= MAX_TOOL_STEPS) {
+          if (consecutiveErrorSteps >= 4 || repeatedSignatureCount >= 4) {
+            hitStuckLoop = true;
+            break;
+          }
+          if (stepWindowCount + 1 < MAX_STEP_WINDOWS) {
+            stepWindowCount++;
+            const windowCompact = autoCompactMessages(chatMessages, 100, 6);
+            if (windowCompact.didCompact) {
+              chatMessages.splice(0, chatMessages.length, ...windowCompact.messages);
+              send({
+                type: 'CONTEXT_COMPACTED',
+                payload: {
+                  threadId: thread!.id,
+                  previousTokens: windowCompact.previousTokens,
+                  compactedTokens: windowCompact.compactedTokens,
+                  compactedTurnCount: windowCompact.compactedTurnCount,
+                  summary: windowCompact.summary,
+                  timestamp: Date.now(),
+                },
+              });
+            }
+            chatMessages.push({
+              role: 'user',
+              content:
+                `[System Auto-Continue • Context Compacted (Window ${stepWindowCount + 1}/${MAX_STEP_WINDOWS})]: ` +
+                `Earlier tool outputs were distilled to keep inference fast. Continue executing the remaining steps to complete the user's request. ` +
+                `Only pause and ask the user if you are genuinely blocked on missing information or a decision you cannot resolve.`,
+            });
+            emitPhase(
+              'thinking',
+              `Compacted context — continuing automatically (Window ${stepWindowCount + 1}/${MAX_STEP_WINDOWS})...`
+            );
+            step = 0;
+            continue;
+          }
+        }
       }
 
-      // If the loop exited because MAX_TOOL_STEPS was reached mid-task, clean any raw <tool_call>
-      // XML left in the streaming buffer and append a clear notice instead of stopping silently.
-      if (!abortController.signal.aborted && step >= MAX_TOOL_STEPS && hasExecutedTools) {
-        const limitNotice = `\n\n---\n*Stopped after reaching the ${MAX_TOOL_STEPS}-step tool limit. Send a follow-up message or use \`/goal\` to continue.*`;
+      // If the loop exited because of a stuck retry loop or the outer window cap, strip any trailing
+      // raw <tool_call> XML and explain clearly instead of stopping silently.
+      if (!abortController.signal.aborted && (hitStuckLoop || (step >= MAX_TOOL_STEPS && hasExecutedTools))) {
+        const limitNotice = hitStuckLoop
+          ? `\n\n---\n*Paused because the last few tool calls kept repeating or failing. Let me know how you'd like me to proceed or adjust the approach.*`
+          : `\n\n---\n*Paused after ${MAX_STEP_WINDOWS} compacted ${MAX_TOOL_STEPS}-step windows (${MAX_STEP_WINDOWS * MAX_TOOL_STEPS} total steps). Send a follow-up message or use \`/goal\` to keep going.*`;
         const cleanBase = committedFinalContent.trim();
         const finalText = cleanBase ? `${cleanBase}${limitNotice}` : limitNotice.trim();
         committedFinalContent = finalText;
