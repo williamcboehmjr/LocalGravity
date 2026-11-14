@@ -9,7 +9,7 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/williamcboehmjr/LocalGravity/release.yml?style=flat-square&label=Cross-Platform%20Builds)](https://github.com/williamcboehmjr/LocalGravity/actions)
 [![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20ChromeOS-informational?style=flat-square)](#platform-support)
 
-[Why I Built This](#why-i-built-this) · [How It Uses Strata](#how-localgravity-uses-strata-differently) · [Architecture](#architecture) · [Roadmap & `/megaswarm`](#whats-coming-next) · [Quick Start](#quick-start-from-source) · [Contributing](#contributing--feature-requests)
+[Why I Built This](#why-i-built-this) · [How It Uses Strata](#how-localgravity-uses-strata-differently) · [Workbench & Agent Features](#workbench--agent-features) · [Architecture](#architecture) · [Roadmap & `/megaswarm`](#whats-coming-next) · [Quick Start](#quick-start-from-source) · [Contributing](#contributing--feature-requests)
 
 </div>
 
@@ -36,7 +36,7 @@ Most local LLM clients treat inference like a static chat box where you manually
 - **Primary Local Model:** `Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS` (Sparse MoE + Vision, 64k context, `DFlash2` speculative decoding config).
 - **Why this model:** It balances fast token generation with native multimodal vision and reliable tool-calling inside consumer VRAM limits, making it practical for multi-step coding loops instead of just single-turn Q&A.
 - **Wake-on-Demand & Guaranteed `0 MB` VRAM Standby:** Instead of hogging VRAM 24/7, `LlamaMoESidecar` spawns Strata only when a prompt arrives, polls `/health` until ready, and automatically tears down the port `8080` process after idle timeout (or when you click **Sleep GPU**) so your GPU drops straight back to **0 MB VRAM**.
-- **Full Agentic Loop Over Strata's Stream:** Rather than plain chat, `Central Brain` wraps Strata's stream in a multi-step tool loop (`run_terminal`, `read_file`, `write_file`, `edit_file`, `apply_diff`, `grep_search`, `find_by_name`, `capture_screen`, MCP tools, `/swarm`, and auto-compaction) with **Reverse-RPC execution** on whatever client device you're working from.
+- **Full Agentic Loop Over Strata's Stream:** Rather than plain chat, `Central Brain` wraps Strata's stream in a multi-step tool loop (`run_terminal`, `read_file`, `write_file`, `edit_file`, `apply_diff`, `lsp_diagnostics`, `grep_search`, `find_by_name`, `capture_screen`, MCP tools, `/swarm`, `@repo-map`, and auto-compaction) with **Reverse-RPC execution** and **automatic post-edit syntax checks** on whatever client device you're working from.
 - **Live Thinking & Interleaved Working Trace:** Reasoning tokens stream into collapsible `Thought for Xs` accordions alongside borderless tool rows, `+X / -Y` diff badges, and interleaved `Working → Prose → Working` updates.
 
 | Capability | Default Strata Client | LocalGravity + Strata |
@@ -44,8 +44,8 @@ Most local LLM clients treat inference like a static chat box where you manually
 | **GPU Lifecycle** | Manual start/stop; stays in VRAM | **Wake-on-Demand** + auto-offload to `0 MB` VRAM |
 | **Execution** | Single-machine chat | **Reverse-RPC** native file edits & terminal across LAN/devices |
 | **Workflow** | Single-turn prompt & reply | Multi-step `/plan`, `/goal`, `/swarm`, `/boost`, `/compact` |
-| **Workbench** | Chat view only | **3-Pane IDE** (Threads, Trace + Chat, Diff Review / Monaco / xterm) |
-| **Cloud Toggle** | Local only | One-click switch to **Google AI Studio** (and more backends coming) |
+| **Workbench** | Chat view only | **3-Pane IDE + Overview Sidebar** (`Review`, `Files`, `Terminal`, `Extensions`, `Subagents`, `Artifacts`, Revert & Chat Rewind) |
+| **Cloud Toggle** | Local only | Local-first **Provider Registry** (`Strata`, `Ollama`, `llama.cpp`, `TabbyAPI`) + opt-in **Google AI Studio** & **Parallel MCP** |
 
 <details>
 <summary><strong>Screenshot: Redesigned Minimalist Settings Modal</strong></summary>
@@ -54,6 +54,20 @@ Most local LLM clients treat inference like a static chat box where you manually
   <img src="docs/screenshots/settings-modal.png" alt="LocalGravity Minimalist Settings" width="760" />
 </p>
 </details>
+
+---
+
+## Workbench & Agent Features
+
+Built around a **local-first, cloud-optional** workflow and tuned specifically to help local models hit higher accuracy in fewer turns:
+
+- **Collapsible Overview Sidebar & Extensions Panel:** Opens directly to **Overview** with quick navigation to `Review`, `Files`, `Terminal`, and `Extensions`, collapsed `Subagents` & `Background Tasks` counters, and `Artifacts` (capped at 4 by default with `See more / See less`). The **Extensions** panel manages installed Skills and both `stdio` and **Streamable HTTP / SSE MCP** servers with persistent enable/disable toggles across restarts (including opt-in **Parallel MCP** web research, disabled by default).
+- **LSP Diagnostics & Post-Edit Auto-Check:** Built-in `lsp_diagnostics` tool (`diagnostics`, `symbols`, `repo_map`) plus instant syntax and parse validation automatically appended to `write_file`, `edit_file`, and `apply_diff` outputs so the model catches typos and broken syntax immediately.
+- **Compact Repo Map & Dynamic `@` Context Mentions:** A ~1,200-token, reference-ranked symbol map (`@repo-map`) plus live `@git-diff` and `@problems` injections give smaller local models full codebase awareness without blowing the context window. Both `/` slash commands and `@` mentions work cleanly mid-sentence at the cursor.
+- **Uniform Local-First Provider Registry (`/api/providers`):** Persists provider profiles in `.runtime/providers.json`, defaulting to local **Strata (`:8080`)** with preconfigured profiles for **Ollama (`:11434`)**, **llama.cpp (`:8081`)**, **TabbyAPI (`:5000`)**, custom OpenAI-compatible endpoints, and opt-in **Google AI Studio**.
+- **Granular `allow` / `ask` / `deny` Permission Engine (`/api/permissions`):** Ordered glob rules over tool names and shell commands (e.g., auto-allowing read-only inspection and `git status`, hard-blocking destructive root commands) persisted across restarts.
+- **1-Click Revert & Full Chat Rewind:** Every edit records a checkpoint in SQLite. From **Review**, choose **Revert** (restore that file only) or **Rewind** (restore files, roll back newer edits, and rewind the chat thread back to that exact turn).
+- **Portable Repo Rules & OpenAPI 3.1 (`/api/openapi.json`):** Automatically loads `AGENTS.md`, `CLAUDE.md`, `.clinerules`, `.cursorrules`, and `.goosehints` alongside `.localgravity/harness/`, and exposes an OpenAPI 3.1 schema for external CLI/TUI/automation clients.
 
 ---
 
@@ -71,21 +85,22 @@ flowchart LR
     end
 
     subgraph Brain["Central Brain (TypeScript + Fastify · :3390)"]
-        ROUTER["Model & Orchestrator Router"]
-        SWARM["/swarm + Subagents + MCP"]
-        DB[("SQLite History & Checkpoints")]
+        ROUTER["Provider Registry & Orchestrator Router"]
+        SWARM["/swarm + Subagents + HTTP/stdio MCP"]
+        GUARD["LSP + RepoMap + Allow/Ask/Deny Guard"]
+        DB[("SQLite History & Rewind Checkpoints")]
     end
 
     subgraph Inference["Inference Engines"]
         STRATA["Strata Local GPU (:8080)\nSwift-1.5 Qwen 3.8 Flash-Next\nWake-on-Demand / 0 MB Standby"]
-        CLOUD["Google AI Studio API\nArgon / Carbon / Hydrogen"]
-        SOON["Coming Soon:\nOllama · llama.cpp · TabbyAPI · OpenAI"]
+        LOCAL["Local Registry Profiles\nOllama · llama.cpp · TabbyAPI · OpenAI-Compatible"]
+        CLOUD["Cloud Optional\nGoogle AI Studio (Argon / Carbon / Hydrogen) · Parallel MCP"]
     end
 
     Edge <-->|"WebSocket Reverse-RPC + REST"| Brain
     Brain --> STRATA
-    Brain --> CLOUD
-    Brain -.-> SOON
+    Brain --> LOCAL
+    Brain -.-> CLOUD
 ```
 
 ---
@@ -104,7 +119,7 @@ flowchart LR
 
 ## What's Coming Next
 
-- **More Local & OpenAI-Compatible Endpoints:** First-class support for **Ollama**, **llama.cpp** server, **TabbyAPI**, and general **OpenAI-compatible API routing** so you can plug in any local or self-hosted model stack.
+- **What's Ready vs. Next:** Preconfigured local profiles for **Ollama**, **llama.cpp**, **TabbyAPI**, and custom **OpenAI-compatible** endpoints are now registered in Central Brain's `ProviderRegistry` (`/api/providers`), with full streaming adapter UI routing next.
 - **`/megaswarm` (Experimental Idea):** Something I'm toying with—being able to pull together a big swarm of different cloud and local APIs (**Grok, ChatGPT / OpenAI, Google Gemini, Claude**, and more) all working in unison on the same problem. Great for kicking off a hard project on the right foot, or throwing combined brainpower, horsepower, and speed at a tough bug.
 
 ---
@@ -150,6 +165,7 @@ LocalGravity builds on a lot of great open-source software:
 - **Editor, Terminal & Markdown:** [Monaco Editor](https://microsoft.github.io/monaco-editor/) (MIT), [xterm.js](https://xtermjs.org/) (MIT), [react-markdown](https://github.com/remarkjs/react-markdown) & [remark-gfm](https://github.com/remarkjs/remark-gfm) (MIT)
 - **Backend & Storage:** [Fastify](https://fastify.dev/) (MIT), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) (MIT), [ws](https://github.com/websockets/ws) (MIT), [pdf-parse](https://www.npmjs.com/package/pdf-parse) (MIT), [yaml](https://github.com/eemeli/yaml) (ISC)
 - **Local Inference & Tools:** Strata local inference runtime, [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT), [ExLlamaV3](https://github.com/turboderp-org/exllamav3), [Playwright](https://playwright.dev/) (Apache-2.0), and the Model Context Protocol (MCP)
+- **Open-Source Agentic Inspiration:** Architectural patterns learned from studying [OpenCode](https://github.com/anomalyco/opencode), [Aider](https://github.com/Aider-AI/aider), [Continue.dev](https://github.com/continuedev/continue), [Cline](https://github.com/cline/cline) / [Roo Code](https://github.com/RooVetGit/Roo-Code), and [Block Goose](https://github.com/block/goose) (adapted independently into LocalGravity's TypeScript + Rust + SQLite codebase).
 
 ---
 
