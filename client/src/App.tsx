@@ -25,6 +25,7 @@ import {
   selectIsTurnActive,
   selectStatusLabel,
   isPhaseProtocolActive,
+  resetTurnProtocolState,
   applyDpiScaleToDom,
   getGoogleModelOption,
 } from './store/useSessionStore';
@@ -821,7 +822,13 @@ export const App: React.FC = () => {
     };
   }, [hostUrl, reconnectKey]);
 
+  // Reset turn-protocol tracking when switching backend hosts
+  useEffect(() => {
+    resetTurnProtocolState();
+  }, [hostUrl]);
+
   // Reconnection countdown timer (ticks every second when disconnected)
+  const isCountingDown = !isConnected && reconnectCountdown > 0;
   useEffect(() => {
     if (isConnected) {
       setReconnectCountdown(0);
@@ -829,29 +836,32 @@ export const App: React.FC = () => {
       return;
     }
 
-    if (reconnectCountdown <= 0) return;
+    if (!isCountingDown) return;
 
     const timer = setInterval(() => {
-      setReconnectCountdown((curr) => {
-        if (curr <= 1) {
-          handleManualReconnect();
-          return 0;
-        }
-        return curr - 1;
-      });
+      setReconnectCountdown((curr) => (curr <= 1 ? 0 : curr - 1));
     }, 1000);
 
     return () => clearInterval(timer);
+  }, [isConnected, isCountingDown]);
+
+  const prevReconnectCountdownRef = useRef(0);
+  useEffect(() => {
+    if (!isConnected && prevReconnectCountdownRef.current === 1 && reconnectCountdown === 0) {
+      handleManualReconnect();
+    }
+    prevReconnectCountdownRef.current = reconnectCountdown;
   }, [isConnected, reconnectCountdown, handleManualReconnect]);
 
   // Scheduled Timer live countdown effect
+  const hasActiveTimer = timerCountdown > 0;
   useEffect(() => {
-    if (timerCountdown <= 0) return;
+    if (!hasActiveTimer) return;
     const t = setInterval(() => {
       setTimerCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
     return () => clearInterval(t);
-  }, [timerCountdown]);
+  }, [hasActiveTimer]);
 
 
 

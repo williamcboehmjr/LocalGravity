@@ -15,6 +15,7 @@ const tests = [
   'turnPipeline.test.js',
   'swarmManager.test.js',
   'edgeBridge.test.js',
+  'googleAiEngine.test.js',
 ];
 
 console.log('==============================================================');

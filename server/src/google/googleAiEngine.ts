@@ -149,6 +149,7 @@ export class GoogleAiEngine {
   private configPath: string;
   private config: BrainProviderConfig;
   private lastTokensPerSec = 0;
+  private thoughtSignatureCache = new Map<string, any>();
 
   constructor(repoRoot: string) {
     this.repoRoot = repoRoot;
@@ -391,19 +392,71 @@ export class GoogleAiEngine {
     };
   }
 
+  private makeSignatureKey(name: string, args: unknown): string {
+    let canonical = '{}';
+    if (typeof args === 'string') {
+      try {
+        canonical = JSON.stringify(JSON.parse(args));
+      } catch {
+        canonical = args.trim() || '{}';
+      }
+    } else if (args && typeof args === 'object') {
+      canonical = JSON.stringify(args);
+    }
+    return `${name}::${canonical}`;
+  }
+
+  private recordThoughtSignature(name: string, args: unknown, extraContent: any): void {
+    if (!extraContent?.google?.thought_signature) return;
+    const key = this.makeSignatureKey(name, args);
+    this.thoughtSignatureCache.set(key, extraContent);
+    if (this.thoughtSignatureCache.size > 200) {
+      const oldestKey = this.thoughtSignatureCache.keys().next().value;
+      if (oldestKey !== undefined) this.thoughtSignatureCache.delete(oldestKey);
+    }
+  }
+
+  private lookupThoughtSignature(name: string, args: unknown): any | undefined {
+    const key = this.makeSignatureKey(name, args);
+    return this.thoughtSignatureCache.get(key);
+  }
+
   private toOpenAiMessages(
     messages: StreamCompletionParams['messages']
   ): Array<Record<string, any>> {
-    return messages.map((m) => {
+    return messages.map((m, msgIdx) => {
+      const role = msgIdx > 0 && m.role === 'system' ? 'user' : m.role;
       const base: Record<string, any> = {
-        role: m.role,
+        role,
         content: m.content ?? '',
       };
-      if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-        base.tool_calls = m.tool_calls;
+      if (role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        let hasAnySignature = false;
+        const mappedToolCalls = m.tool_calls.map((tc: any) => {
+          const cloned = { ...tc };
+          const cachedExtra = cloned.extra_content?.google?.thought_signature
+            ? cloned.extra_content
+            : this.lookupThoughtSignature(cloned.function?.name || '', cloned.function?.arguments);
+          if (cachedExtra?.google?.thought_signature) {
+            cloned.extra_content = cachedExtra;
+            hasAnySignature = true;
+          }
+          return cloned;
+        });
+        if (!hasAnySignature && mappedToolCalls.length > 0) {
+          mappedToolCalls[0] = {
+            ...mappedToolCalls[0],
+            extra_content: {
+              google: {
+                thought_signature: 'context_engineering_is_the_way_to_go',
+              },
+            },
+          };
+        }
+        base.tool_calls = mappedToolCalls;
         if (!base.content) base.content = '';
       }
-      if (m.role === 'tool') {
+      if (role === 'tool') {
         base.tool_call_id = m.tool_call_id || `call_${Date.now()}`;
         if (m.name) base.name = m.name;
         base.content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
@@ -454,6 +507,9 @@ export class GoogleAiEngine {
     const turnStart = Date.now();
 
     const emitThought = (chunk: string) => {
+      // Mirror Strata's emitThought gate: when the thinking budget is OFF, suppress all
+      // orchestrator planning/badge deltas so `totalThinkingTokens` stays 0.
+      if (!chunk || params.thinkingBudget === 'off') return;
       totalThinkingContent += chunk;
       totalThinkingTokens += Math.max(1, Math.ceil(chunk.length / 4));
       params.onThoughtDelta(chunk, Date.now() - turnStart, totalThinkingTokens);
@@ -661,7 +717,14 @@ export class GoogleAiEngine {
       let outputTokens = 0;
       let firstTokenAt = 0;
       let inThinkTag = false;
-      const toolCallBuffers = new Map<number, { id: string; name: string; args: string; announced: boolean }>();
+      const toolCallSlots: Array<{
+        id: string;
+        index?: number;
+        name: string;
+        args: string;
+        announced: boolean;
+        extraContent?: any;
+      }> = [];
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -692,7 +755,11 @@ export class GoogleAiEngine {
           if (!delta) continue;
 
           const reasoningDelta = delta.reasoning_content || delta.reasoning;
-          if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+          // Mirror Strata's emitThought gate: when the thinking budget is OFF, suppress all
+          // reasoning deltas entirely (do not count tokens, do not surface a thought stream).
+          if (params.thinkingBudget === 'off') {
+            // Intentionally drop reasoning_content so `thinkingTokens` stays 0.
+          } else if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
             thinkingContent += reasoningDelta;
             thinkingTokens += Math.max(1, Math.ceil(reasoningDelta.length / 4));
             params.onThoughtDelta(reasoningDelta, Date.now() - startTime, thinkingTokens);
@@ -701,8 +768,9 @@ export class GoogleAiEngine {
           if (typeof delta.content === 'string' && delta.content.length > 0) {
             let chunkText = delta.content;
 
-            // Support models emitting <thought>...</thought> or <think>...</think>
-            if (!inThinkTag && (chunkText.includes('<thought>') || chunkText.includes('<think>'))) {
+            // Support models emitting <thought>...</thought> or <think>...</think>.
+            // When budget is OFF, treat the entire stream as plain answer content and skip tag parsing.
+            if (params.thinkingBudget !== 'off' && !inThinkTag && (chunkText.includes('<thought>') || chunkText.includes('<think>'))) {
               const openMatch = chunkText.match(/<(thought|think)>/);
               if (openMatch && openMatch.index !== undefined) {
                 const before = chunkText.slice(0, openMatch.index);
@@ -756,29 +824,74 @@ export class GoogleAiEngine {
 
           if (Array.isArray(delta.tool_calls)) {
             for (const tc of delta.tool_calls) {
-              const idx = typeof tc.index === 'number' ? tc.index : 0;
-              const existing = toolCallBuffers.get(idx) || {
-                id: tc.id || `call_${Date.now()}_${idx}`,
-                name: '',
-                args: '',
-                announced: false,
-              };
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name += tc.function.name;
-              if (tc.function?.arguments) existing.args += tc.function.arguments;
-              if (existing.name && !existing.announced) {
-                existing.announced = true;
-                params.onToolCallPreparing?.(existing.name);
+              let slot:
+                | {
+                    id: string;
+                    index?: number;
+                    name: string;
+                    args: string;
+                    announced: boolean;
+                    extraContent?: any;
+                  }
+                | undefined;
+
+              if (typeof tc.id === 'string' && tc.id.length > 0) {
+                slot = toolCallSlots.find((s) => s.id === tc.id);
+                if (!slot) {
+                  slot = {
+                    id: tc.id,
+                    index: typeof tc.index === 'number' ? tc.index : toolCallSlots.length,
+                    name: '',
+                    args: '',
+                    announced: false,
+                    extraContent: undefined,
+                  };
+                  toolCallSlots.push(slot);
+                }
+              } else if (typeof tc.index === 'number') {
+                for (let i = toolCallSlots.length - 1; i >= 0; i -= 1) {
+                  if (toolCallSlots[i].index === tc.index) {
+                    slot = toolCallSlots[i];
+                    break;
+                  }
+                }
+                if (!slot) slot = toolCallSlots[tc.index];
+              } else {
+                slot = toolCallSlots[toolCallSlots.length - 1];
               }
-              toolCallBuffers.set(idx, existing);
+
+              if (!slot) {
+                slot = {
+                  id: `call_${Date.now()}_${toolCallSlots.length}`,
+                  index: typeof tc.index === 'number' ? tc.index : toolCallSlots.length,
+                  name: '',
+                  args: '',
+                  announced: false,
+                  extraContent: undefined,
+                };
+                toolCallSlots.push(slot);
+              }
+
+              if (tc.function?.name) {
+                if (!slot.name) {
+                  slot.name = tc.function.name;
+                } else if (slot.args === '' && tc.function.name !== slot.name) {
+                  slot.name += tc.function.name;
+                }
+              }
+              if (tc.function?.arguments) slot.args += tc.function.arguments;
+              if (tc.extra_content) slot.extraContent = tc.extra_content;
+              if (slot.name && !slot.announced) {
+                slot.announced = true;
+                params.onToolCallPreparing?.(slot.name);
+              }
             }
           }
         }
       }
 
-      if (!params.abortSignal?.aborted && toolCallBuffers.size > 0 && params.onToolCallRequest) {
-        const ordered = Array.from(toolCallBuffers.entries()).sort((a, b) => a[0] - b[0]);
-        for (const [, tc] of ordered) {
+      if (!params.abortSignal?.aborted && toolCallSlots.length > 0 && params.onToolCallRequest) {
+        for (const tc of toolCallSlots) {
           if (!tc.name) continue;
           let parsedArgs: Record<string, any> = {};
           const rawArgs = tc.args.trim();
@@ -788,6 +901,9 @@ export class GoogleAiEngine {
             } catch {
               parsedArgs = {};
             }
+          }
+          if (tc.extraContent) {
+            this.recordThoughtSignature(tc.name, parsedArgs, tc.extraContent);
           }
           await params.onToolCallRequest(tc.name, parsedArgs);
         }

@@ -251,6 +251,10 @@ const turnSeqSeen = new Map<string, number>();
 // Once any TURN_PHASE arrives it is authoritative; legacy handlers stop driving isGenerating.
 let phaseProtocolSeen = false;
 export const isPhaseProtocolActive = () => phaseProtocolSeen;
+export const resetTurnProtocolState = () => {
+  turnSeqSeen.clear();
+  phaseProtocolSeen = false;
+};
 
 const findAssistantIdx = (list: ChatMessage[], messageId?: string): number => {
   if (messageId) {
