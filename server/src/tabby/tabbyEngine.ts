@@ -10,6 +10,7 @@ import {
   GoogleAiEngine,
   type BrainProviderConfig,
   type BrainProviderPublicConfig,
+  type GoogleModelId,
 } from '../google/googleAiEngine.js';
 
 // Pure text-normalization helpers extracted to a side-effect-free module.
@@ -572,6 +573,7 @@ export class TabbyEngine {
     onToolCallPreparing?: (toolName?: string) => void;
     gpuPriority?: GpuTurnPriority;
     skipGpuLock?: boolean;
+    googleModelOverride?: GoogleModelId;
   }): Promise<{
     content: string;
     thinkingContent: string;

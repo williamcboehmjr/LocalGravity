@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 export type ModelTier = 'low' | 'medium' | 'high';
-export type ThinkingBudget = 'off' | 'fast' | 'deep';
+export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ThreadStatus = 'idle' | 'thinking' | 'executing_tool' | 'awaiting_approval' | 'error';
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 

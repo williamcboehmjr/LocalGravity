@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { GoogleAiEngine } from '../google/googleAiEngine.js';
+import { GoogleAiEngine, normalizeGoogleModelId } from '../google/googleAiEngine.js';
 
 async function runGoogleAiEngineTests() {
   console.log('Running GoogleAiEngine Tool-Call & ThoughtSignature Unit Tests...');
@@ -106,7 +106,41 @@ async function runGoogleAiEngineTests() {
       'context_engineering_is_the_way_to_go'
     );
 
-    console.log('✅ GoogleAiEngine Unit Tests PASSED (8/8 assertions)');
+    // 3. Two orchestrator IDs normalization & Argon/Carbon routing decisions
+    assert.equal(normalizeGoogleModelId('orchestrator'), 'orchestrator-argon-hydrogen');
+    assert.equal(
+      normalizeGoogleModelId('orchestrator-argon-hydrogen'),
+      'orchestrator-argon-hydrogen'
+    );
+    assert.equal(
+      normalizeGoogleModelId('orchestrator-carbon-hydrogen'),
+      'orchestrator-carbon-hydrogen'
+    );
+
+    globalThis.fetch = (async () =>
+      new Response('Decisions API offline in unit test', { status: 503 })) as typeof fetch;
+
+    const argonDecision = await engine.evaluateOrchestratorDecision(
+      'Build a full multi-module TypeScript parser',
+      undefined,
+      'argon'
+    );
+    assert.equal(argonDecision.plannerChoice, 'argon');
+    assert.equal(argonDecision.needsPlanning, true);
+
+    const carbonDecision = await engine.evaluateOrchestratorDecision(
+      'Build a full multi-module TypeScript parser',
+      undefined,
+      'carbon'
+    );
+    assert.equal(carbonDecision.plannerChoice, 'carbon');
+    assert.equal(carbonDecision.needsPlanning, true);
+
+    const trivialDecision = await engine.evaluateOrchestratorDecision('hello', undefined, 'carbon');
+    assert.equal(trivialDecision.plannerChoice, 'hydrogen');
+    assert.equal(trivialDecision.needsPlanning, false);
+
+    console.log('✅ GoogleAiEngine Unit Tests PASSED (17/17 assertions)');
   } finally {
     globalThis.fetch = originalFetch;
     fs.rmSync(tmpDir, { recursive: true, force: true });

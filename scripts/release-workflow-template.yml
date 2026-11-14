@@ -40,6 +40,7 @@ jobs:
       - name: Build Tauri Desktop Bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: |
           cd client
           npx tauri build ${{ matrix.args }}
@@ -63,6 +64,8 @@ jobs:
 
       - name: Generate updater manifest
         run: |
+          mkdir -p client/src-tauri/target/release/bundle/msi
+          find tauri-bundle-windows-latest -name "*.msi*" -exec cp {} client/src-tauri/target/release/bundle/msi/ \; || true
           node scripts/generate_updater_manifest.mjs
 
       - name: Release to GitHub
@@ -70,8 +73,10 @@ jobs:
         with:
           files: |
             latest.json
-            tauri-bundle-windows-latest/msi/*
-            tauri-bundle-macos-latest/dmg/*
-            tauri-bundle-macos-latest/macos/*
+            tauri-bundle-windows-latest/**/*.msi
+            tauri-bundle-windows-latest/**/*.msi.sig
+            tauri-bundle-macos-latest/**/*.dmg
+            tauri-bundle-macos-latest/**/*.app.tar.gz
+            tauri-bundle-macos-latest/**/*.app.tar.gz.sig
           draft: false
           prerelease: false

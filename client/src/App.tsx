@@ -28,6 +28,7 @@ import {
   resetTurnProtocolState,
   applyDpiScaleToDom,
   getGoogleModelOption,
+  getSavedLastLocation,
 } from './store/useSessionStore';
 import { useArtifactStore } from './store/useArtifactStore';
 import { useTelemetryStore } from './store/useTelemetryStore';
@@ -153,11 +154,42 @@ export const App: React.FC = () => {
   const [showRightDrawer, setShowRightDrawer] = useState(window.innerWidth > 1100);
 
   useEffect(() => {
+    let wasDesktop = window.innerWidth > 900;
     const onResize = () => {
-      setShowLeftRail(window.innerWidth > 900);
+      const isDesktop = window.innerWidth > 900;
+      if (isDesktop !== wasDesktop) {
+        setShowLeftRail(isDesktop);
+        wasDesktop = isDesktop;
+      }
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Refresh active thread messages when returning to the app (e.g., Android/mobile WebView resume)
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const curState = useSessionStore.getState();
+        if (
+          curState.isConnected &&
+          !curState.isGenerating &&
+          curState.sessionId &&
+          curState.sessionId !== 'thread-default'
+        ) {
+          handleSelectThread(curState.sessionId, { keepMobileDrawer: true });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  // Auto-open Right Drawer when clicking file:// links or tool workbench shortcuts in ChatFeed
+  useEffect(() => {
+    const onOpenRightDrawer = () => setShowRightDrawer(true);
+    window.addEventListener('localgravity:open-right-drawer', onOpenRightDrawer);
+    return () => window.removeEventListener('localgravity:open-right-drawer', onOpenRightDrawer);
   }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRemoteOpen, setIsRemoteOpen] = useState(false);
@@ -456,38 +488,98 @@ export const App: React.FC = () => {
               if (payload.brainHost || payload.edgeHosts) {
                 useSessionStore.getState().setHostPresence(payload.brainHost, payload.edgeHosts);
               }
+              const savedLoc = getSavedLastLocation();
+              const inMemProjectId =
+                store.activeProjectId && store.activeProjectId !== 'proj-default'
+                  ? store.activeProjectId
+                  : null;
+              const preferredProjectId =
+                (inMemProjectId && payload.projects?.some((p: any) => p.id === inMemProjectId)
+                  ? inMemProjectId
+                  : null) ||
+                (savedLoc.projectId && payload.projects?.some((p: any) => p.id === savedLoc.projectId)
+                  ? savedLoc.projectId
+                  : null) ||
+                payload.activeProject?.id;
+
+              const inMemThreadId =
+                store.sessionId && store.sessionId !== 'thread-default' ? store.sessionId : null;
+              const preferredThreadId = inMemThreadId || savedLoc.threadId || payload.activeThreadId;
+
+              const switchedToSavedProject = Boolean(
+                preferredProjectId &&
+                  payload.activeProject?.id &&
+                  preferredProjectId !== payload.activeProject.id
+              );
+
               if (payload.projects?.length > 0) {
-                setProjects(payload.projects, payload.activeProject?.id);
+                setProjects(payload.projects, preferredProjectId);
               }
-              if (payload.threads) {
-                setThreads(payload.threads, payload.activeThreadId);
-              }
-              const resolvedThreadId = useSessionStore.getState().sessionId;
-              const activeThreadObj = Array.isArray(payload.threads)
-                ? payload.threads.find((t: any) => t.id === resolvedThreadId)
-                : null;
-              const matchingStreams = Array.isArray(payload.activeStreams)
-                ? payload.activeStreams.filter(
-                    (s: any) => !s?.thread_id || s.thread_id === resolvedThreadId
-                  )
-                : [];
-              if (payload.messages) {
-                hydrateMessagesFromServer(
-                  payload.messages,
-                  matchingStreams,
-                  activeThreadObj?.status,
-                  payload.activeTurn
-                );
-              }
-              const isServerThreadBusy =
-                activeThreadObj?.status === 'thinking' || activeThreadObj?.status === 'executing_tool';
-              const hasActiveStream = matchingStreams.length > 0 || isServerThreadBusy;
-              if (payload.activeTurn && (!payload.activeTurn.thread_id || payload.activeTurn.thread_id === resolvedThreadId)) {
-                applyTurnPhase(payload.activeTurn);
-                if (!payload.activeTurn.is_active) setAdaptiveCotLabel('');
+
+              if (switchedToSavedProject && preferredProjectId) {
+                const base = useSessionStore.getState().apiBaseUrl;
+                fetch(`${base}/api/threads?project_id=${encodeURIComponent(preferredProjectId)}`)
+                  .then((r) => (r.ok ? r.json() : null))
+                  .then((projData) => {
+                    const list = projData?.threads || [];
+                    const targetTid =
+                      (preferredThreadId && list.some((t: any) => t.id === preferredThreadId)
+                        ? preferredThreadId
+                        : list[0]?.id) || '';
+                    if (list.length > 0) {
+                      setThreads(list, targetTid);
+                    }
+                    if (targetTid) {
+                      handleSelectThread(targetTid, { keepMobileDrawer: true });
+                    }
+                  })
+                  .catch(() => {});
               } else {
-                syncGenerating(hasActiveStream);
-                if (!hasActiveStream) setAdaptiveCotLabel('');
+                const resolvedPreferredThread =
+                  (preferredThreadId &&
+                  Array.isArray(payload.threads) &&
+                  payload.threads.some((t: any) => t.id === preferredThreadId)
+                    ? preferredThreadId
+                    : payload.activeThreadId) || undefined;
+
+                if (payload.threads) {
+                  setThreads(payload.threads, resolvedPreferredThread);
+                }
+
+                if (resolvedPreferredThread && resolvedPreferredThread !== payload.activeThreadId) {
+                  handleSelectThread(resolvedPreferredThread, { keepMobileDrawer: true });
+                } else {
+                  const resolvedThreadId = useSessionStore.getState().sessionId;
+                  const activeThreadObj = Array.isArray(payload.threads)
+                    ? payload.threads.find((t: any) => t.id === resolvedThreadId)
+                    : null;
+                  const matchingStreams = Array.isArray(payload.activeStreams)
+                    ? payload.activeStreams.filter(
+                        (s: any) => !s?.thread_id || s.thread_id === resolvedThreadId
+                      )
+                    : [];
+                  if (payload.messages) {
+                    hydrateMessagesFromServer(
+                      payload.messages,
+                      matchingStreams,
+                      activeThreadObj?.status,
+                      payload.activeTurn
+                    );
+                  }
+                  const isServerThreadBusy =
+                    activeThreadObj?.status === 'thinking' || activeThreadObj?.status === 'executing_tool';
+                  const hasActiveStream = matchingStreams.length > 0 || isServerThreadBusy;
+                  if (
+                    payload.activeTurn &&
+                    (!payload.activeTurn.thread_id || payload.activeTurn.thread_id === resolvedThreadId)
+                  ) {
+                    applyTurnPhase(payload.activeTurn);
+                    if (!payload.activeTurn.is_active) setAdaptiveCotLabel('');
+                  } else {
+                    syncGenerating(hasActiveStream);
+                    if (!hasActiveStream) setAdaptiveCotLabel('');
+                  }
+                }
               }
               if (payload.checkpoints) {
                 setCheckpoints(payload.checkpoints);
@@ -1093,6 +1185,9 @@ export const App: React.FC = () => {
   };
 
   const handleNewThread = async () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setShowLeftRail(false);
+    }
     pendingInterruptRef.current = null;
     try {
       const res = await fetch(`${apiBaseUrl}/api/threads`, {
@@ -1136,7 +1231,10 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSelectThread = async (threadId: string) => {
+  const handleSelectThread = async (threadId: string, opts?: { keepMobileDrawer?: boolean }) => {
+    if (!opts?.keepMobileDrawer && typeof window !== 'undefined' && window.innerWidth < 768) {
+      setShowLeftRail(false);
+    }
     pendingInterruptRef.current = null;
     setSwarmState(null);
     try {
@@ -1362,8 +1460,8 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowLeftRail(true)}
-                className="p-1 hover:bg-[#1E1E20] rounded-md text-[#8E8E93] hover:text-[#E3E3E3] mr-1 hidden md:block"
-                title="Expand Sidebar"
+                className="p-1.5 hover:bg-[#1E1E20] rounded-md text-[#8E8E93] hover:text-[#E3E3E3] mr-0.5 shrink-0"
+                title="Open Projects & Conversations"
               >
                 <PanelLeft className="w-4 h-4" />
               </button>
@@ -1541,7 +1639,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setShowRightDrawer(!showRightDrawer)}
-              className={`p-1.5 rounded-md transition-colors hidden md:block ${
+              className={`p-1.5 rounded-md transition-colors shrink-0 ${
                 showRightDrawer
                   ? 'bg-[#222226] text-[#E3E3E3]'
                   : 'hover:bg-[#1E1E20] text-[#8E8E93] hover:text-[#E3E3E3]'
@@ -1737,11 +1835,27 @@ export const App: React.FC = () => {
 
       {/* 3. RIGHT PANE (Compact AuxTabBar + Full-Height Workbench) */}
       {showRightDrawer && (
-        <aside
-          style={{ width: `${rightDrawerWidth}px` }}
-          className="shrink-0 h-full bg-[#131314] p-2.5 flex flex-col gap-2 min-w-0 hidden md:flex"
-        >
-          <AuxTabBar />
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 z-30 md:hidden"
+            onClick={() => setShowRightDrawer(false)}
+          />
+          <aside
+            style={{ width: `${rightDrawerWidth}px` }}
+            className="shrink-0 h-full bg-[#131314] p-2.5 flex flex-col gap-2 min-w-0 fixed md:static inset-y-0 right-0 z-40 max-w-[92vw] md:max-w-none shadow-2xl md:shadow-none border-l border-[#222225] md:border-l-0"
+          >
+            <div className="flex items-center justify-between md:hidden px-1 pt-0.5">
+              <span className="text-xs font-medium text-[#E3E3E3]">Workspace Pane</span>
+              <button
+                type="button"
+                onClick={() => setShowRightDrawer(false)}
+                className="p-1 rounded-md text-[#8E8E93] hover:text-[#E3E3E3] hover:bg-[#1E1E20]"
+                title="Close Right Pane"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <AuxTabBar />
 
           {/* Active Workbench View Card */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
@@ -1777,6 +1891,7 @@ export const App: React.FC = () => {
             {activeTab === 'swarm' && <SwarmBoardTab />}
           </div>
         </aside>
+        </>
       )}
 
       </div>

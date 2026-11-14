@@ -360,6 +360,27 @@ export async function createDaemonServer(options?: {
     return { ok: true, artifact: updated };
   });
 
+  app.get('/api/mcp-outputs/:filename', async (req, reply) => {
+    const safeName = path.basename(String((req.params as any).filename || ''));
+    if (!safeName) {
+      return reply.code(400).send({ error: 'Invalid filename' });
+    }
+    const fullPath = path.join(REPO_ROOT, '.runtime', 'mcp-outputs', safeName);
+    if (!fs.existsSync(fullPath)) {
+      return reply.code(404).send({ error: 'Output image not found' });
+    }
+    const ext = path.extname(safeName).toLowerCase();
+    const mime =
+      ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : ext === '.webp'
+        ? 'image/webp'
+        : ext === '.gif'
+        ? 'image/gif'
+        : 'image/png';
+    return reply.type(mime).send(fs.readFileSync(fullPath));
+  });
+
   // ==================== SWARM BOARD & ROSTER API ====================
   app.get('/api/swarm/:threadId', async (req) => {
     const { threadId } = req.params as { threadId: string };

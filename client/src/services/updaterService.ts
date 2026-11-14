@@ -34,35 +34,29 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.9';
+  let currentVersion = '2.3.11';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
     } catch {}
   }
 
-  // Android APKs do not use the desktop self-updater
-  if (typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '')) {
-    return {
-      available: false,
-      currentVersion,
-    };
-  }
+  const isAndroid =
+    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '');
+  const isMac =
+    typeof navigator !== 'undefined' &&
+    /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
 
   // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)
   // Note: On macOS, Tauri v2 updater requires tar.gz bundles. If release uses DMG, native check may return an update
   // whose downloadAndInstall fails because it is a DMG disk image. We extract downloadUrl from rawJson.
-  if (isTauri) {
+  if (isTauri && !isAndroid) {
     try {
       const update = await check({
         timeout: 10000,
       });
 
       if (update) {
-        const isMac =
-          typeof navigator !== 'undefined' &&
-          /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
-        
         let macDmgUrl: string | undefined;
         if (isMac && update.rawJson) {
           const platforms = (update.rawJson as any).platforms;
@@ -84,7 +78,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
     }
   }
 
-  // 2. Secondary Check: Query Central Brain's authenticated updater endpoint (works seamlessly over LAN)
+  // 2. Secondary Check: Query Central Brain's authenticated updater endpoint (works seamlessly over LAN, including Android)
   try {
     const apiBaseUrl = useSessionStore.getState().apiBaseUrl || 'http://127.0.0.1:3390';
     const brainRes = await fetch(`${apiBaseUrl}/api/updater/latest.json`, {
@@ -96,10 +90,16 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       const latestTag = manifest.version?.replace(/^v/, '') || '';
       const isNewer = compareSemver(latestTag, currentVersion) > 0;
       if (isNewer) {
-        const isMac =
-          typeof navigator !== 'undefined' &&
-          /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
-        const platformKey = isMac ? 'darwin-aarch64' : 'windows-x86_64';
+        const platformKey = isAndroid
+          ? 'android-aarch64'
+          : isMac
+          ? 'darwin-aarch64'
+          : 'windows-x86_64';
+        const fallbackFile = isAndroid
+          ? `LocalGravity_${latestTag}_arm64.apk`
+          : isMac
+          ? `LocalGravity_${latestTag}_aarch64.dmg`
+          : `LocalGravity_${latestTag}_x64_en-US.msi`;
         const platform = manifest.platforms?.[platformKey];
         return {
           available: true,
@@ -107,9 +107,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           currentVersion,
           body: manifest.notes || '',
           date: manifest.pub_date,
-          downloadUrl:
-            platform?.url ||
-            `${apiBaseUrl}/api/updater/download/${isMac ? `LocalGravity_${latestTag}_aarch64.dmg` : `LocalGravity_${latestTag}_x64_en-US.msi`}`,
+          downloadUrl: platform?.url || `${apiBaseUrl}/api/updater/download/${fallbackFile}`,
         };
       }
     }
@@ -117,7 +115,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
     console.warn('[Updater] Central Brain updater check failed, falling back to web:', brainErr);
   }
 
-  // 3. Fallback for Web Companion / Browser
+  // 3. Fallback for Web Companion / Browser / Direct GitHub
   try {
     const res = await fetch('https://api.github.com/repos/williamcboehmjr/LocalGravity/releases/latest', {
       headers: { Accept: 'application/vnd.github.v3+json' },
@@ -126,6 +124,12 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       const data = await res.json();
       const latestTag = data.tag_name?.replace(/^v/, '') || '';
       const isNewer = compareSemver(latestTag, currentVersion) > 0;
+      const apkAsset =
+        isAndroid && Array.isArray(data.assets)
+          ? data.assets.find(
+              (a: any) => typeof a?.name === 'string' && a.name.toLowerCase().endsWith('.apk')
+            )
+          : null;
 
       return {
         available: isNewer,
@@ -133,7 +137,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
         currentVersion,
         body: data.body || '',
         date: data.published_at,
-        downloadUrl: data.html_url,
+        downloadUrl: apkAsset?.browser_download_url || data.html_url,
       };
     }
   } catch (webErr) {
@@ -152,6 +156,8 @@ export async function downloadAndApplyUpdate(
   onProgress?: UpdateProgressCallback
 ): Promise<void> {
   const isTauri = isTauriEnvironment();
+  const isAndroid =
+    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '');
   const isMac =
     typeof navigator !== 'undefined' &&
     /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
@@ -164,6 +170,32 @@ export async function downloadAndApplyUpdate(
 
   const downloadUrl =
     'downloadUrl' in updateInfoOrHandle ? updateInfoOrHandle.downloadUrl : undefined;
+
+  // On Android, trigger APK download so the user can tap to install the updated release APK
+  if (isAndroid && downloadUrl) {
+    onProgress?.({
+      status: 'started',
+      downloadedBytes: 0,
+      totalBytes: 100,
+      percent: 25,
+      statusText: 'Starting Android APK download...',
+    });
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    onProgress?.({
+      status: 'finished',
+      downloadedBytes: 100,
+      totalBytes: 100,
+      percent: 100,
+      statusText: 'APK download opened — tap the downloaded APK to install.',
+    });
+    return;
+  }
 
   // On macOS Desktop, if we have a direct DMG download URL, execute the native DMG installer
   if (isTauri && isMac && downloadUrl) {

@@ -25,6 +25,33 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    val keystoreProps = Properties().apply {
+        val kpFile = file("../../../keystore.properties")
+        if (kpFile.exists()) {
+            kpFile.inputStream().use { load(it) }
+        }
+    }
+    val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+        ?: file("../../../localgravity-android.keystore").takeIf { it.exists() }?.absolutePath
+        ?: rootProject.file("localgravity-android.keystore").takeIf { it.exists() }?.absolutePath
+    val releaseKeystorePass = System.getenv("ANDROID_KEYSTORE_PASS")
+        ?: keystoreProps.getProperty("storePassword", "")
+    val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+        ?: keystoreProps.getProperty("keyAlias", "localgravity")
+    val releaseKeyPass = System.getenv("ANDROID_KEY_PASS")
+        ?: keystoreProps.getProperty("keyPassword", releaseKeystorePass)
+
+    signingConfigs {
+        if (releaseKeystorePath != null && releaseKeystorePass.isNotEmpty()) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePass
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPass
+            }
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -39,6 +66,12 @@ android {
             }
         }
         getByName("release") {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            isDebuggable = false
+            isJniDebuggable = false
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

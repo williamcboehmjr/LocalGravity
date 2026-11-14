@@ -142,4 +142,36 @@ export const THINKING_BUDGET_SPECS: Record<
     systemDirective:
       'THINKING BUDGET: DEEP (Goal-Directed Action). Plan concisely (under 20 lines): determine objective, select exact tools/files, then IMMEDIATELY execute. Never output speculative prose or monologue in place of executing real tool calls.',
   },
+  low: {
+    budget: 'low',
+    maxThinkingTokens: 512,
+    followUpStepMaxThinkingTokens: 512,
+    prefillClosedThink: true,
+    systemDirective:
+      'THINKING LEVEL: LOW. Reason briefly to select tools accurately, then execute immediately.',
+  },
+  medium: {
+    budget: 'medium',
+    maxThinkingTokens: 1024,
+    followUpStepMaxThinkingTokens: 640,
+    prefillClosedThink: true,
+    systemDirective:
+      'THINKING LEVEL: MEDIUM. Reason concisely to select tools accurately, then execute immediately.',
+  },
+  high: {
+    budget: 'high',
+    maxThinkingTokens: 2560,
+    followUpStepMaxThinkingTokens: 1024,
+    prefillClosedThink: false,
+    systemDirective:
+      'THINKING LEVEL: HIGH. Plan concisely: determine objective, select exact tools/files, then IMMEDIATELY execute.',
+  },
+  xhigh: {
+    budget: 'xhigh',
+    maxThinkingTokens: 4096,
+    followUpStepMaxThinkingTokens: 1536,
+    prefillClosedThink: false,
+    systemDirective:
+      'THINKING LEVEL: EXTRA HIGH. Perform thorough verification and multi-step reasoning, then execute accurately.',
+  },
 };

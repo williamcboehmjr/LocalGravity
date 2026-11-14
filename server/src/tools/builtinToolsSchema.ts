@@ -654,6 +654,41 @@ export const BUILTIN_TOOLS_SCHEMA = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_question',
+      description:
+        'Ask the user one or more structured multiple-choice questions to clarify requirements or design decisions (ideal for /grill-me or ambiguous specs). Renders an interactive choice card in the chat UI.',
+      parameters: {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array',
+            description: 'List of multiple-choice questions to present to the user',
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string', description: 'The question prompt' },
+                options: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Choices for the user (put recommended option first, prefixed with "(Recommended) ")',
+                },
+                is_multi_select: {
+                  type: 'boolean',
+                  description: 'Whether the user can select multiple options',
+                },
+              },
+              required: ['question', 'options'],
+            },
+          },
+        },
+        required: ['questions'],
+      },
+    },
+  },
 ];
 
 export const SWARM_TOOLS_SCHEMA = [

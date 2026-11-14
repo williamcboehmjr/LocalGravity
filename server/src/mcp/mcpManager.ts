@@ -29,6 +29,7 @@ export interface McpServerStatus {
   status: 'connected' | 'ready' | 'disabled' | 'error';
   toolsCount: number;
   tools: McpToolDefinition[];
+  instructions?: string;
   lastCheckedAt: string;
 }
 
@@ -369,8 +370,25 @@ export class McpClientManager {
       .replace(new RegExp(`^mcp_${srv.name}_`, 'i'), '')
       .replace(/^mcp_/, '');
 
+    const longRunningTools = new Set([
+      'run_workflow',
+      'run_template',
+      'generate_image',
+      'partner_generate',
+      'job',
+      'download_model',
+      'download',
+      'install_node',
+      'fetch_outputs',
+      'launch_comfyui',
+      'update_comfyui',
+      'switch_comfyui_version',
+    ]);
+    const effectiveTimeout =
+      timeoutMs === 30000 && longRunningTools.has(cleanToolName) ? 300000 : timeoutMs;
+
     if (srv.transport === 'stdio' && srv.command) {
-      return this.executeStdioToolCall(srv, cleanToolName, toolArgs, timeoutMs);
+      return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
     }
 
     return {
@@ -477,15 +495,25 @@ export class McpClientManager {
     };
 
     session.initPromise = (async () => {
-      await sendRpc(
+      const initMsg = await sendRpc(
         'initialize',
         {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'LocalGravity', version: '2.2.7' },
+          clientInfo: { name: 'LocalGravity', version: '2.3.10' },
         },
-        Math.min(timeoutMs, 10000)
+        Math.min(Math.max(timeoutMs, 15000), 20000)
       );
+      if (typeof initMsg?.result?.instructions === 'string' && initMsg.result.instructions.trim()) {
+        srv.instructions = initMsg.result.instructions.trim();
+      } else if (!srv.instructions) {
+        const diskInstructions = path.join(os.homedir(), '.gemini', 'antigravity', 'mcp', srv.name, 'instructions.md');
+        if (fs.existsSync(diskInstructions)) {
+          try {
+            srv.instructions = fs.readFileSync(diskInstructions, 'utf-8').trim();
+          } catch {}
+        }
+      }
       try {
         child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
       } catch {}
@@ -558,9 +586,55 @@ export class McpClientManager {
 
       const result = msg.result || {};
       const contentList = Array.isArray(result.content) ? result.content : [];
-      let combinedText = contentList.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+      const textParts: string[] = [];
+      const outDir = path.join(path.dirname(this.localConfigPath), '.runtime', 'mcp-outputs');
+      for (const c of contentList) {
+        if (c?.type === 'image' && typeof c.data === 'string' && c.data.length > 0) {
+          try {
+            fs.mkdirSync(outDir, { recursive: true });
+            const ext = String(c.mimeType || 'image/png').includes('jpeg')
+              ? 'jpg'
+              : String(c.mimeType || 'image/png').includes('webp')
+              ? 'webp'
+              : 'png';
+            const fileName = `${srv.name}-${toolName}-${Date.now()}.${ext}`;
+            const outFile = path.join(outDir, fileName);
+            fs.writeFileSync(outFile, Buffer.from(c.data, 'base64'));
+            textParts.push(`[MCP Image saved to: ${outFile}](/api/mcp-outputs/${fileName})`);
+          } catch {
+            textParts.push('[MCP Image returned]');
+          }
+        } else if (typeof c?.text === 'string') {
+          textParts.push(c.text);
+        } else {
+          textParts.push(JSON.stringify(c));
+        }
+      }
+      let combinedText = textParts.join('\n');
       if (!combinedText && result) {
         combinedText = JSON.stringify(result, null, 2);
+      }
+
+      // Mirror any generated local image paths returned in text/JSON so UI can render them inline
+      const imgPathRegex =
+        /(?:[A-Za-z]:\\|\/)[^"\s<>|?*\r\n]+\.(?:png|jpg|jpeg|webp|gif)/gi;
+      const seenPaths = new Set<string>();
+      const matches = combinedText.match(imgPathRegex) || [];
+      for (const matchedPath of matches) {
+        if (seenPaths.has(matchedPath)) continue;
+        seenPaths.add(matchedPath);
+        const normalized = matchedPath.replace(/\\/g, '/');
+        if (normalized.includes('/.runtime/mcp-outputs/')) continue;
+        try {
+          if (fs.existsSync(matchedPath) && fs.statSync(matchedPath).isFile()) {
+            fs.mkdirSync(outDir, { recursive: true });
+            const ext = path.extname(matchedPath) || '.png';
+            const base = path.basename(matchedPath, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+            const copyName = `${srv.name}-${base}-${Date.now()}${ext}`;
+            fs.copyFileSync(matchedPath, path.join(outDir, copyName));
+            combinedText += `\n[MCP Image saved to: ${matchedPath}](/api/mcp-outputs/${copyName})`;
+          }
+        } catch {}
       }
       return {
         content: contentList,
@@ -663,5 +737,39 @@ export class McpClientManager {
     });
 
     return out;
+  }
+
+  /**
+   * Returns active MCP server instructions (from MCP initialize or disk instructions.md)
+   * so the agent follows canonical tool workflows (e.g., comfy-mcp template/workflow flows).
+   */
+  public getServerInstructionsBlock(): string {
+    const blocks: string[] = [];
+    for (const srv of this.servers.values()) {
+      if (!srv.enabled) continue;
+      let instr = srv.instructions;
+      if (!instr) {
+        const diskPath = path.join(
+          os.homedir(),
+          '.gemini',
+          'antigravity',
+          'mcp',
+          srv.name,
+          'instructions.md'
+        );
+        if (fs.existsSync(diskPath)) {
+          try {
+            instr = fs.readFileSync(diskPath, 'utf-8').trim();
+            srv.instructions = instr;
+          } catch {}
+        }
+      }
+      if (instr) {
+        const capped = instr.length > 6000 ? `${instr.slice(0, 6000)}\n...[truncated]` : instr;
+        blocks.push(`--- MCP Server: ${srv.name} ---\n${capped}`);
+      }
+    }
+    if (blocks.length === 0) return '';
+    return `=== ACTIVE MCP SERVER INSTRUCTIONS ===\n${blocks.join('\n\n')}`;
   }
 }

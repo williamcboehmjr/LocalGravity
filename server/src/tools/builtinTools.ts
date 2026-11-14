@@ -1576,6 +1576,27 @@ export class BuiltinToolExecutor {
           };
         }
 
+        case 'ask_question': {
+          const rawQuestions = Array.isArray(args?.questions) ? args.questions : [];
+          const questions = rawQuestions
+            .filter((q: any) => q && typeof q.question === 'string' && Array.isArray(q.options))
+            .map((q: any) => ({
+              question: String(q.question),
+              options: q.options.map(String).filter(Boolean),
+              is_multi_select: Boolean(q.is_multi_select),
+            }));
+          return {
+            stdout: JSON.stringify(
+              { __localgravity_widget: 'ask_question', questions },
+              null,
+              2
+            ),
+            stderr: '',
+            exitCode: 0,
+            durationMs: Math.round(performance.now() - startMs),
+          };
+        }
+
         default: {
           if (toolName.startsWith('mcp_') && this.mcp) {
             const activeTools = this.mcp.listActiveTools();

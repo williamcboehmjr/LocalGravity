@@ -4,11 +4,17 @@ import { cleanHostAndPort } from '../utils/connectionTester';
 
 export type BrainProviderId = 'strata' | 'google_ai_studio';
 export type GoogleModelId =
-  | 'orchestrator'
+  | 'orchestrator-argon-hydrogen'
+  | 'orchestrator-carbon-hydrogen'
   | 'gemini-4-hydrogen'
   | 'gemini-4-carbon'
   | 'gemini-4-argon'
   | 'gemini-3.8-flash';
+
+export const isGoogleOrchestratorModel = (id?: string | null): boolean =>
+  id === 'orchestrator' ||
+  id === 'orchestrator-argon-hydrogen' ||
+  id === 'orchestrator-carbon-hydrogen';
 
 export interface GoogleModelOption {
   id: GoogleModelId;
@@ -19,10 +25,16 @@ export interface GoogleModelOption {
 
 export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
   {
-    id: 'orchestrator',
-    name: 'Orchestrator',
-    shortName: 'Orchestrator',
-    sub: 'Decisions API → Argon/Carbon Plan → Hydrogen Execute',
+    id: 'orchestrator-argon-hydrogen',
+    name: 'Orchestrator (Argon → Hydrogen)',
+    shortName: 'Orch: Argon → H',
+    sub: 'Decisions API → Argon Plan → Hydrogen Execute',
+  },
+  {
+    id: 'orchestrator-carbon-hydrogen',
+    name: 'Orchestrator (Carbon → Hydrogen)',
+    shortName: 'Orch: Carbon → H',
+    sub: 'Decisions API → Carbon Plan → Hydrogen Execute',
   },
   {
     id: 'gemini-4-hydrogen',
@@ -50,8 +62,10 @@ export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
   },
 ];
 
-export const getGoogleModelOption = (id?: string): GoogleModelOption =>
-  GOOGLE_MODEL_OPTIONS.find((m) => m.id === id) || GOOGLE_MODEL_OPTIONS[0];
+export const getGoogleModelOption = (id?: string): GoogleModelOption => {
+  if (id === 'orchestrator') return GOOGLE_MODEL_OPTIONS[0];
+  return GOOGLE_MODEL_OPTIONS.find((m) => m.id === id) || GOOGLE_MODEL_OPTIONS[0];
+};
 
 export interface ToolCallItemData {
   id: string;
@@ -433,6 +447,32 @@ const getInitialDpiScale = (): number => {
 };
 
 const initialSessionId = 'thread-default';
+const LAST_PROJECT_KEY = 'localgravity:lastProjectId';
+const LAST_THREAD_KEY = 'localgravity:lastThreadId';
+
+const saveLastLocation = (projectId?: string, threadId?: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (projectId && projectId !== 'proj-default') {
+      localStorage.setItem(LAST_PROJECT_KEY, projectId);
+    }
+    if (threadId && threadId !== initialSessionId) {
+      localStorage.setItem(LAST_THREAD_KEY, threadId);
+    }
+  } catch {}
+};
+
+export const getSavedLastLocation = (): { projectId: string | null; threadId: string | null } => {
+  if (typeof window === 'undefined') return { projectId: null, threadId: null };
+  try {
+    return {
+      projectId: localStorage.getItem(LAST_PROJECT_KEY),
+      threadId: localStorage.getItem(LAST_THREAD_KEY),
+    };
+  } catch {
+    return { projectId: null, threadId: null };
+  }
+};
 
 const getInitialBrainSettings = () => {
   if (typeof window !== 'undefined') {
@@ -479,7 +519,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   apiBaseUrl: `http://${initialConn.host}:${initialConn.port}`,
   isConnected: false,
   brainProvider: 'strata',
-  selectedGoogleModel: 'orchestrator',
+  selectedGoogleModel: 'orchestrator-argon-hydrogen',
   googleHasApiKey: false,
   googleMaskedApiKey: '',
   selectedTier: 'high',
@@ -512,6 +552,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (state.threadHistoryIndex > 0) {
       const nextIdx = state.threadHistoryIndex - 1;
       const targetId = state.threadHistory[nextIdx];
+      saveLastLocation(state.activeProjectId, targetId);
       const targetThread = state.threads.find((t) => t.id === targetId);
       const targetBusy = targetThread?.status === 'thinking' || targetThread?.status === 'executing_tool';
       set({
@@ -532,6 +573,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (state.threadHistoryIndex < state.threadHistory.length - 1) {
       const nextIdx = state.threadHistoryIndex + 1;
       const targetId = state.threadHistory[nextIdx];
+      saveLastLocation(state.activeProjectId, targetId);
       const targetThread = state.threads.find((t) => t.id === targetId);
       const targetBusy = targetThread?.status === 'thinking' || targetThread?.status === 'executing_tool';
       set({
@@ -584,6 +626,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setActiveProjectId: (projectId) =>
     set((state) => {
+      saveLastLocation(projectId, undefined);
       const proj = state.projects.find((p) => p.id === projectId);
       return {
         activeProjectId: projectId,
@@ -619,6 +662,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (threads.length > 0 && !threads.some((t) => t.id === candidateId)) {
         candidateId = threads[0].id;
       }
+      saveLastLocation(state.activeProjectId, candidateId);
       return {
         threads,
         sessions: mappedSessions.length > 0 ? mappedSessions : state.sessions,
@@ -789,7 +833,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setBrainProviderState: (patch) =>
     set(() => ({
       ...(patch.provider ? { brainProvider: patch.provider } : {}),
-      ...(patch.selectedGoogleModel ? { selectedGoogleModel: patch.selectedGoogleModel } : {}),
+      ...(patch.selectedGoogleModel
+        ? {
+            selectedGoogleModel:
+              (patch.selectedGoogleModel as string) === 'orchestrator'
+                ? 'orchestrator-argon-hydrogen'
+                : patch.selectedGoogleModel,
+          }
+        : {}),
       ...(patch.hasApiKey !== undefined ? { googleHasApiKey: patch.hasApiKey } : {}),
       ...(patch.maskedApiKey !== undefined ? { googleMaskedApiKey: patch.maskedApiKey } : {}),
     })),
@@ -1293,6 +1344,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       messageQueue: [],
     };
     set((state) => {
+      saveLastLocation(state.activeProjectId, newId);
       const nextHist = [...state.threadHistory.slice(0, state.threadHistoryIndex + 1), newId];
       return {
         sessionId: newId,
@@ -1312,6 +1364,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   switchSession: (targetSessionId: string) => {
     const state = get();
+    saveLastLocation(state.activeProjectId, targetSessionId);
     if (state.sessionId === targetSessionId) return;
     const targetThread = state.threads.find((t) => t.id === targetSessionId);
     const targetBusy = targetThread?.status === 'thinking' || targetThread?.status === 'executing_tool';

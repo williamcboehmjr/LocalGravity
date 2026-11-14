@@ -20,6 +20,10 @@ import {
   Target,
   Map,
   Cpu,
+  Image as ImageIcon,
+  Download,
+  Send,
+  MessageSquare,
 } from 'lucide-react';
 import {
   useSessionStore,
@@ -58,6 +62,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   isEdit: boolean;
   isDir: boolean;
   isSearch: boolean;
+  diffStats?: { added: number; removed: number };
 } {
   const rawCmd = item.command || '';
   const match = rawCmd.match(/^([a-zA-Z0-9_:-]+)\(([\s\S]*)\)$/);
@@ -102,13 +107,29 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   ) {
     const rawPath = args?.path || args?.Path;
     const p = rawPath ? shortenPath(String(rawPath)) : rawCmd;
+    let added = 0;
+    let removed = 0;
+    if (typeof args?.content === 'string' && args.content.length > 0) {
+      added = args.content.split(/\r?\n/).length;
+    } else if (typeof args?.replacement === 'string' || typeof args?.Replacement === 'string' || typeof args?.target === 'string' || typeof args?.Target === 'string') {
+      const rep = String(args?.replacement ?? args?.Replacement ?? '');
+      const tgt = String(args?.target ?? args?.Target ?? '');
+      if (rep) added = rep.split(/\r?\n/).length;
+      if (tgt) removed = tgt.split(/\r?\n/).length;
+    } else if (typeof args?.diff === 'string') {
+      for (const ln of args.diff.split(/\r?\n/)) {
+        if (ln.startsWith('+') && !ln.startsWith('+++')) added++;
+        else if (ln.startsWith('-') && !ln.startsWith('---')) removed++;
+      }
+    }
     return {
-      prefix: 'Edited',
+      prefix: toolName === 'write_file' ? 'Created' : 'Edited',
       target: p,
       isRead: false,
       isEdit: true,
       isDir: false,
       isSearch: false,
+      ...(added > 0 || removed > 0 ? { diffStats: { added, removed } } : {}),
     };
   }
 
@@ -339,6 +360,70 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     };
   }
 
+  if (toolName === 'ask_question') {
+    const qCount = Array.isArray(args?.questions) ? args.questions.length : 1;
+    return {
+      prefix: 'Asked',
+      target: `${qCount} design question${qCount === 1 ? '' : 's'}`,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName === 'swarm' || toolName === 'post_message' || toolName === 'read_board' || toolName === 'swarm_wait') {
+    const detail =
+      toolName === 'swarm'
+        ? `${args?.action || 'status'}${args?.name ? ` (${args.name})` : ''}`
+        : toolName === 'post_message'
+        ? String(args?.text || '').slice(0, 42)
+        : toolName;
+    return {
+      prefix: 'Swarm',
+      target: detail,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
+  if (toolName.startsWith('mcp_') || toolName === 'call_mcp_tool') {
+    let serverLabel = 'MCP';
+    let cleanTool = toolName;
+    let innerArgs = args;
+    if (toolName === 'call_mcp_tool') {
+      serverLabel = String(args?.ServerName || 'MCP');
+      cleanTool = String(args?.ToolName || 'tool');
+      innerArgs = args?.Arguments || args;
+    } else {
+      const mcpMatch = toolName.match(/^mcp_([^_]+(?:-[^_]+)*)_(.+)$/);
+      if (mcpMatch) {
+        serverLabel = mcpMatch[1];
+        cleanTool = mcpMatch[2];
+      }
+    }
+    const argPreviewRaw =
+      innerArgs?.query ||
+      innerArgs?.name ||
+      innerArgs?.prompt ||
+      innerArgs?.action ||
+      innerArgs?.workflow_path ||
+      innerArgs?.url ||
+      '';
+    const argPreview = argPreviewRaw ? String(argPreviewRaw).replace(/\s+/g, ' ').trim() : '';
+    const trimmedPreview = argPreview.length > 38 ? `${argPreview.slice(0, 38)}…` : argPreview;
+    return {
+      prefix: `MCP • ${serverLabel}`,
+      target: trimmedPreview ? `${cleanTool} (${trimmedPreview})` : cleanTool,
+      isRead: false,
+      isEdit: false,
+      isDir: false,
+      isSearch: true,
+    };
+  }
+
   const cleanCmd = rawCmd.replace(/\s+/g, ' ').trim();
   return {
     prefix: item.status === 'running' ? 'Running' : 'Ran',
@@ -410,7 +495,7 @@ const ToolExecutionRow: React.FC<{
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const isOpen = userOpen ?? Boolean(defaultOpen);
   const setIsOpen = (v: boolean) => setUserOpen(v);
-  const { prefix, target, isRead, isEdit, isDir, isSearch } = formatCompactToolLabel(item);
+  const { prefix, target, isRead, isEdit, isDir, isSearch, diffStats } = formatCompactToolLabel(item);
 
   return (
     <div className="py-0.5 select-none">
@@ -439,6 +524,21 @@ const ToolExecutionRow: React.FC<{
           <span className="font-mono text-[12.5px] sm:text-[13px] text-[#E8EAED] truncate">
             {target}
           </span>
+
+          {diffStats && (diffStats.added > 0 || diffStats.removed > 0) && (
+            <span className="inline-flex items-center gap-1 shrink-0 font-mono text-[11px]">
+              {diffStats.added > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-700/40">
+                  +{diffStats.added}
+                </span>
+              )}
+              {diffStats.removed > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-700/40">
+                  -{diffStats.removed}
+                </span>
+              )}
+            </span>
+          )}
 
           {item.durationMs !== undefined && item.status !== 'running' && (
             <span className="text-[11.5px] text-[#5F6368] shrink-0 ml-auto pl-2 font-mono">
@@ -779,6 +879,222 @@ const CodeBlockWithCopy: React.FC<{ language: string; codeText: string; classNam
   );
 };
 
+interface AskQuestionItem {
+  question: string;
+  options: string[];
+  is_multi_select: boolean;
+}
+
+function extractOrchestratorPlan(
+  thought: string
+): { plannerName: string; planBody: string } | null {
+  if (!thought) return null;
+  const match = thought.match(
+    /\[([^\]]*Formulating Plan[^\]]*)\]\s*([\s\S]*?)\[Orchestrator Hand-off → Flipping to Gemini 4 Hydrogen for Plan Execution\]/
+  );
+  if (!match) return null;
+  const header = match[1].trim();
+  const planBody = match[2].trim();
+  if (!planBody) return null;
+  const plannerName = header.replace(/•.*$/, '').trim() || 'Orchestrator Planner';
+  return { plannerName, planBody };
+}
+
+function extractMcpImages(
+  toolCalls: ToolCallItemData[],
+  content: string,
+  apiBaseUrl: string
+): Array<{ url: string; label: string }> {
+  const seen = new Set<string>();
+  const images: Array<{ url: string; label: string }> = [];
+  const collect = (text: string) => {
+    if (!text) return;
+    const re = /\/api\/mcp-outputs\/[^\s)"'\]]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const rel = m[0];
+      const fullUrl = rel.startsWith('http') ? rel : `${apiBaseUrl}${rel}`;
+      if (seen.has(fullUrl)) continue;
+      seen.add(fullUrl);
+      const label = rel.split('/').pop() || 'Generated Image';
+      images.push({ url: fullUrl, label });
+    }
+  };
+  for (const tc of toolCalls || []) {
+    if (tc.output) collect(tc.output);
+  }
+  collect(content || '');
+  return images;
+}
+
+function extractAskQuestions(toolCalls: ToolCallItemData[]): AskQuestionItem[] {
+  const out: AskQuestionItem[] = [];
+  for (const tc of toolCalls || []) {
+    const isAsk =
+      (tc.toolName || '').toLowerCase() === 'ask_question' ||
+      (tc.command || '').toLowerCase().startsWith('ask_question') ||
+      (tc.output || '').includes('"__localgravity_widget": "ask_question"');
+    if (!isAsk) continue;
+
+    let parsed: any = null;
+    if (tc.output) {
+      try {
+        parsed = JSON.parse(tc.output);
+      } catch {}
+    }
+    if (!parsed && tc.argumentsJson) {
+      try {
+        parsed = JSON.parse(tc.argumentsJson);
+      } catch {}
+    }
+    const qs = Array.isArray(parsed?.questions) ? parsed.questions : [];
+    for (const q of qs) {
+      if (q && typeof q.question === 'string' && Array.isArray(q.options)) {
+        out.push({
+          question: q.question,
+          options: q.options.map(String).filter(Boolean),
+          is_multi_select: Boolean(q.is_multi_select),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+const OrchestratorPlanCard: React.FC<{
+  plannerName: string;
+  planBody: string;
+}> = ({ plannerName, planBody }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="my-2 rounded-xl border border-indigo-500/30 bg-indigo-950/20 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between gap-2 px-3.5 py-2 text-left hover:bg-indigo-950/35 transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Map className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <span className="text-[12.5px] font-medium text-[#E8EAED] truncate">
+            Orchestrator Execution Plan
+          </span>
+          <span className="px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-indigo-500/15 text-indigo-300 border border-indigo-400/25 shrink-0">
+            {plannerName} → Hydrogen
+          </span>
+        </div>
+        {open ? (
+          <ChevronDown className="w-3.5 h-3.5 text-[#9AA0A6] shrink-0" />
+        ) : (
+          <ChevronRight className="w-3.5 h-3.5 text-[#9AA0A6] shrink-0" />
+        )}
+      </button>
+      {open && (
+        <div className="px-4 py-3 border-t border-indigo-500/20 text-[13px] text-[#D4D4D8] prose prose-invert max-w-none leading-relaxed max-h-72 overflow-y-auto">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{planBody}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AskQuestionCard: React.FC<{
+  questions: AskQuestionItem[];
+  onSubmitAnswers: (replyText: string) => void;
+}> = ({ questions, onSubmitAnswers }) => {
+  const [selections, setSelections] = useState<Record<number, string[]>>({});
+  const [customNotes, setCustomNotes] = useState<Record<number, string>>({});
+  const [submitted, setSubmitted] = useState(false);
+
+  const toggleOption = (qIdx: number, opt: string, multi: boolean) => {
+    if (submitted) return;
+    setSelections((prev) => {
+      const cur = prev[qIdx] || [];
+      if (multi) {
+        const next = cur.includes(opt) ? cur.filter((x) => x !== opt) : [...cur, opt];
+        return { ...prev, [qIdx]: next };
+      }
+      return { ...prev, [qIdx]: [opt] };
+    });
+  };
+
+  const handleSubmit = () => {
+    if (submitted) return;
+    const lines = questions.map((q, idx) => {
+      const chosen = selections[idx] || [];
+      const custom = (customNotes[idx] || '').trim();
+      const answerParts = [...chosen, ...(custom ? [`Other: ${custom}`] : [])];
+      return `- **${q.question}**: ${answerParts.length > 0 ? answerParts.join(', ') : '(No selection)'}`;
+    });
+    setSubmitted(true);
+    onSubmitAnswers(`Selected answers:\n${lines.join('\n')}`);
+  };
+
+  return (
+    <div className="my-3 rounded-2xl border border-[#2E3440] bg-[#14161A] p-3.5 space-y-3.5 shadow-sm">
+      <div className="flex items-center gap-2 text-xs font-medium text-[#8AB4F8]">
+        <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+        <span>Design Clarification</span>
+      </div>
+      {questions.map((q, qIdx) => {
+        const selected = selections[qIdx] || [];
+        return (
+          <div key={qIdx} className="space-y-2">
+            <div className="text-[13.5px] font-medium text-[#E8EAED]">
+              {qIdx + 1}. {q.question}
+            </div>
+            <div className="space-y-1.5">
+              {q.options.map((opt, oIdx) => {
+                const isSelected = selected.includes(opt);
+                const isRecommended = opt.includes('(Recommended)');
+                const cleanLabel = opt.replace('(Recommended)', '').trim();
+                return (
+                  <button
+                    key={oIdx}
+                    type="button"
+                    disabled={submitted}
+                    onClick={() => toggleOption(qIdx, opt, q.is_multi_select)}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-left text-[13px] transition-colors cursor-pointer disabled:opacity-70 ${
+                      isSelected
+                        ? 'bg-[#8AB4F8]/15 border-[#8AB4F8]/60 text-white'
+                        : 'bg-[#1B1D22] border-[#2A2D35] text-[#D4D4D8] hover:border-[#3D424F]'
+                    }`}
+                  >
+                    <span className="min-w-0">{cleanLabel}</span>
+                    {isRecommended && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-500/15 text-sky-300 border border-sky-400/30 shrink-0">
+                        Recommended
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <input
+              type="text"
+              disabled={submitted}
+              value={customNotes[qIdx] || ''}
+              onChange={(e) => setCustomNotes((prev) => ({ ...prev, [qIdx]: e.target.value }))}
+              placeholder="Other details (optional)..."
+              className="w-full bg-[#101215] border border-[#26282F] rounded-lg px-2.5 py-1.5 text-xs text-[#E8EAED] placeholder:text-[#6E6E73] outline-none focus:border-[#8AB4F8]/50"
+            />
+          </div>
+        );
+      })}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          disabled={submitted}
+          onClick={handleSubmit}
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#8AB4F8] hover:bg-[#A6C8FF] disabled:bg-[#2A2D35] text-[#0C0D0E] disabled:text-[#8E8E93] text-xs font-semibold transition-colors cursor-pointer"
+        >
+          <Send className="w-3 h-3" />
+          <span>{submitted ? 'Answers Sent' : 'Submit Answers'}</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 interface ChatFeedProps {
   onQuickSend?: (prompt: string) => void;
 }
@@ -823,17 +1139,32 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     } catch {}
     setActiveFile(filePath, content);
     setActiveTab('editor');
+    window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
   };
 
   const handleOpenInWorkbench = (tc: ToolCallItemData) => {
     const cmd = tc.command.toLowerCase();
-    if (cmd.includes('write_file') || cmd.includes('apply_diff') || cmd.includes('read_file')) {
+    let parsedPath = '';
+    if (tc.argumentsJson) {
+      try {
+        const parsed = JSON.parse(tc.argumentsJson);
+        parsedPath = parsed?.path || parsed?.Path || '';
+      } catch {}
+    }
+    if (parsedPath && (cmd.includes('write_file') || cmd.includes('edit_file') || cmd.includes('apply_diff') || cmd.includes('read_file'))) {
+      void openFileInEditor(String(parsedPath));
+      return;
+    }
+    if (cmd.includes('write_file') || cmd.includes('edit_file') || cmd.includes('apply_diff') || cmd.includes('read_file')) {
       setActiveTab('editor');
     } else if (cmd.includes('capture_screen') || cmd.includes('inspect')) {
       setActiveTab('preview');
+    } else if (cmd.includes('swarm') || cmd.includes('post_message') || cmd.includes('read_board')) {
+      setActiveTab('swarm');
     } else {
       setActiveTab('terminal');
     }
+    window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
   };
 
   return (
@@ -1011,6 +1342,10 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
             !/^\s{0,3}#{1,6}\s/m.test(content) &&
             !content.includes('```');
 
+          const orchestratorPlan = extractOrchestratorPlan(activeThought || '');
+          const mcpImages = extractMcpImages(msg.toolCalls || [], content || '', apiBaseUrl);
+          const askQuestions = extractAskQuestions(msg.toolCalls || []);
+
           return (
             <div key={msg.id} className="space-y-3.5 px-1">
               {/* Single chronological step timeline + one authoritative status line */}
@@ -1026,6 +1361,53 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                 workingProse={isCurrentlyGenerating ? content : undefined}
                 onOpenInWorkbench={handleOpenInWorkbench}
               />
+
+              {orchestratorPlan && (
+                <OrchestratorPlanCard
+                  plannerName={orchestratorPlan.plannerName}
+                  planBody={orchestratorPlan.planBody}
+                />
+              )}
+
+              {mcpImages.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
+                  {mcpImages.map((img, i) => (
+                    <div
+                      key={`${img.url}-${i}`}
+                      className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group"
+                    >
+                      <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
+                        <img
+                          src={img.url}
+                          alt={img.label}
+                          className="w-full max-h-80 object-contain bg-[#0c0d0e] cursor-pointer hover:opacity-95 transition-opacity"
+                        />
+                      </a>
+                      <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-[#9AA0A6] border-t border-[#242528]">
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <ImageIcon className="w-3 h-3 text-[#8AB4F8] shrink-0" />
+                          <span className="truncate font-mono">{img.label}</span>
+                        </span>
+                        <a
+                          href={img.url}
+                          download={img.label}
+                          className="inline-flex items-center gap-1 text-[#8AB4F8] hover:underline shrink-0"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>Save</span>
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {askQuestions.length > 0 && onQuickSend && (
+                <AskQuestionCard
+                  questions={askQuestions}
+                  onSubmitAnswers={(ans) => onQuickSend(ans)}
+                />
+              )}
 
               {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
               {content && !showTransientInTimeline && (
@@ -1075,7 +1457,12 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                           },
                           a({ href, children }) {
                             const url = href || '';
-                            if (/^file:\/\//i.test(url)) {
+                            if (
+                              /^file:\/\//i.test(url) ||
+                              /^(?:server|client|scripts|tray|skills|tools)\/[^\s)#]+(?:#L\d+(?:-L?\d+)?)?$/i.test(
+                                url
+                              )
+                            ) {
                               return (
                                 <a
                                   href={url}
@@ -1084,7 +1471,7 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                                     openFileInEditor(url);
                                   }}
                                   className="localgravity-link cursor-pointer"
-                                  title="Open in editor"
+                                  title="Open in Right Workbench"
                                 >
                                   {children}
                                 </a>

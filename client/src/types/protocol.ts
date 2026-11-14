@@ -3,7 +3,8 @@
  */
 
 export type ModelTier = 'low' | 'medium' | 'high';
-export type ThinkingBudget = 'off' | 'fast' | 'deep';
+export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
+export type GoogleThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 export type PlatformType = 'macos' | 'windows' | 'android';
 export type ModelStateStatus = 'idle' | 'swapping' | 'ready' | 'generating' | 'error';
 export type ExecAction = 'shell' | 'read_file' | 'write_file' | 'delete_file' | 'list_dir';

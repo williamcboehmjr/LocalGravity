@@ -36,11 +36,12 @@ import {
   FileAttachmentItem,
   GOOGLE_MODEL_OPTIONS,
   getGoogleModelOption,
+  isGoogleOrchestratorModel,
   GoogleModelId,
 } from '../../store/useSessionStore';
 import { useArtifactStore } from '../../store/useArtifactStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
-import { ModelTier, ThinkingBudget } from '../../types/protocol';
+import { ModelTier, ThinkingBudget, GoogleThinkingLevel } from '../../types/protocol';
 import { MessageQueueList } from './MessageQueueList';
 
 interface PromptBarProps {
@@ -68,7 +69,36 @@ const BUDGET_LABELS: Record<ThinkingBudget, string> = {
   off: 'Think: Off',
   fast: 'Fast',
   deep: 'Deep',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
 };
+
+const GOOGLE_THINKING_LEVELS: Record<string, GoogleThinkingLevel[]> = {
+  'gemini-4-hydrogen': ['low', 'medium', 'high', 'xhigh'],
+  'gemini-4-argon': ['low', 'medium', 'high'],
+  'gemini-4-carbon': ['low', 'medium', 'high'],
+  'gemini-3.8-flash': ['low', 'medium', 'high'],
+};
+
+const GOOGLE_LEVEL_LABELS: Record<GoogleThinkingLevel, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+};
+
+function normalizeGoogleThinkingLevel(
+  budget: ThinkingBudget,
+  modelId: string
+): GoogleThinkingLevel {
+  const supported = GOOGLE_THINKING_LEVELS[modelId] || ['low', 'medium', 'high'];
+  if (budget === 'xhigh') return supported.includes('xhigh') ? 'xhigh' : 'high';
+  if (budget === 'high' || budget === 'deep') return 'high';
+  if (budget === 'low' || budget === 'fast' || budget === 'off') return 'low';
+  return 'medium';
+}
 
 export interface SlashCommandItem {
   command: string;
@@ -441,6 +471,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
   const handleSelectGoogleModel = async (modelId: GoogleModelId) => {
     setBrainProviderState({ selectedGoogleModel: modelId });
+    if (!isGoogleOrchestratorModel(modelId)) {
+      setThinkingBudget(normalizeGoogleThinkingLevel(thinkingBudget, modelId));
+    }
     setShowModelMenu(false);
     try {
       const res = await fetch(`${apiBaseUrl}/api/brain/provider`, {
@@ -730,8 +763,8 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               setShowMentionPopover(false);
               textareaRef.current?.focus();
             }}
-            className="hidden sm:inline-flex p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors"
-            title="Slash Commands (/goal, /plan, /boost, /teamwork...)"
+            className="inline-flex p-1.5 rounded-md text-[#9AA0A6] hover:text-[#E8EAED] hover:bg-[#282A2E] transition-colors shrink-0"
+            title="Slash Commands (/goal, /plan, /boost, /teamwork, /swarm...)"
           >
             <Slash className="w-3.5 h-3.5" />
           </button>
@@ -744,9 +777,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 setShowModelMenu(!showModelMenu);
                 setShowBudgetMenu(false);
               }}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#222327] border border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A] transition-all"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#222327] border border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A] transition-all"
             >
-              <span className="truncate max-w-[150px] sm:max-w-[180px]">
+              <span className="truncate max-w-[118px] sm:max-w-[180px]">
                 {brainProvider === 'google_ai_studio'
                   ? getGoogleModelOption(selectedGoogleModel).name
                   : TIER_LABELS[selectedTier].name}
@@ -798,44 +831,83 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             )}
           </div>
 
-          {/* Thinking Effort Dropdown */}
-          <div className="relative hidden sm:block">
-            <button
-              type="button"
-              onClick={() => {
-                setShowBudgetMenu(!showBudgetMenu);
-                setShowModelMenu(false);
-              }}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#6E6E73] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
-              title="Thinking Effort"
-            >
-              <span>{BUDGET_LABELS[thinkingBudget]}</span>
-              <ChevronDown className="w-3 h-3" />
-            </button>
+          {/* Thinking Effort Dropdown (hidden for Google Orchestrators; always shown with valid levels for others) */}
+          {!(brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) && (() => {
+            const isGoogle = brainProvider === 'google_ai_studio';
+            const googleLevels =
+              GOOGLE_THINKING_LEVELS[selectedGoogleModel] || ['low', 'medium', 'high'];
+            const activeGoogleLevel = isGoogle
+              ? normalizeGoogleThinkingLevel(thinkingBudget, selectedGoogleModel)
+              : null;
+            const buttonLabel = isGoogle && activeGoogleLevel
+              ? GOOGLE_LEVEL_LABELS[activeGoogleLevel]
+              : BUDGET_LABELS[thinkingBudget] || 'Fast';
 
-            {showBudgetMenu && (
-              <div className="absolute bottom-full left-0 mb-1.5 w-36 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
-                {(['off', 'fast', 'deep'] as ThinkingBudget[]).map((b) => (
-                  <button
-                    key={b}
-                    type="button"
-                    onClick={() => {
-                      setThinkingBudget(b);
-                      setShowBudgetMenu(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
-                      thinkingBudget === b
-                        ? 'bg-[#28282C] text-[#E3E3E3]'
-                        : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
-                    }`}
-                  >
-                    <span className="capitalize">{b === 'off' ? 'Off' : `${b} Thinking`}</span>
-                    {thinkingBudget === b && <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />}
-                  </button>
-                ))}
+            return (
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBudgetMenu(!showBudgetMenu);
+                    setShowModelMenu(false);
+                  }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#9AA0A6] hover:text-[#E3E3E3] hover:bg-[#28282C] transition-colors"
+                  title={isGoogle ? 'Thinking Level' : 'Thinking Effort'}
+                >
+                  <span>{buttonLabel}</span>
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+
+                {showBudgetMenu && (
+                  <div className="absolute bottom-full right-0 sm:right-auto sm:left-0 mb-1.5 w-40 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+                    {isGoogle
+                      ? googleLevels.map((lvl) => (
+                          <button
+                            key={lvl}
+                            type="button"
+                            onClick={() => {
+                              setThinkingBudget(lvl);
+                              setShowBudgetMenu(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                              activeGoogleLevel === lvl
+                                ? 'bg-[#28282C] text-[#E3E3E3]'
+                                : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                            }`}
+                          >
+                            <span>{GOOGLE_LEVEL_LABELS[lvl]}</span>
+                            {activeGoogleLevel === lvl && (
+                              <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />
+                            )}
+                          </button>
+                        ))
+                      : (['off', 'fast', 'deep'] as ThinkingBudget[]).map((b) => (
+                          <button
+                            key={b}
+                            type="button"
+                            onClick={() => {
+                              setThinkingBudget(b);
+                              setShowBudgetMenu(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                              thinkingBudget === b
+                                ? 'bg-[#28282C] text-[#E3E3E3]'
+                                : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                            }`}
+                          >
+                            <span className="capitalize">
+                              {b === 'off' ? 'Off' : `${b} Thinking`}
+                            </span>
+                            {thinkingBudget === b && (
+                              <Check className="w-3.5 h-3.5 text-[#E3E3E3]" />
+                            )}
+                          </button>
+                        ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })()}
         </div>
 
         {/* Right side: Turbo / Policy Toggle, Image Upload, Send / Stop Button */}

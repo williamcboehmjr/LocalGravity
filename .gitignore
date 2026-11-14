@@ -50,3 +50,6 @@ server/scripts/_*
 *-setup.exe
 *.apk
 *.aab
+*.keystore
+*.jks
+keystore.properties

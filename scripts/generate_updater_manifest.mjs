@@ -32,7 +32,7 @@ if (fs.existsSync(msiSigPath)) {
 
 const manifest = {
   version,
-  notes: `LocalGravity ${version} Release:\n- Standardized on Swift 1.5 Flash-Next (GSQ-RCO-IQ2_XS + Vision) across WebUI, Windows, and macOS.\n- Removed inactive legacy models from UI selectors and settings for streamlined experience.\n- Trailing action intent detection in premature stop guard.\n- Real-time live tokens/second calculation and telemetry streaming.`,
+  notes: `LocalGravity ${version} Release`,
   pub_date: new Date().toISOString(),
   platforms: {
     'windows-x86_64': {
@@ -42,6 +42,10 @@ const manifest = {
     'darwin-aarch64': {
       signature: winSignature,
       url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_aarch64.dmg`,
+    },
+    'android-aarch64': {
+      signature: '',
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_arm64.apk`,
     },
   },
 };

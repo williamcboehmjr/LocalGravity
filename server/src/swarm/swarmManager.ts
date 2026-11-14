@@ -465,7 +465,13 @@ export class SwarmManager {
 
       const mode: SwarmWorkspaceMode =
         args.workspace === 'share' || args.workspace === 'branch' ? args.workspace : 'inherit';
-      const model = String(args.model || 'strata-high');
+      const isGoogleProvider =
+        this.runtimeDeps?.tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+      const model = args.model
+        ? String(args.model)
+        : isGoogleProvider
+        ? this.runtimeDeps!.tabby.getGoogleEngine().resolveSwarmWorkerModel(baseName).modelId
+        : 'strata-high';
       const tasks: string[] = Array.isArray(args.tasks) ? args.tasks.map(String) : [];
       const count = tasks.length > 0 ? tasks.length : Math.max(1, Number(args.n || 1));
       const created: FormattedSwarmMember[] = [];
@@ -533,6 +539,21 @@ export class SwarmManager {
     if (this.queuedWorkers.has(key)) return;
     this.queuedWorkers.add(key);
 
+    const isGoogleProvider =
+      this.runtimeDeps.tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+
+    if (isGoogleProvider) {
+      // Cloud Google AI Studio requests don't contend for local VRAM: run swarm workers concurrently
+      void this.executeWorkerTurn(parentThreadId, swarmId, memberName)
+        .catch((err) => {
+          console.warn(`[SwarmManager] Parallel Google worker ${memberName} error:`, err?.message);
+        })
+        .finally(() => {
+          this.queuedWorkers.delete(key);
+        });
+      return;
+    }
+
     const priority = memberName === 'monitor' ? 2 : 1;
     void this.scheduler
       .acquireGpuTurn(priority, `swarm:${memberName}`, async () => {
@@ -592,6 +613,11 @@ export class SwarmManager {
       ? 'medium'
       : 'high';
 
+    const isGoogleProvider = tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+    const googleRoute = isGoogleProvider
+      ? tabby.getGoogleEngine().resolveSwarmWorkerModel(memberName, member.model)
+      : null;
+
     let calledWait = false;
     let lastContent = '';
 
@@ -605,7 +631,8 @@ export class SwarmManager {
 
         const res = await tabby.streamChatCompletion({
           tier,
-          thinkingBudget: 'fast',
+          thinkingBudget: googleRoute ? googleRoute.thinkingBudget : 'fast',
+          googleModelOverride: googleRoute?.modelId,
           stepIndex: step,
           messages,
           tools: isFinal ? undefined : workerTools,

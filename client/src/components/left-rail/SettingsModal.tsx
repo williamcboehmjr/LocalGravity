@@ -71,7 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
   // Update State
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.9');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.11');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'>('idle');
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; statusText: string }>({ percent: 0, statusText: '' });

@@ -375,6 +375,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `   - Step 4: AUTONOMOUS RELEASE & PUBLISH: When you complete a requested feature or fix and the user wants a release/update, call the "publish_release" tool (e.g. bump="patch", notes="Added feature X to UI"). It automates Windows MSI building, macOS DMG signing, latest.json generation, Git push, and GitHub Release creation!\n` +
         `   - Step 5: ANNOUNCE: Once published, announce to the user: "Release vX.Y.Z is live on GitHub! You can now hit 'Check for Updates' in your macOS or Windows app to auto-install it right now!"\n\n` +
         skills.buildSkillsPromptSection() + '\n\n' +
+        (mcp.getServerInstructionsBlock() ? `${mcp.getServerInstructionsBlock()}\n\n` : '') +
         (slashInfo.modeDirective ? `${slashInfo.modeDirective}\n\n` : '') +
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
         (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
