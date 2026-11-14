@@ -1,0 +1,66 @@
+name: macOS DMG Release Builder
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build macOS DMG for (e.g. v2.3.12)'
+        required: true
+        type: string
+
+jobs:
+  build-macos-dmg:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'client/package-lock.json'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install client dependencies
+        run: |
+          cd client
+          npm ci
+
+      - name: Build macOS DMG & Updater Bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          cd client
+          npx tauri build --bundles dmg,app --target aarch64-apple-darwin
+
+      - name: Upload macOS DMG & Updater Artifacts to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s globstar nullglob
+          FILES=(
+            client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+            client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No macOS bundle artifacts found"
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${FILES[@]}" --clobber
