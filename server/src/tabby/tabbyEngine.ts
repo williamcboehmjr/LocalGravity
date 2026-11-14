@@ -22,12 +22,14 @@ export {
   TIER_SPECS,
   THINKING_BUDGET_SPECS,
   isStrataOrchestratorTier,
+  isStrataTier,
 } from './modelSpecs.js';
 export type { TierModelSpec, SysRamWarmStatus, TabbyEngineTelemetry } from './modelSpecs.js';
 import {
   TIER_SPECS,
   THINKING_BUDGET_SPECS,
   isStrataOrchestratorTier,
+  isStrataTier,
   TierModelSpec,
   SysRamWarmStatus,
   TabbyEngineTelemetry,
@@ -103,6 +105,16 @@ export class TabbyEngine {
         filesCount: 0,
         throughputMBps: 0,
         lastWarmedAt: new Date().toISOString(),
+      },
+      qwen36: {
+        tier: 'qwen36',
+        modelName: TIER_SPECS.qwen36.modelName,
+        state: 'cold',
+        bytesWarmed: 0,
+        totalBytes: 0,
+        filesCount: 0,
+        throughputMBps: 0,
+        lastWarmedAt: null,
       },
     };
 
@@ -182,7 +194,7 @@ export class TabbyEngine {
    * DDR4 System RAM over PCIe into VRAM in ~1 second.
    */
   public async prewarmInactiveTiersInSysRam(): Promise<Record<ModelTier, SysRamWarmStatus>> {
-    const allTiers: ModelTier[] = ['low', 'medium', 'high'];
+    const allTiers: ModelTier[] = ['low', 'medium', 'high', 'qwen36'];
 
     for (const tier of allTiers) {
       const resolvedName = this.resolveDiskModelName(tier);
@@ -265,7 +277,7 @@ export class TabbyEngine {
 
   public async checkConnection(tier?: ModelTier): Promise<boolean> {
     const targetTier = tier || this.activeTier;
-    if (targetTier === 'high' || isStrataOrchestratorTier(targetTier)) {
+    if (isStrataTier(targetTier)) {
       try {
         const res = await fetch('http://127.0.0.1:8080/health', {
           signal: AbortSignal.timeout(1500),
@@ -312,9 +324,10 @@ export class TabbyEngine {
     const spec = TIER_SPECS[newTier];
     const resolvedModelName = this.resolveDiskModelName(newTier);
 
-    if (newTier === 'high' || isStrataOrchestratorTier(newTier)) {
+    if (isStrataTier(newTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      await sidecar.ensureRunning('swift-1.5-iq2_xs');
+      const targetProfile = newTier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
+      await sidecar.ensureRunning(targetProfile);
       this.activeTier = newTier;
       this.lastSwapDurationMs = Math.round(performance.now() - startMs);
       this.swapStatus = 'ready';
@@ -489,9 +502,10 @@ export class TabbyEngine {
 
   public async wakeGpu(): Promise<boolean> {
     console.log('[TabbyEngine] Wake requested');
-    if (this.activeTier === 'high' || isStrataOrchestratorTier(this.activeTier)) {
+    if (isStrataTier(this.activeTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      const ok = await sidecar.ensureRunning('swift-1.5-iq2_xs');
+      const targetProfile = this.activeTier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
+      const ok = await sidecar.ensureRunning(targetProfile);
       if (ok) {
         this.swapStatus = 'ready';
         this.resetIdleTimer();
@@ -507,7 +521,7 @@ export class TabbyEngine {
     console.log(
       `[TabbyEngine] Offloading model from GPU (${Math.round(this.idleTimeoutMs / 60000)}m timer) to preserve 100% VRAM.`
     );
-    if (this.activeTier === 'high' || isStrataOrchestratorTier(this.activeTier)) {
+    if (isStrataTier(this.activeTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
       await sidecar.offloadFromGpu('idle_timeout');
       this.swapStatus = 'idle';
@@ -602,12 +616,18 @@ export class TabbyEngine {
     }
 
         // Ensure target model is loaded in TabbyAPI VRAM
-    const isStrataTier = params.tier === 'high' || isStrataOrchestratorTier(params.tier);
+    const strataMode = isStrataTier(params.tier);
     const desiredModel = this.resolveDiskModelName(params.tier);
-    let isCurrentlyLoaded = isStrataTier && this.activeTier === params.tier;
-    // Strata tiers (high, medium, low) are served by the llama sidecar, not TabbyAPI: skip the dead /v1/model ping.
+    let isCurrentlyLoaded = strataMode && this.activeTier === params.tier;
+    if (strataMode && !isStrataOrchestratorTier(params.tier)) {
+      const expectedProfile = params.tier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
+      if (LlamaMoESidecar.getInstance().getActiveProfile() !== expectedProfile) {
+        isCurrentlyLoaded = false;
+      }
+    }
+    // Strata tiers (high, qwen36, medium, low) are served by the llama sidecar, not TabbyAPI: skip the dead /v1/model ping.
     try {
-      if (isStrataTier) throw new Error('skip');
+      if (strataMode) throw new Error('skip');
       const cur = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
         headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
         signal: AbortSignal.timeout(1500),
@@ -716,7 +736,7 @@ export class TabbyEngine {
         };
 
         // Pre-close <think></think> when thinking is off/fast or on deep follow-up tool steps (>2) so tool loops execute rapidly
-        if (shouldPrefillClosedThink && !isStrataTier) {
+        if (shouldPrefillClosedThink && !strataMode) {
           requestBody.response_prefix = '<think></think>\n';
         }
 
@@ -725,9 +745,13 @@ export class TabbyEngine {
         }
 
         let endpointUrl = `${this.tabbyBaseUrl}/v1/chat/completions`;
-        if (isStrataTier) {
+        if (strataMode) {
           const sidecar = LlamaMoESidecar.getInstance();
-          const targetProfile = orchestratorCfg ? orchestratorCfg.targetStrataProfile : 'swift-1.5-iq2_xs';
+          const targetProfile = orchestratorCfg
+            ? orchestratorCfg.targetStrataProfile
+            : params.tier === 'qwen36'
+              ? 'qwen36-ud-q4_k_xl'
+              : 'swift-1.5-iq2_xs';
           await sidecar.ensureRunning(targetProfile);
           endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
 
@@ -1039,8 +1063,8 @@ export class TabbyEngine {
     }
 
     // TabbyAPI / Strata Unreachable Fallback Handler:
-    const targetService = isStrataTier ? 'Strata Engine (Swift 1.5 / Qwen 3.6)' : 'TabbyAPI';
-    const targetUrl = isStrataTier ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
+    const targetService = strataMode ? 'Strata Engine (Swift 1.5 / Qwen 3.6)' : 'TabbyAPI';
+    const targetUrl = strataMode ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
     const targetPort = '8080';
     const errorMsg = `⚠️ Central Brain is unable to reach Strata Neural Engine at http://127.0.0.1:8080. Please ensure Strata is ready on port 8080 on the workstation.`;
     outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));

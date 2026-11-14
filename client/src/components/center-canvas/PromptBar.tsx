@@ -61,6 +61,7 @@ interface PromptBarProps {
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
   high: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Single Model' },
+  qwen36: { name: 'Qwen 3.6 35B-A3B', sub: 'Strata UD-Q4_K_XL + MTP-2 Drafting • Single Model' },
   medium: { name: 'Orchestrator - Swift 1.5', sub: 'Think Once (Thinking ON) → Execute Fast (Thinking OFF)' },
   low: { name: 'Orchestrator - Qwen 3.6 35B MoE - Swift 1.5', sub: 'Swift 1.5 Plan → Qwen 3.6 35B-A3B Fast Builder (SysRAM Warm)' },
 };
@@ -880,7 +881,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                     );
                   })
                 ) : (
-                  (['high', 'medium', 'low'] as ModelTier[]).map((tier) => {
+                  (['high', 'qwen36', 'medium', 'low'] as ModelTier[]).map((tier) => {
                     const isActive = selectedTier === tier;
                     return (
                       <button

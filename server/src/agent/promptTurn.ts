@@ -1051,6 +1051,28 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
       }
 
+      // If the loop exited because MAX_TOOL_STEPS was reached mid-task, clean any raw <tool_call>
+      // XML left in the streaming buffer and append a clear notice instead of stopping silently.
+      if (!abortController.signal.aborted && step >= MAX_TOOL_STEPS && hasExecutedTools) {
+        const limitNotice = `\n\n---\n*Stopped after reaching the ${MAX_TOOL_STEPS}-step tool limit. Send a follow-up message or use \`/goal\` to continue.*`;
+        const cleanBase = committedFinalContent.trim();
+        const finalText = cleanBase ? `${cleanBase}${limitNotice}` : limitNotice.trim();
+        committedFinalContent = finalText;
+        db.resetStreamingMessageContent(assistantMsg.id, finalText);
+        send({
+          type: 'STEP_NOTE_COMMITTED',
+          payload: {
+            session_id: thread.id,
+            thread_id: thread.id,
+            message_id: assistantMsg.id,
+            step,
+            note: limitNotice.trim(),
+            committed_content: finalText,
+            is_auto_continue: false,
+          },
+        });
+      }
+
       // Early exit if aborted during tool execution or token generation
       if (abortController.signal.aborted) {
         turnOutcome = 'aborted';

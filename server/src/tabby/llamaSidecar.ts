@@ -180,9 +180,16 @@ export class LlamaMoESidecar {
       });
 
       // Poll health every 500ms for fast wake / warm RAM swap response
+      const spawnedProc = this.proc;
       const startTime = Date.now();
       while (Date.now() - startTime < 120000) {
         await new Promise((r) => setTimeout(r, 500));
+        if (spawnedProc.exitCode !== null || spawnedProc.killed) {
+          this.appendLog(
+            `[LlamaMoE] Strata (${targetProfile}) aborted startup (exited with code ${spawnedProc.exitCode})`
+          );
+          return false;
+        }
         if (await this.isHealthy()) {
           this.state = 'active';
           this.activeProfile = targetProfile;
@@ -213,33 +220,48 @@ export class LlamaMoESidecar {
 
     // 1. Kill spawned child process if tracked
     if (this.proc) {
+      const pid = this.proc.pid;
       try {
-        this.proc.kill('SIGTERM');
+        if (pid && process.platform === 'win32') {
+          execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
+        } else {
+          this.proc.kill('SIGTERM');
+        }
       } catch {}
       this.proc = null;
     }
 
-    // 2. Safely find and terminate any process listening strictly on port 8080 (never 5000/5001)
-    try {
-      const netstatOutput = execSync(`netstat -ano -p tcp | findstr :${this.port}`, {
-        encoding: 'utf-8',
-        windowsHide: true,
-      });
-      for (const line of netstatOutput.split(/\r?\n/)) {
-        if (line.includes(`:${this.port}`) && line.includes('LISTENING')) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[parts.length - 1];
-          if (pid && /^\d+$/.test(pid) && pid !== '0' && pid !== String(process.pid)) {
-            console.log(`[LlamaMoE] Terminating port ${this.port} process PID ${pid}...`);
-            execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
+    // 2. Safely find and tree-kill any process listening strictly on port 8080 (never 5000/5001)
+    const killListeningPort = () => {
+      try {
+        const netstatOutput = execSync(`netstat -ano -p tcp | findstr :${this.port}`, {
+          encoding: 'utf-8',
+          windowsHide: true,
+        });
+        let found = false;
+        for (const line of netstatOutput.split(/\r?\n/)) {
+          if (line.includes(`:${this.port}`) && line.includes('LISTENING')) {
+            found = true;
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (pid && /^\d+$/.test(pid) && pid !== '0' && pid !== String(process.pid)) {
+              console.log(`[LlamaMoE] Terminating port ${this.port} process tree PID ${pid}...`);
+              execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
+            }
           }
         }
+        return found;
+      } catch {
+        return false;
       }
-    } catch {}
+    };
+    killListeningPort();
 
-    // 3. Confirm health check is offline
-    for (let i = 0; i < 6; i++) {
-      if (!(await this.isHealthy())) break;
+    // 3. Confirm both HTTP health AND OS TCP LISTENING socket are completely offline
+    for (let i = 0; i < 15; i++) {
+      const stillHealthy = await this.isHealthy();
+      const stillListening = killListeningPort();
+      if (!stillHealthy && !stillListening) break;
       await new Promise((r) => setTimeout(r, 400));
     }
 

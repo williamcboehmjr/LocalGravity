@@ -99,6 +99,16 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
       throughputMBps: 2610.0,
       lastWarmedAt: null,
     },
+    qwen36: {
+      tier: 'qwen36',
+      modelName: 'qwen36-ud-q4_k_xl',
+      state: 'warm',
+      bytesWarmed: 67108864,
+      totalBytes: 22300000000,
+      filesCount: 1,
+      throughputMBps: 2540.0,
+      lastWarmedAt: null,
+    },
   },
   mcpServers: [
     {
