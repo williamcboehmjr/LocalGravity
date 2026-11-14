@@ -1031,7 +1031,7 @@ export async function createDaemonServer(options?: {
       openapi: '3.1.0',
       info: {
         title: 'LocalGravity Central Brain API',
-        version: '2.3.15',
+        version: '2.3.16',
         description: 'Local-first, cloud-optional autonomous AI engineering daemon API.',
       },
       paths: {

@@ -60,9 +60,9 @@ interface PromptBarProps {
 }
 
 const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
-  low: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
-  medium: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
-  high: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Active Model' },
+  high: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Single Model' },
+  medium: { name: 'Orchestrator - Swift 1.5', sub: 'Think Once (Thinking ON) → Execute Fast (Thinking OFF)' },
+  low: { name: 'Orchestrator - Qwen 3.6 35B MoE - Swift 1.5', sub: 'Swift 1.5 Plan → Qwen 3.6 35B-A3B Fast Builder (SysRAM Warm)' },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -880,27 +880,34 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                     );
                   })
                 ) : (
-                  (['high'] as ModelTier[]).map((tier) => (
-                    <button
-                      key={tier}
-                      type="button"
-                      onClick={() => handleSelectTier(tier)}
-                      className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors bg-[#28282C] text-[#E3E3E3]"
-                    >
-                      <div>
-                        <div className="font-medium">{TIER_LABELS[tier].name}</div>
-                        <div className="text-[10px] text-emerald-400 font-mono">{TIER_LABELS[tier].sub}</div>
-                      </div>
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    </button>
-                  ))
+                  (['high', 'medium', 'low'] as ModelTier[]).map((tier) => {
+                    const isActive = selectedTier === tier;
+                    return (
+                      <button
+                        key={tier}
+                        type="button"
+                        onClick={() => handleSelectTier(tier)}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                          isActive
+                            ? 'bg-[#28282C] text-[#E3E3E3]'
+                            : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="font-medium truncate">{TIER_LABELS[tier].name}</div>
+                          <div className="text-[10px] text-emerald-400 font-mono truncate">{TIER_LABELS[tier].sub}</div>
+                        </div>
+                        {isActive && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                      </button>
+                    );
+                  })
                 )}
               </div>
             )}
           </div>
 
-          {/* Thinking Effort Dropdown (hidden for Google Orchestrators; always shown with valid levels for others) */}
-          {!(brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) && (() => {
+          {/* Thinking Effort Dropdown (hidden for Google and Strata Orchestrators; shown with valid levels for single models) */}
+          {!((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low'))) && (() => {
             const isGoogle = brainProvider === 'google_ai_studio';
             const googleLevels =
               GOOGLE_THINKING_LEVELS[selectedGoogleModel] || ['low', 'medium', 'high'];

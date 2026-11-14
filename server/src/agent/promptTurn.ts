@@ -1,6 +1,6 @@
 import type { LocalGravityDB, ModelTier, ThinkingBudget } from '../db/database.js';
 import type { TabbyEngine } from '../tabby/tabbyEngine.js';
-import { deduplicateRepeatedSequences } from '../tabby/tabbyEngine.js';
+import { deduplicateRepeatedSequences, isStrataOrchestratorTier } from '../tabby/tabbyEngine.js';
 import type { McpClientManager } from '../mcp/mcpManager.js';
 import type { SkillManager } from '../skills/skillManager.js';
 import type { SharedTerminalManager } from '../terminal/terminalManager.js';
@@ -8,7 +8,7 @@ import type { BuiltinToolExecutor } from '../tools/builtinTools.js';
 import type { Harness2Manager } from '../harness/harnessManager.js';
 import { pruneChatMessages } from '../utils/messagePruning.js';
 import { autoCompactMessages } from '../utils/autoCompactor.js';
-import { computeAdaptiveThinkingConfig } from './adaptiveCot.js';
+import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from './adaptiveCot.js';
 import { detectPrematureStop } from './prematureStop.js';
 import { parseAntigravitySlashCommand } from './slashCommands.js';
 import os from 'node:os';
@@ -206,6 +206,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     });
     emitPhase('queued', 'Starting turn...');
     const subagentId = `subagent-${assistantMsg.id.slice(0, 8)}`;
+    let emitSubagentEvents = false;
     let turnOutcome: 'completed' | 'aborted' | 'error' = 'completed';
     let turnErrorMsg = '';
 
@@ -536,27 +537,31 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       let hasExecutedTools = false;
       let committedFinalContent = '';
       const collectedStepNotes: string[] = [];
+      let lastStepHadToolError = false;
+      emitSubagentEvents = ['/goal', '/teamwork', '/swarm'].includes(slashInfo.command || '');
 
-      // Broadcast active subagent start to Overview drawer
-      send({
-        type: 'SUBAGENT_EVENT',
-        payload: {
-          id: subagentId,
-          thread_id: thread.id,
-          message_id: assistantMsg.id,
-          role: slashInfo.subagentRole,
-          command: slashInfo.command || 'autonomous',
-          status: 'running',
-          step: 1,
-          maxSteps: MAX_TOOL_STEPS,
-          summary: `Starting ${slashInfo.subagentRole} (${
-            brainProviderCfg.provider === 'google_ai_studio'
-              ? resolvedModelDisplayName
-              : params.tier.toUpperCase()
-          } • ${effectiveThinkingBudget.toUpperCase()})`,
-          timestamp: Date.now(),
-        },
-      });
+      // Broadcast active subagent start to Overview drawer only for explicit multi-step/agent slash modes
+      if (emitSubagentEvents) {
+        send({
+          type: 'SUBAGENT_EVENT',
+          payload: {
+            id: subagentId,
+            thread_id: thread.id,
+            message_id: assistantMsg.id,
+            role: slashInfo.subagentRole,
+            command: slashInfo.command || 'autonomous',
+            status: 'running',
+            step: 1,
+            maxSteps: MAX_TOOL_STEPS,
+            summary: `Starting ${slashInfo.subagentRole} (${
+              brainProviderCfg.provider === 'google_ai_studio'
+                ? resolvedModelDisplayName
+                : params.tier.toUpperCase()
+            } • ${effectiveThinkingBudget.toUpperCase()})`,
+            timestamp: Date.now(),
+          },
+        });
+      }
 
       while (step < MAX_TOOL_STEPS) {
         step++;
@@ -586,6 +591,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           arguments: any;
           output: string;
           screenshotBase64?: string;
+          hadError?: boolean;
         }> = [];
 
         // On the final step, omit tools so the model must provide its final text synthesis
@@ -608,6 +614,11 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           };
         }
 
+        const isLocalOrchestrator =
+          brainProviderCfg.provider !== 'google_ai_studio' && isStrataOrchestratorTier(params.tier);
+        const orchestratorStep = isLocalOrchestrator
+          ? computeOrchestratorStepConfig(params.tier, step, lastStepHadToolError)
+          : null;
         const adaptiveCot = computeAdaptiveThinkingConfig(effectiveThinkingBudget, step);
         send({
           type: 'ADAPTIVE_COT_STATE',
@@ -615,9 +626,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             threadId: thread!.id,
             stepIndex: step,
             budget: effectiveThinkingBudget,
-            reasoningEffort: adaptiveCot.reasoningEffort,
-            reasoningBudgetTokens: adaptiveCot.reasoningBudgetTokens,
-            modeLabel: adaptiveCot.modeLabel,
+            reasoningEffort: orchestratorStep
+              ? orchestratorStep.reasoningEffort
+              : adaptiveCot.reasoningEffort,
+            reasoningBudgetTokens: orchestratorStep
+              ? orchestratorStep.reasoningBudgetTokens
+              : adaptiveCot.reasoningBudgetTokens,
+            modeLabel: orchestratorStep ? orchestratorStep.modeLabel : adaptiveCot.modeLabel,
             timestamp: Date.now(),
           },
         });
@@ -659,6 +674,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           tier: params.tier,
           thinkingBudget: effectiveThinkingBudget,
           stepIndex: step,
+          hadToolError: lastStepHadToolError,
           messages: compactRes.messages,
           tools: activeTools,
           abortSignal: abortController.signal,
@@ -736,21 +752,23 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
 
-            send({
-              type: 'SUBAGENT_EVENT',
-              payload: {
-                id: subagentId,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                role: slashInfo.subagentRole,
-                command: slashInfo.command || 'autonomous',
-                status: 'running',
-                step,
-                maxSteps: MAX_TOOL_STEPS,
-                summary: `Step ${step}: ${toolName}(${ toolArgs.path || toolArgs.command || toolArgs.url || '' })`.slice(0, 90),
-                timestamp: Date.now(),
-              },
-            });
+            if (emitSubagentEvents) {
+              send({
+                type: 'SUBAGENT_EVENT',
+                payload: {
+                  id: subagentId,
+                  thread_id: thread!.id,
+                  message_id: assistantMsg.id,
+                  role: slashInfo.subagentRole,
+                  command: slashInfo.command || 'autonomous',
+                  status: 'running',
+                  step,
+                  maxSteps: MAX_TOOL_STEPS,
+                  summary: `Step ${step}: ${toolName}(${ toolArgs.path || toolArgs.command || toolArgs.url || '' })`.slice(0, 90),
+                  timestamp: Date.now(),
+                },
+              });
+            }
 
             try {
               const execResult = await tools.executeTool(toolName, toolArgs, {
@@ -853,6 +871,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 arguments: toolArgs,
                 output: execResult.stdout || execResult.stderr || 'Success (no output)',
                 screenshotBase64: execResult.screenshotBase64,
+                hadError: finalStatus === 'error',
               });
             } catch (toolErr: any) {
               const errStr = toolErr?.message || String(toolErr);
@@ -884,6 +903,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 toolName,
                 arguments: toolArgs,
                 output: `Tool error: ${errStr}`,
+                hadError: true,
               });
             }
           },
@@ -925,21 +945,24 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   is_auto_continue: true,
                 },
               });
-              send({
-                type: 'SUBAGENT_EVENT',
-                payload: {
-                  id: subagentId,
-                  thread_id: thread.id,
-                  message_id: assistantMsg.id,
-                  role: slashInfo.subagentRole,
-                  command: slashInfo.command || 'autonomous',
-                  status: 'running',
-                  step,
-                  maxSteps: MAX_TOOL_STEPS,
-                  summary: `Auto-continuing (#${autoContinueCount}): ${(stepText || 'proceeding to next action').slice(0, 75)}`,
-                  timestamp: Date.now(),
-                },
-              });
+              if (emitSubagentEvents) {
+                send({
+                  type: 'SUBAGENT_EVENT',
+                  payload: {
+                    id: subagentId,
+                    thread_id: thread.id,
+                    message_id: assistantMsg.id,
+                    role: slashInfo.subagentRole,
+                    command: slashInfo.command || 'autonomous',
+                    status: 'running',
+                    step,
+                    maxSteps: MAX_TOOL_STEPS,
+                    summary: `Auto-continuing (#${autoContinueCount}): ${(stepText || 'proceeding to next action').slice(0, 75)}`,
+                    timestamp: Date.now(),
+                  },
+                });
+              }
+              lastStepHadToolError = false;
 
               chatMessages.push({
                 role: 'assistant',
@@ -979,6 +1002,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             },
           });
         }
+
+        // Track whether any tool in this step errored so orchestrator tiers can re-enable thinking on recovery
+        lastStepHadToolError = executedToolsThisStep.some((t) => Boolean(t.hadError));
 
         // Feed tool outputs back to the model for next turn reasoning
         db.updateThread(thread.id, { status: 'thinking' });
@@ -1232,24 +1258,26 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
     } finally {
-      send({
-        type: 'SUBAGENT_EVENT',
-        payload: {
-          id: subagentId,
-          role: slashInfo.subagentRole,
-          command: slashInfo.command || 'autonomous',
-          status: turnOutcome === 'error' ? 'error' : 'completed',
-          step: turnStep,
-          maxSteps: turnMaxSteps,
-          summary:
-            turnOutcome === 'error'
-              ? `Failed: ${turnErrorMsg.slice(0, 120)}`
-              : turnOutcome === 'aborted'
-              ? `Stopped at step ${turnStep}`
-              : `Completed in ${turnStep} step${turnStep === 1 ? '' : 's'}`,
-          timestamp: Date.now(),
-        },
-      });
+      if (emitSubagentEvents) {
+        send({
+          type: 'SUBAGENT_EVENT',
+          payload: {
+            id: subagentId,
+            role: slashInfo.subagentRole,
+            command: slashInfo.command || 'autonomous',
+            status: turnOutcome === 'error' ? 'error' : 'completed',
+            step: turnStep,
+            maxSteps: turnMaxSteps,
+            summary:
+              turnOutcome === 'error'
+                ? `Failed: ${turnErrorMsg.slice(0, 120)}`
+                : turnOutcome === 'aborted'
+                ? `Stopped at step ${turnStep}`
+                : `Completed in ${turnStep} step${turnStep === 1 ? '' : 's'}`,
+            timestamp: Date.now(),
+          },
+        });
+      }
       if (activeAbortControllers.get(thread.id) === abortController) {
         activeAbortControllers.delete(thread.id);
       }

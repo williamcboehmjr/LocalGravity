@@ -31,10 +31,12 @@ I wanted an Antigravity-style coding workspace—real-time thinking and working 
 
 ## How LocalGravity Uses Strata Differently
 
-Most local LLM clients treat inference like a static chat box where you manually start a backend server and keep weights pinned in VRAM all day. LocalGravity wires **Strata** (`0.1.58`, port `8080`) into an autonomous workstation daemon (`Central Brain`) with a few key differences:
+Most local LLM clients treat inference like a static chat box where you manually start a backend server and keep weights pinned in VRAM all day. LocalGravity wires **Strata** (`0.2.13` / CUDA engine `0.1.59`, port `8080`) into an autonomous workstation daemon (`Central Brain`) with a few key differences:
 
-- **Primary Local Model:** `Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS` (Sparse MoE + Vision, 64k context, `DFlash2` speculative decoding config).
-- **Why this model:** It balances fast token generation with native multimodal vision and reliable tool-calling inside consumer VRAM limits, making it practical for multi-step coding loops instead of just single-turn Q&A.
+- **Three Local Strata Modes in the Prompt Selector:**
+  - **`Swift 1.5 Flash-Next`**: Single-model mode (`Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS` + Vision, 64k context) with selectable Thinking Effort (`Off`, `Fast`, `Deep`).
+  - **`Orchestrator - Swift 1.5`**: Think-Once / Execute-Fast orchestrator — runs Step 1 with **Thinking ON** (`high`) to map target files and plan edits, executes Step 2+ with **Thinking OFF** (`none`) and surgical diff-only edits, and automatically re-enables Thinking if a tool fails.
+  - **`Orchestrator - Qwen 3.6 35B MoE - Swift 1.5`**: Dual-model local orchestrator — uses **Swift 1.5** (`Thinking ON`) for architecture planning and error recovery, then hot-swaps port `8080` across warm System RAM (`128 GB`) to **Qwen 3.6 35B-A3B** (`UD-Q4_K_XL` + Vision, `Thinking OFF`) for rapid code execution and edits.
 - **Wake-on-Demand & Guaranteed `0 MB` VRAM Standby:** Instead of hogging VRAM 24/7, `LlamaMoESidecar` spawns Strata only when a prompt arrives, polls `/health` until ready, and automatically tears down the port `8080` process after idle timeout (or when you click **Sleep GPU**) so your GPU drops straight back to **0 MB VRAM**.
 - **Full Agentic Loop Over Strata's Stream:** Rather than plain chat, `Central Brain` wraps Strata's stream in a multi-step tool loop (`run_terminal`, `read_file`, `write_file`, `edit_file`, `apply_diff`, `lsp_diagnostics`, `grep_search`, `find_by_name`, `capture_screen`, MCP tools, `/swarm`, `@repo-map`, and auto-compaction) with **Reverse-RPC execution** and **automatic post-edit syntax checks** on whatever client device you're working from.
 - **Live Thinking & Interleaved Working Trace:** Reasoning tokens stream into collapsible `Thought for Xs` accordions alongside borderless tool rows, `+X / -Y` diff badges, and interleaved `Working → Prose → Working` updates.
@@ -61,7 +63,7 @@ Most local LLM clients treat inference like a static chat box where you manually
 
 Built around a **local-first, cloud-optional** workflow and tuned specifically to help local models hit higher accuracy in fewer turns:
 
-- **Collapsible Overview Sidebar & Extensions Panel:** Opens directly to **Overview** with quick navigation to `Review`, `Files`, `Terminal`, and `Extensions`, collapsed `Subagents` & `Background Tasks` counters, and `Artifacts` (capped at 4 by default with `See more / See less`). The **Extensions** panel manages installed Skills and both `stdio` and **Streamable HTTP / SSE MCP** servers with persistent enable/disable toggles across restarts (including opt-in **Parallel MCP** web research, disabled by default).
+- **Collapsible Overview Sidebar, Activity Bar & Extensions Panel:** Opens directly to **Overview** with quick navigation to `Review`, `Files`, `Terminal`, and `Extensions`, collapsed `Subagents` & `Background Tasks` counters, and `Artifacts` (capped at 4 by default with `See more / See less`), paired with a quiet collapsible running tasks & subagents bar above the prompt bar when work is active. The **Extensions** panel manages installed Skills and both `stdio` and **Streamable HTTP / SSE MCP** servers with persistent enable/disable toggles across restarts (including opt-in **Parallel MCP** web research, disabled by default).
 - **LSP Diagnostics & Post-Edit Auto-Check:** Built-in `lsp_diagnostics` tool (`diagnostics`, `symbols`, `repo_map`) plus instant syntax and parse validation automatically appended to `write_file`, `edit_file`, and `apply_diff` outputs so the model catches typos and broken syntax immediately.
 - **Compact Repo Map & Dynamic `@` Context Mentions:** A ~1,200-token, reference-ranked symbol map (`@repo-map`) plus live `@git-diff` and `@problems` injections give smaller local models full codebase awareness without blowing the context window. Both `/` slash commands and `@` mentions work cleanly mid-sentence at the cursor.
 - **Uniform Local-First Provider Registry (`/api/providers`):** Persists provider profiles in `.runtime/providers.json`, defaulting to local **Strata (`:8080`)** with preconfigured profiles for **Ollama (`:11434`)**, **llama.cpp (`:8081`)**, **TabbyAPI (`:5000`)**, custom OpenAI-compatible endpoints, and opt-in **Google AI Studio**.
@@ -92,7 +94,7 @@ flowchart LR
     end
 
     subgraph Inference["Inference Engines"]
-        STRATA["Strata Local GPU (:8080)\nSwift-1.5 Qwen 3.8 Flash-Next\nWake-on-Demand / 0 MB Standby"]
+        STRATA["Strata Local GPU (:8080 · v0.2.13 / 0.1.59)\nSwift 1.5 IQ2_XS + Qwen 3.6 35B-A3B\nWarm SysRAM Swap / 0 MB Standby"]
         LOCAL["Local Registry Profiles\nOllama · llama.cpp · TabbyAPI · OpenAI-Compatible"]
         CLOUD["Cloud Optional\nGoogle AI Studio (Argon / Carbon / Hydrogen) · Parallel MCP"]
     end

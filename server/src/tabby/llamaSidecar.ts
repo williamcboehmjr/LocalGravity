@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 export type GpuEngineState = 'active' | 'standby' | 'waking';
+export type StrataProfileId = 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl';
 
 export interface LlamaMoESidecarConfig {
   modelPath?: string;
@@ -11,11 +12,17 @@ export interface LlamaMoESidecarConfig {
   threads?: number;
 }
 
+const PROFILE_CONFIG_FILES: Record<StrataProfileId, string> = {
+  'swift-1.5-iq2_xs': 'strata-swift-iq2_xs.json',
+  'qwen36-ud-q4_k_xl': 'strata-qwen36-ud-q4_k_xl.json',
+};
+
 export class LlamaMoESidecar {
   private static instance: LlamaMoESidecar | null = null;
   private proc: ChildProcess | null = null;
   private port: number;
   private state: GpuEngineState = 'standby';
+  private activeProfile: StrataProfileId = 'swift-1.5-iq2_xs';
   private modelPath: string;
   private recentLogs: string[] = [];
   private offloadedAt: string | null = null;
@@ -32,6 +39,32 @@ export class LlamaMoESidecar {
       LlamaMoESidecar.instance = new LlamaMoESidecar();
     }
     return LlamaMoESidecar.instance;
+  }
+
+  public getActiveProfile(): StrataProfileId {
+    return this.activeProfile;
+  }
+
+  private getInstallDir(): string {
+    return path.join(
+      process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local',
+      'Strata',
+      'install'
+    );
+  }
+
+  public resolveProfileConfig(requestedProfile: StrataProfileId): {
+    profile: StrataProfileId;
+    configPath: string;
+  } {
+    const installDir = this.getInstallDir();
+    const requestedPath = path.join(installDir, PROFILE_CONFIG_FILES[requestedProfile]);
+    if (fs.existsSync(requestedPath)) {
+      return { profile: requestedProfile, configPath: requestedPath };
+    }
+    const fallbackProfile: StrataProfileId = 'swift-1.5-iq2_xs';
+    const fallbackPath = path.join(installDir, PROFILE_CONFIG_FILES[fallbackProfile]);
+    return { profile: fallbackProfile, configPath: fallbackPath };
   }
 
   public getPort(): number {
@@ -78,32 +111,44 @@ export class LlamaMoESidecar {
   }
 
   /**
-   * Fast Wake-on-Demand:
-   * Spawns Strata Server on port 8080 using the DFlash2 NVMe configuration
-   * and polls health every 500ms until ready.
+   * Fast Wake-on-Demand & Profile Swap:
+   * Spawns Strata Server on port 8080 for the requested profile ('swift-1.5-iq2_xs' or
+   * 'qwen36-ud-q4_k_xl') and polls health every 500ms until ready. If a different
+   * profile is currently loaded on port 8080, evicts it cleanly first so the 16 GB VRAM
+   * holds the requested model's hot layers while 128 GB SysRAM keeps weights warm.
    */
-  public async ensureRunning(): Promise<boolean> {
+  public async ensureRunning(requestedProfile: StrataProfileId = 'swift-1.5-iq2_xs'): Promise<boolean> {
+    const resolved = this.resolveProfileConfig(requestedProfile);
+    const targetProfile = resolved.profile;
+
     if (await this.isHealthy()) {
-      this.state = 'active';
-      return true;
+      if (this.activeProfile === targetProfile) {
+        this.state = 'active';
+        return true;
+      }
+      this.appendLog(
+        `[LlamaMoE] Hot-swapping Strata profile on port ${this.port}: ${this.activeProfile} -> ${targetProfile}`
+      );
+      await this.offloadFromGpu(`profile_swap:${targetProfile}`);
     }
 
     this.state = 'waking';
-    this.appendLog('[LlamaMoE] Waking Strata GPU Inference Engine into VRAM...');
+    this.appendLog(`[LlamaMoE] Waking Strata GPU Inference Engine (${targetProfile})...`);
 
-    const terminalDir = path.join(
-      process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local',
-      'Strata', 'terminal', '0.1.58'
-    );
-    const configPath = path.join(
-      process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local',
-      'Strata', 'install', 'strata-swift-iq2_xs.json'
-    );
+    const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
+    const appControlDir = path.join(localAppData, 'Programs', 'Strata', 'control');
+    const strataTerminalRoot = path.join(localAppData, 'Strata', 'terminal');
+    const terminalDir = fs.existsSync(path.join(appControlDir, 'serve', 'server.py'))
+      ? appControlDir
+      : fs.existsSync(path.join(strataTerminalRoot, 'current'))
+        ? path.join(strataTerminalRoot, 'current')
+        : path.join(strataTerminalRoot, '0.1.58');
+    const configPath = resolved.configPath;
     const pythonExe = path.join(terminalDir, 'python', 'python.exe');
     const serverPy = path.join(terminalDir, 'serve', 'server.py');
 
     if (fs.existsSync(configPath) && fs.existsSync(pythonExe) && fs.existsSync(serverPy)) {
-      console.log(`[LlamaMoE] Launching Strata Server on port ${this.port} with strata-swift-iq2_xs.json...`);
+      console.log(`[LlamaMoE] Launching Strata Server on port ${this.port} with ${path.basename(configPath)}...`);
       const args = [
         serverPy,
         '--engine', 'strata',
@@ -134,21 +179,22 @@ export class LlamaMoESidecar {
         this.state = 'standby';
       });
 
-      // Poll health every 500ms for fast wake response
+      // Poll health every 500ms for fast wake / warm RAM swap response
       const startTime = Date.now();
       while (Date.now() - startTime < 120000) {
         await new Promise((r) => setTimeout(r, 500));
         if (await this.isHealthy()) {
           this.state = 'active';
+          this.activeProfile = targetProfile;
           this.offloadedAt = null;
-          this.appendLog(`[LlamaMoE] Strata is healthy and active on port ${this.port}`);
-          console.log(`[LlamaMoE] Strata is healthy and serving on port ${this.port}`);
+          this.appendLog(`[LlamaMoE] Strata (${targetProfile}) is healthy and active on port ${this.port}`);
+          console.log(`[LlamaMoE] Strata (${targetProfile}) is healthy and serving on port ${this.port}`);
           return true;
         }
       }
 
       this.state = 'standby';
-      console.error('[LlamaMoE] Strata failed to become healthy within 120s');
+      console.error(`[LlamaMoE] Strata (${targetProfile}) failed to become healthy within 120s`);
       return false;
     }
 

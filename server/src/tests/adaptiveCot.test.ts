@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { computeAdaptiveThinkingConfig } from '../agent/adaptiveCot.js';
+import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from '../agent/adaptiveCot.js';
+import { isStrataOrchestratorTier } from '../tabby/modelSpecs.js';
 
 function runAdaptiveCotTests() {
   console.log('Running Piece 1 Unit Tests: Adaptive Chain-of-Thought...');
@@ -42,7 +43,55 @@ function runAdaptiveCotTests() {
   assert.equal(deepStep3.reasoningEffort, 'low');
   assert.equal(deepStep3.reasoningBudgetTokens, 1024);
 
-  console.log('✅ Piece 1 Unit Tests PASSED (8/8 assertions)');
+  // 4. Strata Orchestrator helper tier detection
+  assert.equal(isStrataOrchestratorTier('high'), false);
+  assert.equal(isStrataOrchestratorTier('medium'), true);
+  assert.equal(isStrataOrchestratorTier('low'), true);
+
+  // 5. Orchestrator - Swift 1.5 ('medium'): Think Once (Step 1) -> Execute Fast (Step 2+) -> Recover on Error
+  const medStep1 = computeOrchestratorStepConfig('medium', 1, false);
+  assert.equal(medStep1.enableThinking, true);
+  assert.equal(medStep1.reasoningEffort, 'high');
+  assert.equal(medStep1.reasoningBudgetTokens, 2560);
+  assert.equal(medStep1.prefillClosedThink, false);
+  assert.equal(medStep1.targetStrataProfile, 'swift-1.5-iq2_xs');
+
+  const medStep2 = computeOrchestratorStepConfig('medium', 2, false);
+  assert.equal(medStep2.enableThinking, false);
+  assert.equal(medStep2.reasoningEffort, 'none');
+  assert.equal(medStep2.reasoningBudgetTokens, 0);
+  assert.equal(medStep2.prefillClosedThink, true);
+  assert.equal(medStep2.targetStrataProfile, 'swift-1.5-iq2_xs');
+
+  const medRecover = computeOrchestratorStepConfig('medium', 3, true);
+  assert.equal(medRecover.hadToolError, true);
+  assert.equal(medRecover.enableThinking, true);
+  assert.equal(medRecover.reasoningEffort, 'medium');
+  assert.equal(medRecover.reasoningBudgetTokens, 1024);
+  assert.equal(medRecover.targetStrataProfile, 'swift-1.5-iq2_xs');
+
+  // 6. Orchestrator - Qwen 3.6 35B MoE - Swift 1.5 ('low'): Swift Plan -> Qwen 3.6 Fast Build -> Swift Recover
+  const lowStep1 = computeOrchestratorStepConfig('low', 1, false);
+  assert.equal(lowStep1.enableThinking, true);
+  assert.equal(lowStep1.reasoningEffort, 'high');
+  assert.equal(lowStep1.reasoningBudgetTokens, 2560);
+  assert.equal(lowStep1.targetStrataProfile, 'swift-1.5-iq2_xs');
+
+  const lowStep2 = computeOrchestratorStepConfig('low', 2, false);
+  assert.equal(lowStep2.enableThinking, false);
+  assert.equal(lowStep2.reasoningEffort, 'none');
+  assert.equal(lowStep2.reasoningBudgetTokens, 0);
+  assert.equal(lowStep2.prefillClosedThink, true);
+  assert.equal(lowStep2.targetStrataProfile, 'qwen36-ud-q4_k_xl');
+
+  const lowRecover = computeOrchestratorStepConfig('low', 4, true);
+  assert.equal(lowRecover.hadToolError, true);
+  assert.equal(lowRecover.enableThinking, true);
+  assert.equal(lowRecover.reasoningEffort, 'medium');
+  assert.equal(lowRecover.reasoningBudgetTokens, 1024);
+  assert.equal(lowRecover.targetStrataProfile, 'swift-1.5-iq2_xs');
+
+  console.log('✅ Piece 1 Unit Tests PASSED (15/15 assertions & Orchestrator checks)');
 }
 
 runAdaptiveCotTests();

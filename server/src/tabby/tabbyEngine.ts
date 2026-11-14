@@ -4,7 +4,7 @@ import os from 'node:os';
 import YAML from 'yaml';
 import { LlamaMoESidecar } from './llamaSidecar.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
-import { computeAdaptiveThinkingConfig } from '../agent/adaptiveCot.js';
+import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from '../agent/adaptiveCot.js';
 import { SwarmTurnScheduler, type GpuTurnPriority } from '../swarm/swarmScheduler.js';
 import {
   GoogleAiEngine,
@@ -21,11 +21,13 @@ import { deduplicateRepeatedSequences } from './textNormalizers.js';
 export {
   TIER_SPECS,
   THINKING_BUDGET_SPECS,
+  isStrataOrchestratorTier,
 } from './modelSpecs.js';
 export type { TierModelSpec, SysRamWarmStatus, TabbyEngineTelemetry } from './modelSpecs.js';
 import {
   TIER_SPECS,
   THINKING_BUDGET_SPECS,
+  isStrataOrchestratorTier,
   TierModelSpec,
   SysRamWarmStatus,
   TabbyEngineTelemetry,
@@ -64,6 +66,8 @@ export class TabbyEngine {
 
     this.modelsRootDirs = [
       ...(process.env.TABBY_MODELS_DIR ? [process.env.TABBY_MODELS_DIR] : []),
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Strata', 'models'),
+      'E:\\Github\\Models',
       path.join(this.repoRoot, 'models'),
       path.join(os.homedir(), 'Documents', 'GitHub', 'tabbyAPI', 'models'),
       'E:\\Github\\tabbyAPI\\models',
@@ -160,7 +164,7 @@ export class TabbyEngine {
         if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
           const entries = fs.readdirSync(dirPath);
           for (const entry of entries) {
-            if (entry.endsWith('.safetensors')) {
+            if (entry.endsWith('.safetensors') || (entry.endsWith('.gguf') && !entry.startsWith('mmproj'))) {
               results.push(path.join(dirPath, entry));
             }
           }
@@ -261,7 +265,7 @@ export class TabbyEngine {
 
   public async checkConnection(tier?: ModelTier): Promise<boolean> {
     const targetTier = tier || this.activeTier;
-    if (targetTier === 'high') {
+    if (targetTier === 'high' || isStrataOrchestratorTier(targetTier)) {
       try {
         const res = await fetch('http://127.0.0.1:8080/health', {
           signal: AbortSignal.timeout(1500),
@@ -308,15 +312,15 @@ export class TabbyEngine {
     const spec = TIER_SPECS[newTier];
     const resolvedModelName = this.resolveDiskModelName(newTier);
 
-    if (newTier === 'high') {
+    if (newTier === 'high' || isStrataOrchestratorTier(newTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      await sidecar.ensureRunning();
-      this.activeTier = 'high';
+      await sidecar.ensureRunning('swift-1.5-iq2_xs');
+      this.activeTier = newTier;
       this.lastSwapDurationMs = Math.round(performance.now() - startMs);
       this.swapStatus = 'ready';
       return {
-        tier: 'high',
-        modelName: 'qwen3.8-flash-next-iq3_s',
+        tier: newTier,
+        modelName: spec.modelName,
         swapDurationMs: this.lastSwapDurationMs,
         spec,
         sysramCache: this.sysramCache,
@@ -485,9 +489,9 @@ export class TabbyEngine {
 
   public async wakeGpu(): Promise<boolean> {
     console.log('[TabbyEngine] Wake requested');
-    if (this.activeTier === 'high') {
+    if (this.activeTier === 'high' || isStrataOrchestratorTier(this.activeTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      const ok = await sidecar.ensureRunning();
+      const ok = await sidecar.ensureRunning('swift-1.5-iq2_xs');
       if (ok) {
         this.swapStatus = 'ready';
         this.resetIdleTimer();
@@ -503,7 +507,7 @@ export class TabbyEngine {
     console.log(
       `[TabbyEngine] Offloading model from GPU (${Math.round(this.idleTimeoutMs / 60000)}m timer) to preserve 100% VRAM.`
     );
-    if (this.activeTier === 'high') {
+    if (this.activeTier === 'high' || isStrataOrchestratorTier(this.activeTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
       await sidecar.offloadFromGpu('idle_timeout');
       this.swapStatus = 'idle';
@@ -564,6 +568,7 @@ export class TabbyEngine {
     tier: ModelTier;
     thinkingBudget: ThinkingBudget;
     stepIndex?: number;
+    hadToolError?: boolean;
     messages: Array<{ role: string; content: any }>;
     tools?: any[];
     abortSignal?: AbortSignal;
@@ -597,11 +602,12 @@ export class TabbyEngine {
     }
 
         // Ensure target model is loaded in TabbyAPI VRAM
+    const isStrataTier = params.tier === 'high' || isStrataOrchestratorTier(params.tier);
     const desiredModel = this.resolveDiskModelName(params.tier);
-    let isCurrentlyLoaded = params.tier === 'high' && this.activeTier === 'high';
-    // Strata (tier 'high') is served by the llama sidecar, not TabbyAPI: skip the dead /v1/model ping.
+    let isCurrentlyLoaded = isStrataTier && this.activeTier === params.tier;
+    // Strata tiers (high, medium, low) are served by the llama sidecar, not TabbyAPI: skip the dead /v1/model ping.
     try {
-      if (params.tier === 'high') throw new Error('skip');
+      if (isStrataTier) throw new Error('skip');
       const cur = await fetch(`${this.tabbyBaseUrl}/v1/model`, {
         headers: { ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}) },
         signal: AbortSignal.timeout(1500),
@@ -666,17 +672,34 @@ export class TabbyEngine {
 
         const stepIdx = params.stepIndex || 1;
         const isFollowUpStep = stepIdx > 1;
+        const isOrchestrator = isStrataOrchestratorTier(params.tier);
+        const orchestratorCfg = isOrchestrator
+          ? computeOrchestratorStepConfig(params.tier, stepIdx, !!params.hadToolError)
+          : null;
+        const adaptive = orchestratorCfg
+          ? null
+          : computeAdaptiveThinkingConfig(params.thinkingBudget, stepIdx);
+        const stepThinkingEnabled = orchestratorCfg
+          ? orchestratorCfg.enableThinking
+          : adaptive
+            ? adaptive.enableThinking
+            : params.thinkingBudget !== 'off';
         const effectiveMaxThinkingTokens = isFollowUpStep
           ? budgetSpec.followUpStepMaxThinkingTokens
           : budgetSpec.maxThinkingTokens;
         const shouldPrefillClosedThink =
           budgetSpec.prefillClosedThink || (isFollowUpStep && params.thinkingBudget !== 'deep') || (stepIdx > 2 && params.thinkingBudget === 'deep');
 
+        const effectiveMessages = augmentedMessages.map((m) => ({ ...m }));
+        if (orchestratorCfg && effectiveMessages.length > 0 && effectiveMessages[0].role === 'system' && typeof effectiveMessages[0].content === 'string') {
+          effectiveMessages[0].content = `${effectiveMessages[0].content}\n\n${orchestratorCfg.executionDirective}`;
+        }
+
         const requestBody: Record<string, any> = {
           model: this.resolveDiskModelName(params.tier),
-          messages: augmentedMessages,
+          messages: effectiveMessages,
           stream: true,
-          temperature: params.thinkingBudget === 'off' ? 0.2 : 0.60,
+          temperature: !stepThinkingEnabled ? 0.2 : 0.60,
           min_p: 0.05,
           top_p: 0.95,
           max_tokens: 6144,
@@ -693,7 +716,7 @@ export class TabbyEngine {
         };
 
         // Pre-close <think></think> when thinking is off/fast or on deep follow-up tool steps (>2) so tool loops execute rapidly
-        if (shouldPrefillClosedThink && params.tier !== 'high') {
+        if (shouldPrefillClosedThink && !isStrataTier) {
           requestBody.response_prefix = '<think></think>\n';
         }
 
@@ -702,17 +725,18 @@ export class TabbyEngine {
         }
 
         let endpointUrl = `${this.tabbyBaseUrl}/v1/chat/completions`;
-        if (params.tier === 'high') {
+        if (isStrataTier) {
           const sidecar = LlamaMoESidecar.getInstance();
-          await sidecar.ensureRunning();
+          const targetProfile = orchestratorCfg ? orchestratorCfg.targetStrataProfile : 'swift-1.5-iq2_xs';
+          await sidecar.ensureRunning(targetProfile);
           endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
 
-          // Strata / Qwen 3.8 Flash-Next Reasoning Effort Tuning:
-          // Qwen 3.8 Flash-Next needs its reasoning tokens to formulate and validate tool calls.
-          // Disabling thinking entirely (enable_thinking: false) forces the model's inner monologue
-          // into user-facing text, causing it to simulate tool execution in prose instead of calling tools!
-          const adaptive = computeAdaptiveThinkingConfig(params.thinkingBudget, stepIdx);
-          if (!adaptive.enableThinking) {
+          // Strata Reasoning Effort & Dual-Model Orchestrator Tuning:
+          // - 'high': Adaptive CoT on Swift 1.5 using the user's selected Thinking Effort.
+          // - 'medium': Think-Once on Step 1 (Thinking ON), then Swift 1.5 fast execution (Thinking OFF) on Step 2+.
+          // - 'low': Plan/Recover on Swift 1.5 (Thinking ON), then hot-swap warm SysRAM weights to Qwen 3.6 35B-A3B (Thinking OFF) on Step 2+.
+          const activeCfg = orchestratorCfg || adaptive!;
+          if (!activeCfg.enableThinking) {
             requestBody.chat_template_kwargs = { enable_thinking: false };
             requestBody.reasoning_effort = 'none';
             requestBody.reasoning_budget_tokens = 0;
@@ -720,11 +744,11 @@ export class TabbyEngine {
           } else {
             requestBody.chat_template_kwargs = {
               enable_thinking: true,
-              reasoning_effort: adaptive.reasoningEffort,
+              reasoning_effort: activeCfg.reasoningEffort,
             };
-            requestBody.reasoning_effort = adaptive.reasoningEffort;
-            requestBody.reasoning_budget_tokens = adaptive.reasoningBudgetTokens;
-            requestBody.thinking_budget_tokens = adaptive.reasoningBudgetTokens;
+            requestBody.reasoning_effort = activeCfg.reasoningEffort;
+            requestBody.reasoning_budget_tokens = activeCfg.reasoningBudgetTokens;
+            requestBody.thinking_budget_tokens = activeCfg.reasoningBudgetTokens;
           }
         }
         const pendingToolCalls = new Map<number, { id?: string; name: string; arguments: string }>();
@@ -792,8 +816,8 @@ export class TabbyEngine {
             let tagCarry = '';
             let announcedToolPrep = false;
             const emitThought = (text: string) => {
-              if (!text || params.thinkingBudget === 'off') return;
-              if (thinkingTokens >= effectiveMaxThinkingTokens && params.tier !== 'high') return;
+              if (!text || !stepThinkingEnabled) return;
+              if (thinkingTokens >= effectiveMaxThinkingTokens && !isStrataTier) return;
               thinkingTokens += Math.max(1, Math.ceil(text.length / 4));
               thinkingContent += text;
               thinkingDurationMs = Math.round(performance.now() - startTime);
@@ -863,7 +887,7 @@ export class TabbyEngine {
                     if (!delta) continue;
 
                     if (delta.reasoning_content) {
-                      if (params.thinkingBudget !== 'off') {
+                      if (stepThinkingEnabled) {
                         thinkingTokens += Math.max(1, Math.ceil(delta.reasoning_content.length / 4));
                         thinkingContent += delta.reasoning_content;
                         thinkingDurationMs = Math.round(performance.now() - startTime);
@@ -1015,8 +1039,8 @@ export class TabbyEngine {
     }
 
     // TabbyAPI / Strata Unreachable Fallback Handler:
-    const targetService = params.tier === 'high' ? 'Strata Engine (Qwen 3.8 Flash-Next High)' : 'TabbyAPI';
-    const targetUrl = params.tier === 'high' ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
+    const targetService = isStrataTier ? 'Strata Engine (Swift 1.5 / Qwen 3.6)' : 'TabbyAPI';
+    const targetUrl = isStrataTier ? 'http://127.0.0.1:8080' : this.tabbyBaseUrl;
     const targetPort = '8080';
     const errorMsg = `⚠️ Central Brain is unable to reach Strata Neural Engine at http://127.0.0.1:8080. Please ensure Strata is ready on port 8080 on the workstation.`;
     outputTokens = Math.max(1, Math.ceil(errorMsg.length / 4));

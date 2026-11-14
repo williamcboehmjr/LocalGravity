@@ -128,15 +128,30 @@ async function runSelfTest() {
     const prewarmData = (await prewarmRes.json()) as any;
     assert(prewarmData.sysramCache.low && prewarmData.sysramCache.high);
 
-    // Test decoupled 3x3 combinations (e.g. Low+Off, Medium+Fast, High+Deep)
-    const lowOff = await ctx.tabby.streamChatCompletion({
-      tier: 'low',
+    // Test single-model Thinking OFF (High+Off), Orchestrator Step 2 Fast Execution (Medium Step 2), and Deep Reasoning (High+Deep)
+    const highOff = await ctx.tabby.streamChatCompletion({
+      tier: 'high',
       thinkingBudget: 'off',
       messages: [{ role: 'user', content: 'Quick ping' }],
       onThoughtDelta: () => {},
       onTokenDelta: () => {},
     });
-    assert.strictEqual(lowOff.thinkingTokens, 0, 'Thinking budget OFF must emit 0 thinking tokens');
+    assert.strictEqual(highOff.thinkingTokens, 0, 'Thinking budget OFF must emit 0 thinking tokens');
+
+    const medStep2 = await ctx.tabby.streamChatCompletion({
+      tier: 'medium',
+      thinkingBudget: 'deep',
+      stepIndex: 2,
+      hadToolError: false,
+      messages: [{ role: 'user', content: 'Quick ping' }],
+      onThoughtDelta: () => {},
+      onTokenDelta: () => {},
+    });
+    assert.strictEqual(
+      medStep2.thinkingTokens,
+      0,
+      'Orchestrator Step 2+ fast execution must emit 0 thinking tokens'
+    );
 
     const highDeep = await ctx.tabby.streamChatCompletion({
       tier: 'high',

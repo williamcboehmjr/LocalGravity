@@ -53,42 +53,43 @@ export interface TabbyEngineTelemetry {
 export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
   low: {
     tier: 'low',
-    displayName: 'Qwen 3.5 4B (EXL3 4.0bpw)',
-    shortLabel: 'Low 4B',
-    modelName: 'Qwen3.5-4B-EXL3-4.0bpw',
-    fallbackFolderNames: ['Qwen3.5-4B-EXL3-4.0bpw', 'Qwen3.5-4B-EXL3-4.5bpw'],
-    bpw: '4.0 bpw',
-    maxSeqLen: 32768,
-    cacheMode: 'Q4',
-    autosplitReserve: [256],
-    visionOffload: false,
-    draftMode: 'ngram',
-    hybridDraftTokens: 4,
-    estimatedVramGb: 3.4,
-  },
-  medium: {
-    tier: 'medium',
-    displayName: 'Qwen 3.8 27B (EXL3 11.5GB)',
-    shortLabel: 'Med 27B',
-    modelName: 'Qwen3.8-27B-EXL3-11.5GB',
-    fallbackFolderNames: [
-      'Qwen3.8-27B-EXL3-11.5GB',
-      'Qwen-3.8-27B-VL-EXL3-4.0bpw',
-      'Qwen-3.8-27B-VL-EXL3-3.5bpw',
-    ],
-    bpw: '3.5 bpw',
-    maxSeqLen: 24576,
+    displayName: 'Orchestrator - Qwen 3.6 35B MoE - Swift 1.5',
+    shortLabel: 'Orch: Qwen 3.6 35B → Swift 1.5',
+    modelName: 'orchestrator-qwen36-35b-swift-1.5',
+    fallbackFolderNames: ['qwen36-UD-Q4_K_XL', 'Swift-1.5', 'Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS'],
+    bpw: 'IQ2_XS Plan → UD-Q4_K_XL Execute',
+    maxSeqLen: 65536,
     cacheMode: 'Q4',
     autosplitReserve: [256],
     visionOffload: true,
     draftMode: 'ngram',
     hybridDraftTokens: 4,
-    estimatedVramGb: 14.6,
+    estimatedVramGb: 14.8,
+  },
+  medium: {
+    tier: 'medium',
+    displayName: 'Orchestrator - Swift 1.5',
+    shortLabel: 'Orch: Swift 1.5',
+    modelName: 'orchestrator-swift-1.5',
+    fallbackFolderNames: [
+      'Swift-1.5',
+      'Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS',
+      'Qwen3.8-Flash-Next-IQ3_S',
+      'Qwen3.8-Flash-Next-IQ3_XXS',
+    ],
+    bpw: 'IQ2_XS Think-Once → Fast Execute',
+    maxSeqLen: 65536,
+    cacheMode: 'Q4',
+    autosplitReserve: [256],
+    visionOffload: true,
+    draftMode: 'ngram',
+    hybridDraftTokens: 4,
+    estimatedVramGb: 14.8,
   },
   high: {
     tier: 'high',
-    displayName: 'Swift 1.5 Flash-Next High (IQ2_XS + Vision)',
-    shortLabel: 'Flash-Next High',
+    displayName: 'Swift 1.5 Flash-Next',
+    shortLabel: 'Swift 1.5',
     modelName: 'swift-1.5-iq2_xs',
     fallbackFolderNames: [
       'Swift-1.5',
@@ -97,7 +98,7 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
       'Qwen3.8-Flash-Next-IQ3_XXS',
       'Qwen3.8-Flash-Next',
     ],
-    bpw: 'IQ3_S (Sparse MoE + Vision)',
+    bpw: 'IQ2_XS (Sparse MoE + Vision)',
     maxSeqLen: 65536,
     cacheMode: 'Q4',
     autosplitReserve: [256],
@@ -107,6 +108,10 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     estimatedVramGb: 14.8,
   },
 };
+
+export function isStrataOrchestratorTier(tier?: ModelTier): boolean {
+  return tier === 'medium' || tier === 'low';
+}
 
 export const THINKING_BUDGET_SPECS: Record<
   ThinkingBudget,
