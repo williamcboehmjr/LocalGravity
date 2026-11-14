@@ -96,9 +96,9 @@ async fn install_dmg_update(dmg_url: String) -> Result<String, String> {
         let source_app = format!("{}/LocalGravity.app", mount_path);
         let target_app = "/Applications/LocalGravity.app";
 
-        // 3. Perform atomic copy via ditto
+        // 3. Perform atomic copy via ditto without resource forks or extended attributes
         let ditto_out = Command::new("ditto")
-            .args([&source_app, target_app])
+            .args(["--norsrc", "--noextattr", &source_app, target_app])
             .output()
             .map_err(|e| format!("Failed to copy application: {}", e))?;
 
@@ -116,9 +116,12 @@ async fn install_dmg_update(dmg_url: String) -> Result<String, String> {
             ));
         }
 
-        // 5. Clear quarantine flags
+        // 5. Clear quarantine flags and refresh ad-hoc signature for macOS Gatekeeper
         let _ = Command::new("xattr")
             .args(["-cr", target_app])
+            .output();
+        let _ = Command::new("codesign")
+            .args(["--force", "--deep", "--sign", "-", target_app])
             .output();
 
         // 6. Spawn relaunch script in detached background and exit

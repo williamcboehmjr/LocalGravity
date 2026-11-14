@@ -154,6 +154,14 @@ npm run tauri dev  # Native desktop shell
 
 Prebuilt installers are available on the [Releases](https://github.com/williamcboehmjr/LocalGravity/releases) page.
 
+### macOS One-Line Install (No Gatekeeper Warning)
+
+Because the macOS `.dmg` is not notarized with a paid Apple Developer ID, downloading it in a browser triggers Gatekeeper on macOS Sequoia / Tahoe / Golden Gate. You can install the latest `.dmg` cleanly from **Terminal** without quarantine flags:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/williamcboehmjr/LocalGravity/main/scripts/install-macos.sh | bash
+```
+
 ---
 
 ## Credits & Open-Source Licenses
