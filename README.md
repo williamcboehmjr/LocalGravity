@@ -1,61 +1,98 @@
-# LocalGravity (LocalGravity Local-First Clone)
+# LocalGravity
 
-A production-grade, local-first clone of **LocalGravity** featuring a distributed **"Central Brain, Edge Executor"** topology, zero-latency tiered model manager, and exact 3-pane UI parity.
+An independent, **local-first** agentic coding workspace built to bring an Antigravity-style workflow to your own hardware — with optional cloud APIs when you want them.
 
----
-
-## Architecture Overview
-
-LocalGravity splits AI reasoning from edge execution:
-1. **Central Brain (Windows Workstation):**
-   * High-performance Python FastAPI engine running on port `3390`.
-   * Directly interfaces with local Ollama (`http://localhost:11434`).
-   * Manages GPU VRAM eviction (`keep_alive: 0`) and sub-second model swapping using host DDR4 RAM / RAMDisk caching.
-   * Dispatches Reverse-RPC execution commands over encrypted WebSockets (`ws://<host>:3390/ws/agent/{session_id}`).
-2. **Edge Client (Multi-Platform Native Shell):**
-   * Multi-platform Tauri v2 + React 19 / TypeScript / Vite / Tailwind CSS / Monaco editor application.
-   * Commands (`run_command`, `read_file`, `write_file`) are executed **natively on the edge machine** (`powershell.exe` on Windows, `/bin/zsh` on macOS).
-   * Live `stdout`/`stderr` chunks stream continuously back to the Central Brain and expand inside real-time LocalGravity Thought Accordions.
+> **Disclaimer / Trademarks:** LocalGravity is an independent hobby project inspired by modern agentic coding workflows. It is **not** affiliated with, endorsed by, or connected to Google LLC or Google Antigravity. All product names, logos, and trademarks belong to their respective owners.
 
 ---
 
-## 3-Tier Multimodal Model Suite
+## Why I Built This
 
-All three models natively support **Vision + Tools + Thinking**:
+I wanted an Antigravity-style coding experience—clean thinking/working traces, file review diffs, multi-agent swarms, terminal/editor integration, and mobile/desktop companion access—that runs **local-first** on my own workstation GPU, while still letting me flip over to cloud APIs (like Google AI Studio) whenever I want extra speed or reasoning power.
 
-| Mode | Ollama Tag | Architecture & Params | VRAM Footprint | Best Role |
-| :--- | :--- | :--- | :--- | :--- |
-| **`[ Low ]`** | `qwen3.5:4b` | `qwen35` (4.7B, Q4_K_M) | **~3.4 GB** | Sub-second screenshot triage, fast OCR, and quick tool commands (90+ tok/s). |
-| **`[ Medium ]`** | `qwen3.5:9b` | `qwen35` (9.7B, Q4_K_M) | **~6.6 GB** | Core development workhorse, code refactoring, diff generation, and UI grounding (60+ tok/s). |
-| **`[ High ]`** | `qwen3.8-27b-vl:latest` | `qwen35` (26.9B, IQ3_S) | **~11.0 GB** | 27B deep architectural reasoning, multi-file planning, and complex visual analysis (30+ tok/s). |
+It splits the app into two halves:
+1. **Central Brain (`server/`)** — A TypeScript + Fastify daemon with SQLite persistence that handles model routing, orchestrators, `/swarm` coordination, MCP tools, and session history.
+2. **Edge Client (`client/`)** — A Tauri v2 + React + Monaco + xterm.js app that connects over HTTP/WebSocket and runs file edits and shell commands natively on your machine (Windows, macOS, Linux, Android/ChromeOS, or any browser).
 
 ---
 
-## Dynamic Thinking Budget Controller
+## Screenshots
 
-LocalGravity decouples model weight size from thinking depth right from the prompt bar:
-* **`[ Off ]`**: 0 ms delay. Direct tool calls or answers without scratchpad.
-* **`[ Fast ]`**: ~250 tokens / 2s quick verification sanity check.
-* **`[ Deep ]`**: Full chain-of-thought deliberation inside real-time LocalGravity Thought Accordions with stopwatch and token counts.
+<p align="center">
+  <img src="docs/screenshots/workspace-desktop.png" alt="LocalGravity Desktop Workspace" width="820" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-modal.png" alt="LocalGravity Minimalist Settings" width="820" />
+</p>
 
 ---
 
-## Quickstart
+## What Works Today
 
-### 1. Launch Central Brain
-```powershell
-cd brain
-.venv\Scripts\activate
-uvicorn src.main:app --host 0.0.0.0 --port 3390 --reload
+- **Local GPU & Cloud API Switching**: Run locally with Strata / ExLlamaV3 (with automatic VRAM wake/offload) or switch to Google AI Studio (`Gemini 4 Argon`, `Carbon`, `Hydrogen`, `Flash 3.8`, plus dual orchestrators).
+- **Clean Thinking & Working Trace**: Borderless tool rows with file-type badges, inline `+X / -Y` diff stats, collapsible `Thought for Xs` / `Worked for Xs` summaries, and interleaved `Working → Prose → Working` output.
+- **Slash Commands & Workflows**: `/plan`, `/goal`, `/swarm`, `/boost`, `/compact`, `/vision`, custom skills, and MCP tool integrations.
+- **Cross-Platform Builds**:
+  - **Windows**: `x64` and native `ARM64` `.msi` installers
+  - **macOS**: Universal `.dmg` (Apple Silicon + Intel)
+  - **Linux**: `.AppImage`, `.deb`, and `.rpm`
+  - **Android & ChromeOS**: Signed `.apk` with resizable desktop/Chromebook window support
+  - **Web Companion**: Built-in WebUI served straight from Central Brain (`http://<host>:3390`)
+
+---
+
+## Coming Soon & Ideas I'm Toying With
+
+- **More Local & Custom API Backends**: Adding first-class support for **Ollama**, **llama.cpp** server, **TabbyAPI**, and general **OpenAI-compatible routing** so you can point LocalGravity at whatever local or hosted endpoint you prefer.
+- **`/megaswarm` (Experimental Idea)**: A mode where you can pull in a large swarm of different cloud and local APIs—**Grok, ChatGPT / OpenAI, Google Gemini, Claude**, and others—all working in unison on the same problem. The idea is to throw serious combined brainpower, horsepower, and speed at a hard project right from the start, or when you hit a wall on a nasty bug.
+
+---
+
+## Contributing, Feature Requests & PRs
+
+This is a **side hobby project**, so please keep expectations realistic:
+- **Feature Requests**: Feel free to open an issue with ideas! I'm happy to read them, though I can't promise timelines or that everything will get built.
+- **Forks & Pull Requests**: You're very welcome to fork the repo and open a PR. Before anything gets merged into `main`, PRs go through AI-assisted review and safety checks (along with human review) to make sure changes make sense, stay safe, and don't break existing workflows.
+
+---
+
+## Quick Start (From Source)
+
+### 1. Start Central Brain
+```bash
+cd server
+npm install
+npm run build
+npm start
 ```
-Check health: `http://localhost:3390/health`
+Health check: `http://127.0.0.1:3390/api/health`
 
-### 2. Launch Client
-```powershell
+### 2. Start the Client (Web or Desktop)
+```bash
 cd client
-npm run dev
+npm install
+npm run dev        # WebUI at http://localhost:5173
+# or
+npm run tauri dev  # Native desktop shell
 ```
-Open `http://localhost:5173` in your browser, or run desktop native shell:
-```powershell
-npm run tauri dev
-```
+
+Prebuilt installers for Windows, macOS, Linux, and Android are posted on the [Releases](https://github.com/williamcboehmjr/LocalGravity/releases) page.
+
+---
+
+## Credits & Open-Source Licenses
+
+LocalGravity stands on the shoulders of a ton of great open-source work:
+
+- **Desktop & Mobile Shell**: [Tauri](https://tauri.app/) (MIT / Apache-2.0) and [Rust](https://www.rust-lang.org/) (`tokio`, `tokio-tungstenite`, `serde`, `futures-util`)
+- **Frontend UI**: [React](https://react.dev/) (MIT), [Vite](https://vite.dev/) (MIT), [Tailwind CSS](https://tailwindcss.com/) (MIT), [Zustand](https://github.com/pmndrs/zustand) (MIT), [Lucide Icons](https://lucide.dev/) (ISC)
+- **Editor, Terminal & Markdown**: [Monaco Editor](https://microsoft.github.io/monaco-editor/) (MIT), [xterm.js](https://xtermjs.org/) (MIT), [react-markdown](https://github.com/remarkjs/react-markdown) & [remark-gfm](https://github.com/remarkjs/remark-gfm) (MIT)
+- **Server & Persistence**: [Fastify](https://fastify.dev/) (MIT), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) (MIT), [ws](https://github.com/websockets/ws) (MIT), [pdf-parse](https://www.npmjs.com/package/pdf-parse) (MIT), [yaml](https://github.com/eemeli/yaml) (ISC)
+- **Local Inference & Tools**: [llama.cpp](https://github.com/ggml-org/llama.cpp) / [ExLlamaV3](https://github.com/turboderp-org/exllamav3) / Strata local inference ecosystem, [Playwright](https://playwright.dev/) (Apache-2.0), and the Model Context Protocol (MCP)
+
+---
+
+## License
+
+Licensed under the [MIT License](LICENSE).

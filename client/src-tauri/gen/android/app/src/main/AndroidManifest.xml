@@ -10,17 +10,21 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
 
-    <!-- AndroidTV support -->
+    <!-- AndroidTV & ChromeOS / Desktop Android support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.type.pc" android:required="false" />
 
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.localgravity_edge"
+        android:resizeableActivity="true"
         android:usesCleartextTraffic="true">
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|fontScale|layoutDirection|density"
             android:launchMode="singleTask"
+            android:resizeableActivity="true"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
             android:exported="true">

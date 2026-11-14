@@ -39,9 +39,21 @@ const manifest = {
       signature: winSignature,
       url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_x64_en-US.msi`,
     },
+    'windows-aarch64': {
+      signature: winSignature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_arm64_en-US.msi`,
+    },
     'darwin-aarch64': {
       signature: winSignature,
-      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_aarch64.dmg`,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_universal.dmg`,
+    },
+    'darwin-x86_64': {
+      signature: winSignature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_universal.dmg`,
+    },
+    'linux-x86_64': {
+      signature: winSignature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_amd64.AppImage`,
     },
     'android-aarch64': {
       signature: '',

@@ -1,4 +1,4 @@
-name: macOS DMG Release Builder
+name: Cross-Platform Release Builders
 
 on:
   release:
@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to build macOS DMG for (e.g. v2.3.12)'
+        description: 'Release tag to build installers for (e.g. v2.3.12)'
         required: true
         type: string
 
 jobs:
-  build-macos-dmg:
+  build-macos-universal:
     runs-on: macos-latest
     permissions:
       contents: write
@@ -31,36 +31,159 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'client/package-lock.json'
 
-      - name: Install Rust stable
+      - name: Install Rust stable (Apple Silicon + Intel)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install client dependencies
         run: |
           cd client
           npm ci
 
-      - name: Build macOS DMG & Updater Bundle
+      - name: Build macOS Universal DMG & Updater Bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: |
           cd client
-          npx tauri build --bundles dmg,app --target aarch64-apple-darwin
+          npx tauri build --bundles dmg,app --target universal-apple-darwin
 
-      - name: Upload macOS DMG & Updater Artifacts to Release
+      - name: Upload macOS Universal Artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          shopt -s globstar nullglob
+          shopt -s nullglob
           FILES=(
-            client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
-            client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            client/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            client/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+            client/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           )
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "No macOS bundle artifacts found"
             exit 1
           fi
           gh release upload "${RELEASE_TAG}" "${FILES[@]}" --clobber
+
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'client/package-lock.json'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install client dependencies
+        run: |
+          cd client
+          npm ci
+
+      - name: Build Linux Bundles (AppImage, DEB, RPM)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          cd client
+          npx tauri build --bundles deb,rpm,appimage
+
+      - name: Upload Linux Artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          FILES=(
+            client/src-tauri/target/release/bundle/appimage/*.AppImage
+            client/src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz
+            client/src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz.sig
+            client/src-tauri/target/release/bundle/deb/*.deb
+            client/src-tauri/target/release/bundle/rpm/*.rpm
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No Linux bundle artifacts found"
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${FILES[@]}" --clobber
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'client/package-lock.json'
+
+      - name: Install Rust stable (Windows ARM64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Install client dependencies
+        run: |
+          cd client
+          npm ci
+
+      - name: Build Native Windows ARM64 MSI
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          cd client
+          npx tauri build --bundles msi --target aarch64-pc-windows-msvc
+
+      - name: Upload Windows ARM64 Artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $files = @(
+            Get-ChildItem -Path "client/src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi" -ErrorAction SilentlyContinue
+            Get-ChildItem -Path "client/src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi.sig" -ErrorAction SilentlyContinue
+          ) | ForEach-Object { $_.FullName }
+          if ($files.Count -eq 0) {
+            Write-Error "No Windows ARM64 MSI artifacts found"
+            exit 1
+          }
+          gh release upload $env:RELEASE_TAG @files --clobber

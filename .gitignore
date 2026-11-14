@@ -53,3 +53,8 @@ server/scripts/_*
 *.keystore
 *.jks
 keystore.properties
+
+# Playwright & scratch timers
+.playwright-mcp/
+_timer_start.txt
+timer_test.html
