@@ -1,15 +1,15 @@
 {
-  "version": "v2.3.9",
-  "notes": "Google AI Studio Brain Provider, Decisions API Orchestrator, and Android 17 & foldable UI fixes",
-  "pub_date": "2026-11-13T23:08:26.279Z",
+  "version": "v2.3.10",
+  "notes": "LocalGravity v2.3.10: Google AI Studio engine now honors thinkingBudget='off' (no more 52 leaked thinking tokens from Gemini server-side reasoning); reconnect/timer countdown intervals no longer churn every tick; turn-protocol singletons reset on host switch; new GoogleAiEngine unit suite (8 assertions).",
+  "pub_date": "2026-11-14T01:46:07.194Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelc3TlNIcEs0VjUzU29xdGlQdllsR2VIVy9WS1JOQ0RKVTVTQWszdUtaWWZiUEhPNzhqYkJrdUJHK2RVZXNWdVJLUUR2Y3lndTRJYU0wR1NFQ2tjY2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjExMzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy45X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuOQoramlleFNpdkV2ckxrQkRKaEx5K2hxTXgxNTVjYXRDUjkwaVJvNTh4N3ZmL2xhcm9FZEUyOXVYZnNGd1dkN2ZoTEJvSGdlbm5GZGI2YWJCRVBlbG9DUT09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.9/LocalGravity_2.3.9_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelp0d012Y0xublFibVl6SWh1QWZSdk1jYWJmYjRJS1ZTSlhwYkl0SEZ6TmdmeHlaZjliMkMxQ2tULzRjSThBa1owaGtMTXJ0Nld0UFhkWmlmWjJNcndrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjIwNzM1CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4xMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjEwClJXazVyKzhnUmloRnlqc05hTlJGb2xNQ3ZKek1IMlVESHp3Vm50c21telhoTzJtMGZoM081ZWovVXFFUG11RklEWGRwcmoyTllSUFpGb2xINFB5bkRnPT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.10/LocalGravity_2.3.10_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelc3TlNIcEs0VjUzU29xdGlQdllsR2VIVy9WS1JOQ0RKVTVTQWszdUtaWWZiUEhPNzhqYkJrdUJHK2RVZXNWdVJLUUR2Y3lndTRJYU0wR1NFQ2tjY2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjExMzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy45X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjoyLjMuOQoramlleFNpdkV2ckxrQkRKaEx5K2hxTXgxNTVjYXRDUjkwaVJvNTh4N3ZmL2xhcm9FZEUyOXVYZnNGd1dkN2ZoTEJvSGdlbm5GZGI2YWJCRVBlbG9DUT09Cg==",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.9/LocalGravity_2.3.9_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelp0d012Y0xublFibVl6SWh1QWZSdk1jYWJmYjRJS1ZTSlhwYkl0SEZ6TmdmeHlaZjliMkMxQ2tULzRjSThBa1owaGtMTXJ0Nld0UFhkWmlmWjJNcndrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjIwNzM1CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4xMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjEwClJXazVyKzhnUmloRnlqc05hTlJGb2xNQ3ZKek1IMlVESHp3Vm50c21telhoTzJtMGZoM081ZWovVXFFUG11RklEWGRwcmoyTllSUFpGb2xINFB5bkRnPT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.10/LocalGravity_2.3.10_aarch64.dmg"
     }
   }
 }
