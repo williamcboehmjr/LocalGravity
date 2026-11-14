@@ -936,33 +936,23 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
 
         // Tools were executed in this step!
-        // If the model emitted a short transitional preamble (< 200 chars, no headings/code/lists, e.g., "Let me read index.ts..."),
-        // move it into the collapsible activity window (STEP_NOTE_COMMITTED) instead of polluting the final answer!
+        // Always commit intermediate step prose as a step segment boundary so the client can render
+        // Antigravity's interleaved Working -> Prose -> Working -> Prose layout cleanly.
         if (stepText) {
-          const looksStructured =
-            /^\s{0,3}#{1,6}\s/m.test(stepText) || stepText.includes('```') || /^\s*(?:[-*+]|\d+[.)])\s+\S/m.test(stepText);
-          if (stepText.length < 200 && !looksStructured) {
-            collectedStepNotes.push(stepText);
-            db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-            send({
-              type: 'STEP_NOTE_COMMITTED',
-              payload: {
-                session_id: thread.id,
-                thread_id: thread.id,
-                message_id: assistantMsg.id,
-                step,
-                note: stepText,
-                committed_content: committedFinalContent,
-                is_auto_continue: false,
-              },
-            });
-          } else {
-            // Substantial output emitted alongside tools: keep it in the main answer
-            committedFinalContent = committedFinalContent
-              ? `${committedFinalContent}\n\n${stepText}`
-              : stepText;
-            db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent + '\n\n');
-          }
+          collectedStepNotes.push(stepText);
+          db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
+          send({
+            type: 'STEP_NOTE_COMMITTED',
+            payload: {
+              session_id: thread.id,
+              thread_id: thread.id,
+              message_id: assistantMsg.id,
+              step,
+              note: stepText,
+              committed_content: committedFinalContent,
+              is_auto_continue: false,
+            },
+          });
         }
 
         // Feed tool outputs back to the model for next turn reasoning

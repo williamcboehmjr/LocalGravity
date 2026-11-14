@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Brain } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 interface ThoughtAccordionProps {
   thought: string;
@@ -48,44 +48,38 @@ export const ThoughtAccordion: React.FC<ThoughtAccordionProps> = ({
   const effectiveTokens = tokenCount || Math.max(1, Math.ceil((thought || '').length / 4));
 
   return (
-    <div className="my-1.5 select-none">
-      {/* Minimalist LocalGravity Thought Bar */}
+    <div className="py-0.5 select-none">
+      {/* Minimalist Antigravity Thought Row */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="group inline-flex items-center gap-2 text-[14px] sm:text-[14.5px] text-[#9AA0A6] hover:text-[#E8EAED] transition-colors py-1 px-2.5 -ml-2 rounded-lg hover:bg-[#1A1B1E] cursor-pointer focus:outline-none"
+        className="group inline-flex items-center gap-1.5 text-[13px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors py-0.5 cursor-pointer focus:outline-none"
       >
-        {isStreaming ? (
-          <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />
-        ) : (
-          <Brain className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] shrink-0" />
-        )}
-
-        <span className="font-sans font-medium">
+        <span className="font-sans">
           {isStreaming ? `Thinking (${formattedTime})` : `Thought for ${formattedTime}`}
         </span>
 
         {effectiveTokens > 0 && (
-          <span className="text-[12px] text-[#5F6368] hidden sm:inline">
-            ({effectiveTokens} tokens)
+          <span className="text-[11.5px] text-[#5F6368] hidden sm:inline">
+            ({effectiveTokens} tok)
           </span>
         )}
 
         {isOpen ? (
-          <ChevronDown className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] transition-transform" />
+          <ChevronDown className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] shrink-0" />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] transition-transform group-hover:translate-x-0.5" />
+          <ChevronRight className="w-3.5 h-3.5 text-[#70757A] group-hover:text-[#9AA0A6] shrink-0" />
         )}
       </button>
 
-      {/* Expanded Thought Body (Only on demand) */}
+      {/* Expanded Thought Body (On demand) */}
       {isOpen && (
         <div
           ref={scrollRef}
-          className={`mt-1.5 ml-1 pl-3.5 border-l text-[13.5px] sm:text-[14px] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto py-2 select-text rounded-r-xl transition-colors ${
+          className={`mt-1.5 pl-3 border-l text-[13px] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto py-1.5 select-text transition-colors ${
             isStreaming
-              ? 'border-[#3C4043] text-[#BDC1C6] bg-[#141518]'
-              : 'border-[#2D2F34] text-[#9AA0A6] bg-[#101113]'
+              ? 'border-[#3C4043] text-[#BDC1C6]'
+              : 'border-[#2D2F34] text-[#9AA0A6]'
           }`}
         >
           {thought || 'Analyzing request and context...'}

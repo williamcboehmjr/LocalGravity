@@ -171,12 +171,13 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
         </div>
       )}
 
-      {/* Bottom Footer Row matching LocalGravity Settings Bar */}
+      {/* Bottom Footer Row matching Antigravity Settings Bar */}
       <div className="flex items-center justify-between px-1 py-1">
         <button
           type="button"
           onClick={onOpenSettings}
-          className="flex items-center gap-2 text-xs text-[#8E8E93] hover:text-[#E3E3E3] transition-colors py-1 px-1.5 rounded-md hover:bg-[#1A1A1D]"
+          className="flex items-center gap-2 text-[12.5px] font-medium text-[#9AA0A6] hover:text-white transition-colors py-1.5 px-2 rounded-lg hover:bg-[#1E1F23] cursor-pointer"
+          title="Open Settings"
         >
           <Settings className="w-3.5 h-3.5" />
           <span>Settings</span>
@@ -185,15 +186,25 @@ export const NodeStatusBadge: React.FC<NodeStatusBadgeProps> = ({ onOpenSettings
         <button
           type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-[#1A1A1D] text-[11px] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors font-mono"
-          title="Toggle Hardware Telemetry & Brain Status"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-[#1E1F23] text-[11px] text-[#8E8E93] hover:text-[#E3E3E3] transition-colors cursor-pointer"
+          title={`Toggle Node Details (${brainHost})`}
         >
           <span
             className={`w-2 h-2 rounded-full shrink-0 ${
-              isConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+              !isConnected
+                ? 'bg-amber-400'
+                : brainProvider === 'google_ai_studio'
+                ? 'bg-sky-400'
+                : 'bg-emerald-400'
             }`}
           />
-          <span className="truncate max-w-[100px]">{brainHost}</span>
+          <span className="truncate max-w-[100px]">
+            {!isConnected
+              ? 'Offline'
+              : brainProvider === 'google_ai_studio'
+              ? 'Google AI'
+              : 'Local GPU'}
+          </span>
           {isExpanded ? (
             <ChevronDown className="w-3 h-3 text-[#6E6E73]" />
           ) : (

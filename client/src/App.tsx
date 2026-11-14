@@ -81,8 +81,6 @@ export const App: React.FC = () => {
     brainHost,
     brainPort,
     isConnected,
-    brainProvider,
-    selectedGoogleModel,
     setBrainConnection,
     setIsConnected,
     selectedTier,
@@ -199,11 +197,6 @@ export const App: React.FC = () => {
   const [searchFilter, setSearchFilter] = useState('');
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
-  const [gpuStatus, setGpuStatus] = useState<{
-    gpuState: 'active' | 'standby' | 'waking' | 'offline';
-    secondsRemaining: number;
-    idleTimeoutMinutes: number;
-  }>({ gpuState: 'standby', secondsRemaining: 0, idleTimeoutMinutes: 15 });
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
   const [reconnectKey, setReconnectKey] = useState<number>(0);
@@ -225,26 +218,6 @@ export const App: React.FC = () => {
     setReconnectKey((k) => k + 1);
   }, []);
 
-  useEffect(() => {
-    const checkGpu = () => {
-      fetch(`${apiBaseUrl}/api/gpu/status`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data) {
-            setGpuStatus({
-              gpuState: data.gpuState || 'standby',
-              secondsRemaining: data.secondsRemaining || 0,
-              idleTimeoutMinutes: data.idleTimeoutMinutes || 15,
-            });
-          }
-        })
-        .catch(() => {});
-    };
-
-    checkGpu();
-    const interval = setInterval(checkGpu, 3000);
-    return () => clearInterval(interval);
-  }, [apiBaseUrl]);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
 
@@ -1437,7 +1410,12 @@ export const App: React.FC = () => {
           )}
 
           {/* Bottom Settings & Brain Status Bar */}
-          <NodeStatusBadge onOpenSettings={() => setIsSettingsOpen(true)} />
+          <NodeStatusBadge
+            onOpenSettings={() => {
+              setIsSettingsOpen(true);
+              if (window.innerWidth < 900) setShowLeftRail(false);
+            }}
+          />
         </aside>
         </>
       )}
@@ -1508,57 +1486,6 @@ export const App: React.FC = () => {
             <div className="hidden sm:flex">
               <DpiScaleControl />
             </div>
-
-            {/* Brain & GPU Lifecycle Status Pill */}
-            <button
-              type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors border ${
-                !isConnected
-                  ? 'bg-amber-950/40 border-amber-700/50 text-amber-300 hover:bg-amber-900/50'
-                  : brainProvider === 'google_ai_studio'
-                  ? 'bg-sky-950/40 border-sky-700/50 text-sky-200 hover:bg-sky-900/50'
-                  : gpuStatus.gpuState === 'active'
-                  ? 'bg-[#1A1A1D] border-[#2A2A2E] text-[#A0A0A5] hover:text-[#E3E3E3] hover:border-[#3E3E44]'
-                  : 'bg-[#151821] border-[#252E3E] text-[#7DD3FC] hover:text-[#BAE6FD]'
-              }`}
-              title={
-                !isConnected
-                  ? `Disconnected from ${brainHost}:${brainPort} — Click to configure & test`
-                  : brainProvider === 'google_ai_studio'
-                  ? `Connected (${brainHost}:${brainPort}) — Processing via Google AI Studio API (${getGoogleModelOption(selectedGoogleModel).name}); Strata GPU bypassed.`
-                  : gpuStatus.gpuState === 'active'
-                  ? `Connected (${brainHost}:${brainPort}) — GPU Active in VRAM. Auto-offloads after ${gpuStatus.idleTimeoutMinutes}m idle to free 100% VRAM.`
-                  : gpuStatus.gpuState === 'waking'
-                  ? `Connected (${brainHost}:${brainPort}) — ⚡ Waking Strata GPU Engine...`
-                  : `Connected (${brainHost}:${brainPort}) — 🌙 Standby (0 MB VRAM). Automatically wakes into GPU when you send a prompt!`
-              }
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  !isConnected
-                    ? 'bg-amber-400 animate-pulse'
-                    : brainProvider === 'google_ai_studio'
-                    ? 'bg-sky-400'
-                    : gpuStatus.gpuState === 'active'
-                    ? 'bg-emerald-400'
-                    : gpuStatus.gpuState === 'waking'
-                    ? 'bg-amber-400 animate-pulse'
-                    : 'bg-sky-400'
-                }`}
-              />
-              <span className="hidden sm:inline font-mono">
-                {!isConnected
-                  ? 'Connect Brain'
-                  : brainProvider === 'google_ai_studio'
-                  ? `${brainHost}:${brainPort} • Google AI (${getGoogleModelOption(selectedGoogleModel).shortName})`
-                  : gpuStatus.gpuState === 'active'
-                  ? `${brainHost}:${brainPort} • GPU Active${gpuStatus.secondsRemaining > 0 ? ` (${Math.ceil(gpuStatus.secondsRemaining / 60)}m)` : ''}`
-                  : gpuStatus.gpuState === 'waking'
-                  ? `${brainHost}:${brainPort} • Waking GPU...`
-                  : `${brainHost}:${brainPort} • Standby (0 MB)`}
-              </span>
-            </button>
 
             {/* More Actions Menu (⋮) */}
             <div className="relative">

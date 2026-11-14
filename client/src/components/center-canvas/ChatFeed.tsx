@@ -2,17 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  Terminal,
-  AlertCircle,
   ChevronRight,
   ChevronDown,
-  Globe,
   Loader2,
   FileCode2,
   ExternalLink,
   Sparkles,
-  CheckCircle2,
-  FolderOpen,
   Copy,
   Check,
   RotateCcw,
@@ -55,9 +50,63 @@ function shortenPath(rawPath: string): string {
   return normalized;
 }
 
+function baseFilename(rawPath: string): string {
+  if (!rawPath) return '.';
+  const normalized = rawPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  const last = normalized.split('/').pop();
+  return last || normalized;
+}
+
+const FileTypeBadge: React.FC<{ filename: string }> = ({ filename }) => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.tsx') || lower.endsWith('.jsx')) {
+    return (
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+        <ellipse cx="12" cy="12" rx="10" ry="4.2" />
+        <ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(60 12 12)" />
+        <ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(120 12 12)" />
+      </svg>
+    );
+  }
+  if (lower.endsWith('.ts') || lower.endsWith('.mts') || lower.endsWith('.cts')) {
+    return <span className="text-[10px] font-bold tracking-tight text-[#38BDF8] shrink-0 font-mono">TS</span>;
+  }
+  if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) {
+    return <span className="text-[10px] font-bold tracking-tight text-[#FACC15] shrink-0 font-mono">JS</span>;
+  }
+  if (lower.endsWith('.yml') || lower.endsWith('.yaml')) {
+    return <span className="text-[10.5px] font-bold text-[#A78BFA] shrink-0 font-mono">Y</span>;
+  }
+  if (lower.endsWith('.kt') || lower.endsWith('.kts')) {
+    return <span className="text-[10.5px] font-bold text-[#C084FC] shrink-0 font-mono">K</span>;
+  }
+  if (lower === '.gitignore' || lower === '.gitattributes' || lower.endsWith('.git')) {
+    return (
+      <span className="inline-block w-2.5 h-2.5 rotate-45 bg-[#F97316] rounded-[1px] shrink-0 mx-0.5" />
+    );
+  }
+  if (lower.endsWith('.json')) {
+    return <span className="text-[10px] font-bold text-[#FBBF24] shrink-0 font-mono">{'{}'}</span>;
+  }
+  if (lower.endsWith('.md')) {
+    return <span className="text-[10px] font-bold text-[#60A5FA] shrink-0 font-mono">M</span>;
+  }
+  if (lower.endsWith('.rs')) {
+    return <span className="text-[10px] font-bold text-[#FB923C] shrink-0 font-mono">RS</span>;
+  }
+  if (lower.endsWith('.py')) {
+    return <span className="text-[10px] font-bold text-[#60A5FA] shrink-0 font-mono">PY</span>;
+  }
+  return <FileCode2 className="w-3.5 h-3.5 text-[#8AB4F8] shrink-0" />;
+};
+
 function formatCompactToolLabel(item: ToolCallItemData): {
   prefix: string;
   target: string;
+  detail?: string;
+  filePath?: string;
+  isFileRow: boolean;
   isRead: boolean;
   isEdit: boolean;
   isDir: boolean;
@@ -80,16 +129,16 @@ function formatCompactToolLabel(item: ToolCallItemData): {
 
   if (toolName === 'read_file' || rawCmd.toLowerCase().startsWith('read_file')) {
     const rawPath = args?.path || args?.Path;
-    const p = rawPath ? shortenPath(String(rawPath)) : rawCmd.replace(/^read_file\s*/i, '');
+    const fullPath = rawPath ? String(rawPath) : rawCmd.replace(/^read_file\s*/i, '');
     const sLine = args?.start_line || args?.StartLine;
     const eLine = args?.end_line || args?.EndLine;
-    const range =
-      sLine || eLine
-        ? ` (L${sLine || 1}–${eLine || 'end'})`
-        : '';
+    const detail = sLine || eLine ? `#L${sLine || 1}${eLine ? `-${eLine}` : ''}` : '';
     return {
       prefix: 'Analyzed',
-      target: `${p}${range}`,
+      target: baseFilename(fullPath),
+      detail,
+      filePath: fullPath,
+      isFileRow: true,
       isRead: true,
       isEdit: false,
       isDir: false,
@@ -106,12 +155,17 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     rawCmd.toLowerCase().startsWith('edit_file')
   ) {
     const rawPath = args?.path || args?.Path;
-    const p = rawPath ? shortenPath(String(rawPath)) : rawCmd;
+    const fullPath = rawPath ? String(rawPath) : rawCmd;
     let added = 0;
     let removed = 0;
     if (typeof args?.content === 'string' && args.content.length > 0) {
       added = args.content.split(/\r?\n/).length;
-    } else if (typeof args?.replacement === 'string' || typeof args?.Replacement === 'string' || typeof args?.target === 'string' || typeof args?.Target === 'string') {
+    } else if (
+      typeof args?.replacement === 'string' ||
+      typeof args?.Replacement === 'string' ||
+      typeof args?.target === 'string' ||
+      typeof args?.Target === 'string'
+    ) {
       const rep = String(args?.replacement ?? args?.Replacement ?? '');
       const tgt = String(args?.target ?? args?.Target ?? '');
       if (rep) added = rep.split(/\r?\n/).length;
@@ -124,12 +178,14 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     }
     return {
       prefix: toolName === 'write_file' ? 'Created' : 'Edited',
-      target: p,
+      target: baseFilename(fullPath),
+      filePath: fullPath,
+      isFileRow: true,
       isRead: false,
       isEdit: true,
       isDir: false,
       isSearch: false,
-      ...(added > 0 || removed > 0 ? { diffStats: { added, removed } } : {}),
+      diffStats: { added, removed },
     };
   }
 
@@ -138,6 +194,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Listed',
       target: p,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: true,
@@ -150,6 +207,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Searched web',
       target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -165,6 +223,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Searched models',
       target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -177,6 +236,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Located files',
       target: p,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: true,
@@ -189,6 +249,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Searched',
       target: q.length > 55 ? q.slice(0, 55) + '…' : q,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -197,10 +258,12 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   }
 
   if (toolName === 'code_outline' || rawCmd.toLowerCase().startsWith('code_outline')) {
-    const p = args?.path ? shortenPath(String(args.path)) : rawCmd;
+    const fullPath = args?.path ? String(args.path) : rawCmd;
     return {
       prefix: 'Outlined',
-      target: p,
+      target: baseFilename(fullPath),
+      filePath: fullPath,
+      isFileRow: true,
       isRead: true,
       isEdit: false,
       isDir: false,
@@ -209,12 +272,15 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   }
 
   if (toolName === 'patch_json' || rawCmd.toLowerCase().startsWith('patch_json')) {
-    const p = args?.path ? shortenPath(String(args.path)) : rawCmd;
+    const fullPath = args?.path ? String(args.path) : rawCmd;
     const act = args?.action ? String(args.action) : 'update';
-    const kp = args?.key_path ? `: ${args.key_path}` : '';
+    const kp = args?.key_path ? `${args.key_path}` : '';
     return {
-      prefix: act === 'read' ? 'Inspected config' : 'Configured',
-      target: `${p}${kp}`,
+      prefix: act === 'read' ? 'Inspected' : 'Edited',
+      target: baseFilename(fullPath),
+      detail: kp,
+      filePath: fullPath,
+      isFileRow: true,
       isRead: act === 'read',
       isEdit: act !== 'read',
       isDir: false,
@@ -227,6 +293,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Downloaded',
       target: String(fn).slice(0, 50),
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -240,6 +307,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: `HTTP ${m}`,
       target: u.length > 55 ? u.slice(0, 55) + '…' : u,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -253,6 +321,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: act.charAt(0).toUpperCase() + act.slice(1),
       target: s,
+      isFileRow: false,
       isRead: act === 'stat',
       isEdit: act === 'delete',
       isDir: true,
@@ -266,6 +335,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Telemetry',
       target: label,
+      isFileRow: false,
       isRead: true,
       isEdit: false,
       isDir: false,
@@ -277,6 +347,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Captured',
       target: 'Workstation Screen Display',
+      isFileRow: false,
       isRead: true,
       isEdit: false,
       isDir: false,
@@ -294,6 +365,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Inspected',
       target: u,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -306,31 +378,10 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: act === 'test_vision' ? 'Tested Vision' : act === 'restart' ? 'Restarted Engine' : 'Inspected Engine',
       target: 'Strata • Qwen 3.8 Flash-Next (Port 8080)',
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
-      isSearch: true,
-    };
-  }
-
-  if (toolName === 'capture_screen' || rawCmd.toLowerCase().startsWith('capture_screen')) {
-    return {
-      prefix: 'Captured',
-      target: 'Windows Desktop Screenshot',
-      isRead: false,
-      isEdit: false,
-      isDir: false,
-      isSearch: true,
-    };
-  }
-
-  if (toolName === 'find_files' || rawCmd.toLowerCase().startsWith('find_files')) {
-    return {
-      prefix: 'Found Files',
-      target: String(args?.pattern || '*'),
-      isRead: false,
-      isEdit: false,
-      isDir: true,
       isSearch: true,
     };
   }
@@ -339,6 +390,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Searched Symbols',
       target: shortenPath(String(args?.path || '.')),
+      isFileRow: false,
       isRead: true,
       isEdit: false,
       isDir: false,
@@ -350,9 +402,15 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     const cmdStr = args?.command
       ? String(args.command).replace(/\s+/g, ' ').trim()
       : rawCmd.replace(/^run_terminal\s*/i, '');
+    const exitDetail =
+      item.status !== 'running' && item.exitCode !== null && item.exitCode !== undefined
+        ? `· Exited with code ${item.exitCode}`
+        : '';
     return {
       prefix: item.status === 'running' ? 'Running' : 'Ran',
-      target: cmdStr.length > 70 ? cmdStr.slice(0, 70) + '…' : cmdStr,
+      target: cmdStr.length > 58 ? cmdStr.slice(0, 58) + '…' : cmdStr,
+      detail: exitDetail,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -365,6 +423,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Asked',
       target: `${qCount} design question${qCount === 1 ? '' : 's'}`,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -382,6 +441,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: 'Swarm',
       target: detail,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -417,6 +477,7 @@ function formatCompactToolLabel(item: ToolCallItemData): {
     return {
       prefix: `MCP • ${serverLabel}`,
       target: trimmedPreview ? `${cleanTool} (${trimmedPreview})` : cleanTool,
+      isFileRow: false,
       isRead: false,
       isEdit: false,
       isDir: false,
@@ -427,7 +488,8 @@ function formatCompactToolLabel(item: ToolCallItemData): {
   const cleanCmd = rawCmd.replace(/\s+/g, ' ').trim();
   return {
     prefix: item.status === 'running' ? 'Running' : 'Ran',
-    target: cleanCmd.length > 70 ? cleanCmd.slice(0, 70) + '…' : cleanCmd,
+    target: cleanCmd.length > 62 ? cleanCmd.slice(0, 62) + '…' : cleanCmd,
+    isFileRow: false,
     isRead: false,
     isEdit: false,
     isDir: false,
@@ -490,84 +552,79 @@ function parseMessageContent(rawContent: string, existingThought?: string, isStr
 const ToolExecutionRow: React.FC<{
   item: ToolCallItemData;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
-  defaultOpen?: boolean;
-}> = ({ item, onOpenInWorkbench, defaultOpen }) => {
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const isOpen = userOpen ?? Boolean(defaultOpen);
-  const setIsOpen = (v: boolean) => setUserOpen(v);
-  const { prefix, target, isRead, isEdit, isDir, isSearch, diffStats } = formatCompactToolLabel(item);
+}> = ({ item, onOpenInWorkbench }) => {
+  const [userOpen, setUserOpen] = useState(false);
+  const { prefix, target, detail, isFileRow, diffStats } = formatCompactToolLabel(item);
+  const hasOutput = Boolean(item.output && item.output.trim().length > 0);
+  const isInteractiveExpand = !isFileRow && hasOutput;
+
+  const handleRowClick = () => {
+    if (isFileRow) {
+      onOpenInWorkbench(item);
+    } else if (hasOutput) {
+      setUserOpen((prev) => !prev);
+    } else {
+      onOpenInWorkbench(item);
+    }
+  };
 
   return (
-    <div className="py-0.5 select-none">
-      <div className="flex items-center justify-between gap-2.5 text-[13px] sm:text-[13.5px] text-[#A0A0A5] hover:text-[#E8EAED] transition-colors px-2 py-1 rounded-lg hover:bg-[#1F2023] max-w-full">
+    <div className="py-[3px] select-none">
+      <div className="flex items-center justify-between gap-2 text-[13.5px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors max-w-full">
         <button
           type="button"
-          onClick={() => setIsOpen(!isOpen)}
-          className="inline-flex items-center gap-2 text-left cursor-pointer focus:outline-none min-w-0 flex-1"
+          onClick={handleRowClick}
+          className="inline-flex items-center gap-1.5 text-left cursor-pointer focus:outline-none min-w-0 flex-1 py-0.5"
         >
-          {item.status === 'running' ? (
+          {item.status === 'running' && (
             <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />
-          ) : item.status === 'error' ? (
-            <AlertCircle className="w-3.5 h-3.5 text-[#F28B82] shrink-0" />
-          ) : isRead || isEdit ? (
-            <FileCode2 className="w-3.5 h-3.5 text-[#8AB4F8] shrink-0" />
-          ) : isDir ? (
-            <FolderOpen className="w-3.5 h-3.5 text-[#FDD663] shrink-0" />
-          ) : isSearch ? (
-            <Globe className="w-3.5 h-3.5 text-[#81C995] shrink-0" />
-          ) : (
-            <Terminal className="w-3.5 h-3.5 text-[#C58AF9] shrink-0" />
           )}
 
-          <span className="text-[#9AA0A6] font-medium shrink-0">{prefix}</span>
+          <span className="text-[#8E8E93] font-normal shrink-0">{prefix}</span>
 
-          <span className="font-mono text-[12.5px] sm:text-[13px] text-[#E8EAED] truncate">
-            {target}
-          </span>
+          {isFileRow && <FileTypeBadge filename={target} />}
 
-          {diffStats && (diffStats.added > 0 || diffStats.removed > 0) && (
-            <span className="inline-flex items-center gap-1 shrink-0 font-mono text-[11px]">
-              {diffStats.added > 0 && (
-                <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-700/40">
-                  +{diffStats.added}
-                </span>
-              )}
-              {diffStats.removed > 0 && (
-                <span className="px-1.5 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-700/40">
-                  -{diffStats.removed}
-                </span>
-              )}
+          <span className="text-[#D4D4D8] truncate">{target}</span>
+
+          {detail && (
+            <span className="text-[#8E8E93] shrink-0 font-normal">
+              {detail}
             </span>
           )}
 
-          {item.durationMs !== undefined && item.status !== 'running' && (
-            <span className="text-[11.5px] text-[#5F6368] shrink-0 ml-auto pl-2 font-mono">
-              {item.durationMs < 1000
-                ? `${item.durationMs}ms`
-                : `${(item.durationMs / 1000).toFixed(1)}s`}
+          {diffStats && (diffStats.added > 0 || diffStats.removed > 0 || isFileRow) && (
+            <span className="inline-flex items-center gap-1.5 shrink-0 font-mono text-[12px] ml-1">
+              <span className="text-[#4ADE80]">+{diffStats.added}</span>
+              <span className="text-[#F87171]">-{diffStats.removed}</span>
             </span>
           )}
 
-          {item.output &&
-            (isOpen ? (
+          {isInteractiveExpand &&
+            (userOpen ? (
               <ChevronDown className="w-3.5 h-3.5 text-[#70757A] shrink-0" />
             ) : (
               <ChevronRight className="w-3.5 h-3.5 text-[#70757A] shrink-0" />
             ))}
         </button>
 
-        <button
-          type="button"
-          onClick={() => onOpenInWorkbench(item)}
-          className="opacity-70 hover:opacity-100 text-[11px] text-[#8E8E93] hover:text-[#8AB4F8] flex items-center gap-1 transition-opacity shrink-0 px-1 py-0.5 rounded hover:bg-[#282A2E]"
-          title="Open in Right Workbench"
-        >
-          <ExternalLink className="w-3 h-3" />
-        </button>
+        {isFileRow && hasOutput && (
+          <button
+            type="button"
+            onClick={() => setUserOpen((prev) => !prev)}
+            className="text-[#70757A] hover:text-[#BDC1C6] px-1 py-0.5 cursor-pointer shrink-0"
+            title={userOpen ? 'Hide details' : 'Show output'}
+          >
+            {userOpen ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
       </div>
 
-      {isOpen && item.output && (
-        <div className="mt-1 ml-5 pl-3 border-l border-[#2D2F34] font-mono text-[12px] sm:text-[12.5px] text-[#BDC1C6] overflow-x-auto bg-[#101113] p-3 rounded-lg border border-[#242528] max-h-56 select-text leading-relaxed">
+      {userOpen && hasOutput && (
+        <div className="mt-1 ml-3 pl-3 border-l border-[#26282C] font-mono text-[12px] text-[#BDC1C6] overflow-x-auto bg-[#101113] p-2.5 rounded-lg max-h-56 select-text leading-relaxed">
           <pre className="whitespace-pre-wrap">{item.output}</pre>
         </div>
       )}
@@ -577,12 +634,21 @@ const ToolExecutionRow: React.FC<{
 
 type TimelineStep =
   | { kind: 'thought'; key: string }
-  | { kind: 'note'; key: string; text: string }
   | { kind: 'tool'; key: string; tool: ToolCallItemData };
 
+function formatDurationCompact(ms: number): string {
+  const sec = Math.max(1, Math.round(ms / 1000));
+  if (sec >= 60) {
+    const mins = Math.floor(sec / 60);
+    const rem = sec % 60;
+    return rem ? `${mins}m ${rem}s` : `${mins}m`;
+  }
+  return `${sec}s`;
+}
+
 /**
- * ONE chronological step timeline per assistant message (thoughts, step notes and tool
- * calls in execution order). The header is the single authoritative status line.
+ * Antigravity-style minimal work segment timeline (collapsed `Worked for Xs ›` when done;
+ * expanded live steps + `Working` bottom indicator when active).
  */
 const StepTimeline: React.FC<{
   thought: string;
@@ -590,10 +656,8 @@ const StepTimeline: React.FC<{
   thoughtTokens?: number;
   thoughtStreaming: boolean;
   toolCalls: ToolCallItemData[];
-  stepNotes: string[];
   isActive: boolean;
   statusLabel?: string;
-  workingProse?: string;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
 }> = ({
   thought,
@@ -601,30 +665,21 @@ const StepTimeline: React.FC<{
   thoughtTokens,
   thoughtStreaming,
   toolCalls,
-  stepNotes,
   isActive,
   statusLabel,
-  workingProse,
   onOpenInWorkbench,
 }) => {
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Chronological order: thought first, then each step note precedes the tool call of its step.
   const steps: TimelineStep[] = [];
   if (thought || thoughtStreaming) steps.push({ kind: 'thought', key: 'thought' });
-  const n = Math.max(stepNotes.length, toolCalls.length);
-  for (let i = 0; i < n; i++) {
-    if (i < stepNotes.length) steps.push({ kind: 'note', key: `note-${i}`, text: stepNotes[i] });
-    if (i < toolCalls.length) steps.push({ kind: 'tool', key: toolCalls[i].id, tool: toolCalls[i] });
+  for (const tc of toolCalls) {
+    steps.push({ kind: 'tool', key: tc.id, tool: tc });
   }
 
-  // Keep timeline collapsed by default (even while active) so the UI stays clean and compact.
-  const expanded = userExpanded ?? false;
-  const latestIdx = steps.length - 1;
-  const activeWorkingPreview = isActive
-    ? (workingProse?.trim() || (stepNotes.length > 0 ? stepNotes[stepNotes.length - 1]?.trim() : '') || '')
-    : '';
+  // Open live steps while active; collapse to `Worked for Xs ›` once finished unless user opened it.
+  const expanded = userExpanded ?? isActive;
 
   useEffect(() => {
     if (expanded && isActive && bodyRef.current) {
@@ -636,85 +691,55 @@ const StepTimeline: React.FC<{
 
   const runningTool = toolCalls.find((t) => t.status === 'running');
   const latestTool = runningTool || (toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : undefined);
-  const elapsedSec = thoughtElapsedMs ? Math.max(1, Math.round(thoughtElapsedMs / 1000)) : 0;
-  const elapsedLabel =
-    elapsedSec >= 60
-      ? `${Math.floor(elapsedSec / 60)}m${elapsedSec % 60 ? ` ${elapsedSec % 60}s` : ''}`
-      : elapsedSec > 0
-      ? `${elapsedSec}s`
-      : '';
+  const toolsDurationMs = toolCalls.reduce((sum, t) => sum + (t.durationMs || 0), 0);
+  const totalElapsedMs =
+    toolsDurationMs > 0
+      ? Math.max(toolsDurationMs, thoughtElapsedMs || 0)
+      : thoughtElapsedMs || (toolCalls.length > 0 ? toolCalls.length * 1000 : 0);
+  const elapsedLabel = totalElapsedMs > 0 ? formatDurationCompact(totalElapsedMs) : '';
+
+  const activeHeadline = runningTool
+    ? (() => {
+        const { prefix, target } = formatCompactToolLabel(runningTool);
+        return `${prefix} ${target}`;
+      })()
+    : latestTool
+    ? (() => {
+        const { prefix, target } = formatCompactToolLabel(latestTool);
+        return `${prefix} ${target}`;
+      })()
+    : thoughtStreaming
+    ? 'Thinking'
+    : statusLabel || 'Working';
+
   const headline = isActive
-    ? statusLabel ||
-      (runningTool
-        ? (() => {
-            const { prefix, target } = formatCompactToolLabel(runningTool);
-            return `${prefix} ${target}`;
-          })()
-        : thoughtStreaming
-        ? 'Thinking…'
-        : 'Working…')
-    : `${elapsedLabel ? `Worked for ${elapsedLabel}` : 'Completed'}${
-        toolCalls.length > 0 ? ` • ${toolCalls.length} action${toolCalls.length === 1 ? '' : 's'}` : ''
-      }`;
+    ? activeHeadline
+    : elapsedLabel
+    ? `Worked for ${elapsedLabel}`
+    : 'Worked';
 
   return (
     <div className="my-1">
       <button
         type="button"
         onClick={() => setUserExpanded(!expanded)}
-        disabled={steps.length === 0}
-        className="inline-flex items-center gap-1.5 py-0.5 text-[13px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer select-none disabled:cursor-default"
+        disabled={steps.length === 0 && !isActive}
+        className="inline-flex items-center gap-1.5 py-0.5 text-[13.5px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer select-none disabled:cursor-default"
       >
-        {isActive && <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />}
-        <span className={isActive ? 'font-medium text-[#BDC1C6]' : 'font-normal text-[#8E8E93]'}>
+        <span className={isActive ? 'text-[#BDC1C6]' : 'text-[#8E8E93]'}>
           {headline}
         </span>
-        {steps.length > 0 && (
-          expanded ? (
-            <ChevronDown className="w-3.5 h-3.5 text-[#6E6E73] shrink-0" />
+        {(steps.length > 0 || isActive) &&
+          (expanded ? (
+            <ChevronDown className="w-3.5 h-3.5 text-[#70757A] shrink-0" />
           ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-[#6E6E73] shrink-0" />
-          )
-        )}
+            <ChevronRight className="w-3.5 h-3.5 text-[#70757A] shrink-0" />
+          ))}
       </button>
 
-      {!expanded && isActive && (
-        <div className="mt-1.5 space-y-1.5">
-          {activeWorkingPreview && (
-            <div className="text-[14px] text-[#E8EAED] leading-[1.65] line-clamp-3">
-              {activeWorkingPreview}
-            </div>
-          )}
-          {latestTool && (
-            <button
-              type="button"
-              onClick={() => setUserExpanded(true)}
-              className="inline-flex items-center gap-1.5 text-[13px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer"
-            >
-              {latestTool.status === 'running' ? (
-                <Loader2 className="w-3 h-3 text-[#8AB4F8] animate-spin shrink-0" />
-              ) : (
-                <CheckCircle2 className="w-3 h-3 text-emerald-400/80 shrink-0" />
-              )}
-              <span className="truncate max-w-md">
-                {(() => {
-                  const { prefix, target } = formatCompactToolLabel(latestTool);
-                  return `${prefix} ${target}`;
-                })()}
-              </span>
-              <ChevronRight className="w-3 h-3 text-[#6E6E73] shrink-0" />
-            </button>
-          )}
-        </div>
-      )}
-
-      {expanded && steps.length > 0 && (
-        <div
-          ref={bodyRef}
-          className="mt-1.5 pl-3 border-l border-[#26282C] max-h-72 overflow-y-auto space-y-1"
-        >
-          {steps.map((s, idx) => {
-            const isLatest = idx === latestIdx && isActive;
+      {expanded && (steps.length > 0 || isActive) && (
+        <div ref={bodyRef} className="mt-1 space-y-0.5 max-h-96 overflow-y-auto">
+          {steps.map((s) => {
             if (s.kind === 'thought') {
               return (
                 <ThoughtAccordion
@@ -723,19 +748,8 @@ const StepTimeline: React.FC<{
                   elapsedMs={thoughtElapsedMs}
                   tokenCount={thoughtTokens}
                   isStreaming={thoughtStreaming}
-                  defaultOpen={isLatest}
+                  defaultOpen={false}
                 />
-              );
-            }
-            if (s.kind === 'note') {
-              return (
-                <div
-                  key={s.key}
-                  className="text-[12.5px] sm:text-[13px] text-[#8E8E93] px-2 py-1 flex items-start gap-2 leading-relaxed"
-                >
-                  <span className="text-[#55555A] shrink-0 mt-0.5">↳</span>
-                  <span>{s.text}</span>
-                </div>
               );
             }
             return (
@@ -743,10 +757,14 @@ const StepTimeline: React.FC<{
                 key={s.key}
                 item={s.tool}
                 onOpenInWorkbench={onOpenInWorkbench}
-                defaultOpen={isLatest}
               />
             );
           })}
+          {isActive && (
+            <div className="pt-1.5 text-[13.5px] text-[#8E8E93] animate-pulse select-none">
+              Working
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1095,6 +1113,144 @@ const AskQuestionCard: React.FC<{
   );
 };
 
+const AssistantMarkdownBlock: React.FC<{
+  markdown: string;
+  onOpenFile: (url: string) => void;
+  onOpenSidecar: (tab: WorkbenchTab) => void;
+}> = ({ markdown, onOpenFile, onOpenSidecar }) => (
+  <div className="text-[14px] text-[#E8EAED] leading-[1.65] pt-0.5 prose prose-invert max-w-none">
+    {splitAgentEmbeds(markdown).map((seg, segIdx) =>
+      seg.kind === 'embed' ? (
+        <AgentEmbedWidget
+          key={`embed-${segIdx}`}
+          src={seg.src}
+          fallbackText={seg.body || undefined}
+        />
+      ) : !seg.text.trim() ? null : (
+        <ReactMarkdown
+          key={`md-${segIdx}`}
+          remarkPlugins={[remarkGfm]}
+          urlTransform={(u) => u}
+          components={{
+            p({ children }) {
+              return <p className="my-2.5 leading-[1.65] text-[14px] text-[#E8EAED]">{children}</p>;
+            },
+            ul({ children }) {
+              return <ul className="list-disc pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
+            },
+            ol({ children }) {
+              return <ol className="list-decimal pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
+            },
+            li({ children }) {
+              return <li className="leading-[1.65] text-[#E8EAED] pl-0.5">{children}</li>;
+            },
+            h1({ children }) {
+              return <h1 className="text-[18px] font-semibold text-white mt-5 mb-2.5 pb-1 border-b border-[#26282C]">{children}</h1>;
+            },
+            h2({ children }) {
+              return <h2 className="text-[16px] font-semibold text-white mt-4 mb-2">{children}</h2>;
+            },
+            h3({ children }) {
+              return <h3 className="text-[15px] font-semibold text-white mt-3.5 mb-1.5">{children}</h3>;
+            },
+            h4({ children }) {
+              return <h4 className="text-[14px] font-semibold text-[#E8EAED] mt-3 mb-1">{children}</h4>;
+            },
+            hr() {
+              return <hr className="my-5 border-t border-[#26282C]" />;
+            },
+            strong({ children }) {
+              return <strong className="font-semibold text-white">{children}</strong>;
+            },
+            a({ href, children }) {
+              const url = href || '';
+              if (
+                /^file:\/\//i.test(url) ||
+                /^(?:server|client|scripts|tray|skills|tools)\/[^\s)#]+(?:#L\d+(?:-L?\d+)?)?$/i.test(
+                  url
+                )
+              ) {
+                return (
+                  <a
+                    href={url}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onOpenFile(url);
+                    }}
+                    className="localgravity-link cursor-pointer"
+                    title="Open in Right Workbench"
+                  >
+                    {children}
+                  </a>
+                );
+              }
+              if (/^sidecar:\/\//i.test(url)) {
+                const sc = parseSidecarHref(url);
+                const tab = sc ? SIDECAR_TAB_MAP[sc.view] : undefined;
+                return (
+                  <button
+                    type="button"
+                    disabled={!tab}
+                    onClick={() => tab && onOpenSidecar(tab)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded-full bg-[#8AB4F8]/10 border border-[#8AB4F8]/30 text-[#8AB4F8] text-[0.85em] hover:bg-[#8AB4F8]/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default align-baseline"
+                    title={tab ? `Open ${sc?.view} pane` : 'Unavailable pane'}
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>{children}</span>
+                  </button>
+                );
+              }
+              return (
+                <a href={url} target="_blank" rel="noopener noreferrer" className="localgravity-link">
+                  {children}
+                </a>
+              );
+            },
+            blockquote({ children }) {
+              return (
+                <blockquote className="border-l-3 border-[#8AB4F8] bg-[#8AB4F8]/10 pl-4 py-2 my-3 rounded-r-lg text-[15.5px] sm:text-[16px] text-[#D2E3FC] leading-relaxed">
+                  {children}
+                </blockquote>
+              );
+            },
+            table({ children }) {
+              return (
+                <div className="my-3.5 overflow-x-auto rounded-xl border border-[#2D2F34]">
+                  <table className="w-full text-left text-[14px] border-collapse">{children}</table>
+                </div>
+              );
+            },
+            th({ children }) {
+              return <th className="bg-[#1C1D20] px-4 py-2.5 font-semibold text-white border-b border-[#2D2F34]">{children}</th>;
+            },
+            td({ children }) {
+              return <td className="px-4 py-2.5 border-b border-[#242528] text-[#D4D4D8]">{children}</td>;
+            },
+            code({ className, children, ...props }: any) {
+              const match = /language-(\w+)/.exec(className || '');
+              const codeStr = String(children || '');
+              const isBlock = Boolean(match) || codeStr.includes('\n');
+              return isBlock ? (
+                <CodeBlockWithCopy
+                  language={match?.[1] || 'code'}
+                  codeText={codeStr}
+                  className={className}
+                />
+              ) : (
+                <code className="localgravity-code-badge" {...props}>
+                  {children}
+                </code>
+              );
+            },
+          }}
+        >
+          {seg.text}
+        </ReactMarkdown>
+      )
+    )}
+  </div>
+);
+
 interface ChatFeedProps {
   onQuickSend?: (prompt: string) => void;
 }
@@ -1145,17 +1301,32 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
   const handleOpenInWorkbench = (tc: ToolCallItemData) => {
     const cmd = tc.command.toLowerCase();
     let parsedPath = '';
-    if (tc.argumentsJson) {
+    const tryExtractPath = (rawJson?: string) => {
+      if (!rawJson) return '';
       try {
-        const parsed = JSON.parse(tc.argumentsJson);
-        parsedPath = parsed?.path || parsed?.Path || '';
-      } catch {}
+        const parsed = JSON.parse(rawJson);
+        return String(parsed?.path || parsed?.Path || parsed?.target || parsed?.Target || '');
+      } catch {
+        return '';
+      }
+    };
+    parsedPath = tryExtractPath(tc.argumentsJson);
+    if (!parsedPath && tc.command) {
+      const m = tc.command.match(/^[a-zA-Z0-9_:-]+\(([\s\S]*)\)$/);
+      if (m?.[1]) parsedPath = tryExtractPath(m[1]);
     }
-    if (parsedPath && (cmd.includes('write_file') || cmd.includes('edit_file') || cmd.includes('apply_diff') || cmd.includes('read_file'))) {
-      void openFileInEditor(String(parsedPath));
+    const isFileTool =
+      cmd.includes('write_file') ||
+      cmd.includes('edit_file') ||
+      cmd.includes('apply_diff') ||
+      cmd.includes('patch_json') ||
+      cmd.includes('code_outline') ||
+      cmd.includes('read_file');
+    if (parsedPath && isFileTool) {
+      void openFileInEditor(parsedPath);
       return;
     }
-    if (cmd.includes('write_file') || cmd.includes('edit_file') || cmd.includes('apply_diff') || cmd.includes('read_file')) {
+    if (isFileTool) {
       setActiveTab('editor');
     } else if (cmd.includes('capture_screen') || cmd.includes('inspect')) {
       setActiveTab('preview');
@@ -1183,7 +1354,24 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                 What would you like to build?
               </h2>
               <p className="text-[14px] text-[#80868B] max-w-md leading-relaxed">
-                Powered by <strong className="text-[#E8EAED]">Strata • Qwen 3.8 Flash-Next</strong> (IQ3_S + Vision • 64k). Reference context with <code className="text-[#8AB4F8]">@</code> or trigger workflows with <code className="text-[#8AB4F8]">/</code>.
+                {brainProvider === 'google_ai_studio' ? (
+                  <>
+                    Powered by{' '}
+                    <strong className="text-[#E8EAED]">
+                      Google AI • {getGoogleModelOption(selectedGoogleModel).name}
+                    </strong>{' '}
+                    ({getGoogleModelOption(selectedGoogleModel).sub}). Reference context with{' '}
+                    <code className="text-[#8AB4F8]">@</code> or trigger workflows with{' '}
+                    <code className="text-[#8AB4F8]">/</code>.
+                  </>
+                ) : (
+                  <>
+                    Powered by <strong className="text-[#E8EAED]">Strata • Qwen 3.8 Flash-Next</strong>{' '}
+                    (IQ3_S + Vision • 64k). Reference context with{' '}
+                    <code className="text-[#8AB4F8]">@</code> or trigger workflows with{' '}
+                    <code className="text-[#8AB4F8]">/</code>.
+                  </>
+                )}
               </p>
             </div>
 
@@ -1217,31 +1405,63 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                   </p>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => onQuickSend('/vision Run inspect_models with test_vision and verify Strata Qwen 3.8 Flash-Next vision status')}
-                  className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
-                >
-                  <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-indigo-400">
-                    <Eye className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>/vision Test Strata Vision</span>
-                  </div>
-                  <p className="text-[11px] text-[#6E6E73] leading-snug">
-                    Verify live multimodal vision on Strata port 8080 with Qwen 3.8 Flash-Next
-                  </p>
-                </button>
+                {brainProvider === 'google_ai_studio' ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onQuickSend('/swarm Coordinate parallel agents to research, build, and verify our next task')
+                    }
+                    className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-indigo-400">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>/swarm Parallel Agent Swarm</span>
+                    </div>
+                    <p className="text-[11px] text-[#6E6E73] leading-snug">
+                      Coordinate multiple agents in parallel with shared board synthesis
+                    </p>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onQuickSend('/vision Run inspect_models with test_vision and verify Strata Qwen 3.8 Flash-Next vision status')
+                    }
+                    className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-indigo-400">
+                      <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>/vision Test Strata Vision</span>
+                    </div>
+                    <p className="text-[11px] text-[#6E6E73] leading-snug">
+                      Verify live multimodal vision on Strata port 8080 with Qwen 3.8 Flash-Next
+                    </p>
+                  </button>
+                )}
 
                 <button
                   type="button"
-                  onClick={() => onQuickSend('/boost Perform a deep architectural & performance check of the current system and GPU state')}
+                  onClick={() =>
+                    onQuickSend(
+                      brainProvider === 'google_ai_studio'
+                        ? '/boost Perform a deep architectural & code quality audit of the current workspace'
+                        : '/boost Perform a deep architectural & performance check of the current system and GPU state'
+                    )
+                  }
                   className="p-3 rounded-xl bg-[#17181B] hover:bg-[#1F2024] border border-[#282A2F] hover:border-[#3A3D45] transition-all cursor-pointer group space-y-1"
                 >
                   <div className="flex items-center gap-2 text-xs font-medium text-[#E8EAED] group-hover:text-[#C084FC]">
                     <Cpu className="w-3.5 h-3.5 text-[#C084FC]" />
-                    <span>/boost Deep System Audit</span>
+                    <span>
+                      {brainProvider === 'google_ai_studio'
+                        ? '/boost Deep Architecture Audit'
+                        : '/boost Deep System Audit'}
+                    </span>
                   </div>
                   <p className="text-[11px] text-[#6E6E73] leading-snug">
-                    Engage Deep Thinking mode to inspect hardware, VRAM, and code quality
+                    {brainProvider === 'google_ai_studio'
+                      ? 'Engage deep frontier reasoning to inspect architecture, edge cases, and code quality'
+                      : 'Engage Deep Thinking mode to inspect hardware, VRAM, and code quality'}
                   </p>
                 </button>
               </div>
@@ -1335,30 +1555,68 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
             );
           }
 
-          const showTransientInTimeline =
-            isCurrentlyGenerating &&
-            Boolean(content?.trim()) &&
-            content.trim().length < 220 &&
-            !/^\s{0,3}#{1,6}\s/m.test(content) &&
-            !content.includes('```');
+          const allTools = msg.toolCalls || [];
+          const toolCounts = msg.stepToolCounts || [];
+          const hasValidPartition = stepNotes.length > 0 && toolCounts.length === stepNotes.length;
+
+          const noteSegments: Array<{ tools: ToolCallItemData[]; note: string }> = [];
+          let trailingTools: ToolCallItemData[] = allTools;
+          if (stepNotes.length > 0) {
+            if (hasValidPartition) {
+              let cursor = 0;
+              for (let i = 0; i < stepNotes.length; i++) {
+                const end = Math.max(cursor, Math.min(allTools.length, toolCounts[i] ?? allTools.length));
+                noteSegments.push({ tools: allTools.slice(cursor, end), note: stepNotes[i] });
+                cursor = end;
+              }
+              trailingTools = allTools.slice(cursor);
+            } else {
+              noteSegments.push({ tools: allTools, note: stepNotes[0] });
+              for (let i = 1; i < stepNotes.length; i++) {
+                noteSegments.push({ tools: [], note: stepNotes[i] });
+              }
+              trailingTools = [];
+            }
+          }
+
+          const showThoughtInTrailing =
+            noteSegments.length === 0 ||
+            (isCurrentlyGenerating && isStreaming && trailingTools.length === 0);
 
           const orchestratorPlan = extractOrchestratorPlan(activeThought || '');
-          const mcpImages = extractMcpImages(msg.toolCalls || [], content || '', apiBaseUrl);
-          const askQuestions = extractAskQuestions(msg.toolCalls || []);
+          const mcpImages = extractMcpImages(allTools, content || '', apiBaseUrl);
+          const askQuestions = extractAskQuestions(allTools);
 
           return (
             <div key={msg.id} className="space-y-3.5 px-1">
-              {/* Single chronological step timeline + one authoritative status line */}
+              {noteSegments.map((seg, segIdx) => (
+                <React.Fragment key={`seg-${segIdx}`}>
+                  <StepTimeline
+                    thought={!showThoughtInTrailing && segIdx === 0 ? activeThought || '' : ''}
+                    thoughtElapsedMs={!showThoughtInTrailing && segIdx === 0 ? activeElapsedMs : undefined}
+                    thoughtTokens={!showThoughtInTrailing && segIdx === 0 ? activeTokens : undefined}
+                    thoughtStreaming={false}
+                    toolCalls={seg.tools}
+                    isActive={false}
+                    onOpenInWorkbench={handleOpenInWorkbench}
+                  />
+                  <AssistantMarkdownBlock
+                    markdown={seg.note}
+                    onOpenFile={openFileInEditor}
+                    onOpenSidecar={setActiveTab}
+                  />
+                </React.Fragment>
+              ))}
+
+              {/* Active or final work segment */}
               <StepTimeline
-                thought={activeThought || ''}
-                thoughtElapsedMs={activeElapsedMs}
-                thoughtTokens={activeTokens}
-                thoughtStreaming={isStreaming}
-                toolCalls={msg.toolCalls || []}
-                stepNotes={stepNotes}
+                thought={showThoughtInTrailing ? activeThought || '' : ''}
+                thoughtElapsedMs={showThoughtInTrailing ? activeElapsedMs : undefined}
+                thoughtTokens={showThoughtInTrailing ? activeTokens : undefined}
+                thoughtStreaming={showThoughtInTrailing ? isStreaming : false}
+                toolCalls={trailingTools}
                 isActive={isCurrentlyGenerating}
                 statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
-                workingProse={isCurrentlyGenerating ? content : undefined}
                 onOpenInWorkbench={handleOpenInWorkbench}
               />
 
@@ -1410,137 +1668,13 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
               )}
 
               {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
-              {content && !showTransientInTimeline && (
-                <div className="text-[14px] text-[#E8EAED] leading-[1.65] pt-0.5 prose prose-invert max-w-none">
-                  {splitAgentEmbeds(content).map((seg, segIdx) =>
-                    seg.kind === 'embed' ? (
-                      <AgentEmbedWidget
-                        key={`embed-${segIdx}`}
-                        src={seg.src}
-                        fallbackText={seg.body || undefined}
-                      />
-                    ) : !seg.text.trim() ? null : (
-                      <ReactMarkdown
-                        key={`md-${segIdx}`}
-                        remarkPlugins={[remarkGfm]}
-                        urlTransform={(u) => u}
-                        components={{
-                          p({ children }) {
-                            return <p className="my-2.5 leading-[1.65] text-[14px] text-[#E8EAED]">{children}</p>;
-                          },
-                          ul({ children }) {
-                            return <ul className="list-disc pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ul>;
-                          },
-                          ol({ children }) {
-                            return <ol className="list-decimal pl-5 my-2.5 space-y-1.5 text-[14px] text-[#E8EAED] marker:text-[#8AB4F8]">{children}</ol>;
-                          },
-                          li({ children }) {
-                            return <li className="leading-[1.65] text-[#E8EAED] pl-0.5">{children}</li>;
-                          },
-                          h1({ children }) {
-                            return <h1 className="text-[18px] font-semibold text-white mt-5 mb-2.5 pb-1 border-b border-[#26282C]">{children}</h1>;
-                          },
-                          h2({ children }) {
-                            return <h2 className="text-[16px] font-semibold text-white mt-4 mb-2">{children}</h2>;
-                          },
-                          h3({ children }) {
-                            return <h3 className="text-[15px] font-semibold text-white mt-3.5 mb-1.5">{children}</h3>;
-                          },
-                          h4({ children }) {
-                            return <h4 className="text-[14px] font-semibold text-[#E8EAED] mt-3 mb-1">{children}</h4>;
-                          },
-                          hr() {
-                            return <hr className="my-5 border-t border-[#26282C]" />;
-                          },
-                          strong({ children }) {
-                            return <strong className="font-semibold text-white">{children}</strong>;
-                          },
-                          a({ href, children }) {
-                            const url = href || '';
-                            if (
-                              /^file:\/\//i.test(url) ||
-                              /^(?:server|client|scripts|tray|skills|tools)\/[^\s)#]+(?:#L\d+(?:-L?\d+)?)?$/i.test(
-                                url
-                              )
-                            ) {
-                              return (
-                                <a
-                                  href={url}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    openFileInEditor(url);
-                                  }}
-                                  className="localgravity-link cursor-pointer"
-                                  title="Open in Right Workbench"
-                                >
-                                  {children}
-                                </a>
-                              );
-                            }
-                            if (/^sidecar:\/\//i.test(url)) {
-                              const sc = parseSidecarHref(url);
-                              const tab = sc ? SIDECAR_TAB_MAP[sc.view] : undefined;
-                              return (
-                                <button
-                                  type="button"
-                                  disabled={!tab}
-                                  onClick={() => tab && setActiveTab(tab)}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 mx-0.5 rounded-full bg-[#8AB4F8]/10 border border-[#8AB4F8]/30 text-[#8AB4F8] text-[0.85em] hover:bg-[#8AB4F8]/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default align-baseline"
-                                  title={tab ? `Open ${sc?.view} pane` : 'Unavailable pane'}
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                  <span>{children}</span>
-                                </button>
-                              );
-                            }
-                            return (
-                              <a href={url} target="_blank" rel="noopener noreferrer" className="localgravity-link">
-                                {children}
-                              </a>
-                            );
-                          },
-                          blockquote({ children }) {
-                            return (
-                              <blockquote className="border-l-3 border-[#8AB4F8] bg-[#8AB4F8]/10 pl-4 py-2 my-3 rounded-r-lg text-[15.5px] sm:text-[16px] text-[#D2E3FC] leading-relaxed">
-                                {children}
-                              </blockquote>
-                            );
-                          },
-                          table({ children }) {
-                            return (
-                              <div className="my-3.5 overflow-x-auto rounded-xl border border-[#2D2F34]">
-                                <table className="w-full text-left text-[14px] border-collapse">{children}</table>
-                              </div>
-                            );
-                          },
-                          th({ children }) {
-                            return <th className="bg-[#1C1D20] px-4 py-2.5 font-semibold text-white border-b border-[#2D2F34]">{children}</th>;
-                          },
-                          td({ children }) {
-                            return <td className="px-4 py-2.5 border-b border-[#242528] text-[#D4D4D8]">{children}</td>;
-                          },
-                          code({ className, children, ...props }: any) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            const codeStr = String(children || '');
-                            const isBlock = Boolean(match) || codeStr.includes('\n');
-                            return isBlock ? (
-                              <CodeBlockWithCopy
-                                language={match?.[1] || 'code'}
-                                codeText={codeStr}
-                                className={className}
-                              />
-                            ) : (
-                              <code className="localgravity-code-badge" {...props}>
-                                {children}
-                              </code>
-                            );
-                          },
-                        }}
-                      >
-                        {seg.text}
-                      </ReactMarkdown>
-                    )
-                  )}
+              {content && (
+                <div className="space-y-3">
+                  <AssistantMarkdownBlock
+                    markdown={content}
+                    onOpenFile={openFileInEditor}
+                    onOpenSidecar={setActiveTab}
+                  />
 
                   {artifacts
                     .filter(

@@ -112,6 +112,7 @@ export interface ChatMessage {
   toolStatus?: 'running' | 'success' | 'error';
   toolCalls?: ToolCallItemData[];
   stepNotes?: string[];
+  stepToolCounts?: number[];
 }
 
 export interface SubagentTaskItem {
@@ -942,10 +943,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (idx !== -1) {
         const last = { ...list[idx] };
         const notes = last.stepNotes ? [...last.stepNotes] : [];
+        const toolCounts = last.stepToolCounts ? [...last.stepToolCounts] : [];
         if (note && note.trim() && notes[notes.length - 1] !== note.trim()) {
           notes.push(note.trim());
+          toolCounts.push((last.toolCalls || []).length);
         }
         last.stepNotes = notes;
+        last.stepToolCounts = toolCounts;
         if (committedContent !== undefined) {
           last.content = committedContent;
         }
