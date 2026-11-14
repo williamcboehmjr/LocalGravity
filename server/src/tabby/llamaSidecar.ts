@@ -26,6 +26,8 @@ export class LlamaMoESidecar {
   private modelPath: string;
   private recentLogs: string[] = [];
   private offloadedAt: string | null = null;
+  private wakePromise: Promise<boolean> | null = null;
+  private wakeTargetProfile: StrataProfileId | null = null;
 
   constructor(config?: LlamaMoESidecarConfig) {
     this.port = config?.port || 8080;
@@ -95,7 +97,7 @@ export class LlamaMoESidecar {
   public async isHealthy(): Promise<boolean> {
     try {
       const res = await fetch(`http://127.0.0.1:${this.port}/health`, {
-        signal: AbortSignal.timeout(800),
+        signal: AbortSignal.timeout(2500),
       });
       return res.ok;
     } catch {
@@ -121,7 +123,30 @@ export class LlamaMoESidecar {
     const resolved = this.resolveProfileConfig(requestedProfile);
     const targetProfile = resolved.profile;
 
-    if (await this.isHealthy()) {
+    // Serialize concurrent wake/swap calls so two Strata processes never race for VRAM, pinned RAM, and port 8080
+    if (this.wakePromise) {
+      if (this.wakeTargetProfile === targetProfile) {
+        return this.wakePromise;
+      }
+      await this.wakePromise.catch(() => false);
+    }
+
+    this.wakeTargetProfile = targetProfile;
+    this.wakePromise = this.ensureRunningInternal(targetProfile, resolved.configPath).finally(() => {
+      this.wakePromise = null;
+      this.wakeTargetProfile = null;
+    });
+    return this.wakePromise;
+  }
+
+  private async ensureRunningInternal(targetProfile: StrataProfileId, configPath: string): Promise<boolean> {
+    const procAlive = Boolean(this.proc && this.proc.exitCode === null && !this.proc.killed);
+    if (procAlive && this.activeProfile === targetProfile) {
+      this.state = 'active';
+      return true;
+    }
+
+    if ((await this.isHealthy()) || procAlive) {
       if (this.activeProfile === targetProfile) {
         this.state = 'active';
         return true;
@@ -143,7 +168,6 @@ export class LlamaMoESidecar {
       : fs.existsSync(path.join(strataTerminalRoot, 'current'))
         ? path.join(strataTerminalRoot, 'current')
         : path.join(strataTerminalRoot, '0.1.58');
-    const configPath = resolved.configPath;
     const pythonExe = path.join(terminalDir, 'python', 'python.exe');
     const serverPy = path.join(terminalDir, 'serve', 'server.py');
 

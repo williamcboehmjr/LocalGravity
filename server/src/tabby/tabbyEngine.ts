@@ -106,16 +106,6 @@ export class TabbyEngine {
         throughputMBps: 0,
         lastWarmedAt: new Date().toISOString(),
       },
-      qwen36: {
-        tier: 'qwen36',
-        modelName: TIER_SPECS.qwen36.modelName,
-        state: 'cold',
-        bytesWarmed: 0,
-        totalBytes: 0,
-        filesCount: 0,
-        throughputMBps: 0,
-        lastWarmedAt: null,
-      },
     };
 
 
@@ -194,7 +184,7 @@ export class TabbyEngine {
    * DDR4 System RAM over PCIe into VRAM in ~1 second.
    */
   public async prewarmInactiveTiersInSysRam(): Promise<Record<ModelTier, SysRamWarmStatus>> {
-    const allTiers: ModelTier[] = ['low', 'medium', 'high', 'qwen36'];
+    const allTiers: ModelTier[] = ['low', 'medium', 'high'];
 
     for (const tier of allTiers) {
       const resolvedName = this.resolveDiskModelName(tier);
@@ -326,8 +316,7 @@ export class TabbyEngine {
 
     if (isStrataTier(newTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      const targetProfile = newTier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
-      await sidecar.ensureRunning(targetProfile);
+      await sidecar.ensureRunning('swift-1.5-iq2_xs');
       this.activeTier = newTier;
       this.lastSwapDurationMs = Math.round(performance.now() - startMs);
       this.swapStatus = 'ready';
@@ -504,8 +493,7 @@ export class TabbyEngine {
     console.log('[TabbyEngine] Wake requested');
     if (isStrataTier(this.activeTier)) {
       const sidecar = LlamaMoESidecar.getInstance();
-      const targetProfile = this.activeTier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
-      const ok = await sidecar.ensureRunning(targetProfile);
+      const ok = await sidecar.ensureRunning('swift-1.5-iq2_xs');
       if (ok) {
         this.swapStatus = 'ready';
         this.resetIdleTimer();
@@ -620,8 +608,7 @@ export class TabbyEngine {
     const desiredModel = this.resolveDiskModelName(params.tier);
     let isCurrentlyLoaded = strataMode && this.activeTier === params.tier;
     if (strataMode && !isStrataOrchestratorTier(params.tier)) {
-      const expectedProfile = params.tier === 'qwen36' ? 'qwen36-ud-q4_k_xl' : 'swift-1.5-iq2_xs';
-      if (LlamaMoESidecar.getInstance().getActiveProfile() !== expectedProfile) {
+      if (LlamaMoESidecar.getInstance().getActiveProfile() !== 'swift-1.5-iq2_xs') {
         isCurrentlyLoaded = false;
       }
     }
@@ -749,9 +736,7 @@ export class TabbyEngine {
           const sidecar = LlamaMoESidecar.getInstance();
           const targetProfile = orchestratorCfg
             ? orchestratorCfg.targetStrataProfile
-            : params.tier === 'qwen36'
-              ? 'qwen36-ud-q4_k_xl'
-              : 'swift-1.5-iq2_xs';
+            : 'swift-1.5-iq2_xs';
           await sidecar.ensureRunning(targetProfile);
           endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
 

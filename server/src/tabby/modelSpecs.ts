@@ -107,21 +107,6 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     hybridDraftTokens: 4,
     estimatedVramGb: 14.8,
   },
-  qwen36: {
-    tier: 'qwen36',
-    displayName: 'Qwen 3.6 35B-A3B',
-    shortLabel: 'Qwen 3.6 35B',
-    modelName: 'qwen36-ud-q4_k_xl',
-    fallbackFolderNames: ['qwen36-UD-Q4_K_XL', 'Qwen3.6-35B-A3B-UD-Q4_K_XL'],
-    bpw: 'UD-Q4_K_XL (Strata + MTP-2)',
-    maxSeqLen: 65536,
-    cacheMode: 'Q4',
-    autosplitReserve: [256],
-    visionOffload: true,
-    draftMode: 'ngram',
-    hybridDraftTokens: 4,
-    estimatedVramGb: 14.2,
-  },
 };
 
 export function isStrataOrchestratorTier(tier?: ModelTier): boolean {
@@ -129,7 +114,7 @@ export function isStrataOrchestratorTier(tier?: ModelTier): boolean {
 }
 
 export function isStrataTier(tier?: ModelTier): boolean {
-  return tier === 'high' || tier === 'qwen36' || isStrataOrchestratorTier(tier);
+  return tier === 'high' || isStrataOrchestratorTier(tier);
 }
 
 export const THINKING_BUDGET_SPECS: Record<

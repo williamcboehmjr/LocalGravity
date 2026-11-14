@@ -2,7 +2,7 @@
  * Strict TypeScript Protocol Definitions matching Python Pydantic v2 schemas.
  */
 
-export type ModelTier = 'low' | 'medium' | 'high' | 'qwen36';
+export type ModelTier = 'low' | 'medium' | 'high';
 export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
 export type GoogleThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 export type PlatformType = 'macos' | 'windows' | 'android';
