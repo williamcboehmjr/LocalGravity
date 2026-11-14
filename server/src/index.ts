@@ -1124,7 +1124,10 @@ export async function createDaemonServer(options?: {
       serverName: string;
       enabled?: boolean;
     };
-    const updated = mcp.toggleServer(serverName, enabled);
+    let updated = mcp.toggleServer(serverName, enabled);
+    if (updated?.enabled && (updated.transport === 'http' || updated.transport === 'sse')) {
+      updated = await mcp.refreshServerTools(serverName);
+    }
     broadcastSync({
       type: 'MCP_STATE_UPDATED',
       payload: { servers: mcp.listServers(), activeTools: mcp.listActiveTools() },

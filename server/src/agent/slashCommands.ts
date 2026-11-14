@@ -10,9 +10,13 @@ export interface SlashCommandParseResult {
   subagentRole: string;
 }
 
+const KNOWN_SLASH_COMMANDS =
+  'goal|plan|boost|grill-me|teamwork|restart|browser|learn|schedule|vision|swarm';
+
 export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResult {
   const trimmed = rawPrompt.trim();
-  const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+  const cmdRegex = new RegExp(`(^|\\s)\\/(${KNOWN_SLASH_COMMANDS})(?=\\s|$)`, 'i');
+  const match = trimmed.match(cmdRegex);
   if (!match) {
     return {
       command: null,
@@ -24,8 +28,11 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
     };
   }
 
-  const cmd = match[1].toLowerCase();
-  const body = (match[2] || '').trim();
+  const cmd = match[2].toLowerCase();
+  const body = trimmed
+    .replace(cmdRegex, (_full, leadingWs: string) => (leadingWs ? ' ' : ''))
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 
   switch (cmd) {
     case 'goal':

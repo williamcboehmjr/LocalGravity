@@ -48,7 +48,8 @@ import { HarnessWorkbenchTab } from './components/right-canvas/HarnessWorkbenchT
 import { TaskChecklist } from './components/right-canvas/TaskChecklist';
 import { PlanViewer } from './components/right-canvas/PlanViewer';
 import { EvidenceDrawer } from './components/right-canvas/EvidenceDrawer';
-import { AuxTabBar } from './components/right-canvas/AuxTabBar';
+import { OverviewSidebar } from './components/right-canvas/OverviewSidebar';
+import { ExtensionsTab } from './components/right-canvas/ExtensionsTab';
 import { SwarmBoardTab } from './components/right-canvas/SwarmBoardTab';
 import { ChangesTab } from './components/right-canvas/ChangesTab';
 import { SubagentsTab } from './components/right-canvas/SubagentsTab';
@@ -1782,41 +1783,62 @@ export const App: React.FC = () => {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <AuxTabBar />
-
-          {/* Active Workbench View Card */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
-            {activeTab === 'none' && (
-              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center gap-3 text-[#8E8E93]">
-                <div className="text-xs font-medium text-[#E3E3E3]">Workspace Auxiliary Pane</div>
-                <p className="text-[11.5px] leading-relaxed max-w-[230px]">
-                  Pick a view above to inspect file diffs, artifacts, workspace files, terminal, subagents, or the swarm board.
-                </p>
-                <div className="flex flex-wrap justify-center gap-1.5 pt-1">
-                  {(['changes', 'plan', 'editor', 'terminal', 'subagents', 'swarm'] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setActiveTab(tab)}
-                      className="px-2.5 py-1 rounded-lg bg-[#222327] hover:bg-[#2A2B30] text-[11px] text-[#E3E3E3] border border-[#32343A] cursor-pointer capitalize"
-                    >
-                      {tab === 'changes' ? 'Review' : tab === 'plan' ? 'Artifacts' : tab === 'editor' ? 'Files' : tab}
-                    </button>
-                  ))}
+            {activeTab === 'none' ? (
+              <OverviewSidebar onCloseDrawer={() => setShowRightDrawer(false)} />
+            ) : (
+              <>
+                <div className="flex items-center justify-between px-2 py-1 bg-[#18181B] border border-[#26262A] rounded-xl shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('none')}
+                    className="flex items-center gap-1.5 text-[11.5px] font-medium text-[#A1A1AA] hover:text-[#E3E3E3] px-1.5 py-0.5 rounded-md hover:bg-[#222327] transition-colors cursor-pointer"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>Overview</span>
+                  </button>
+                  <span className="text-[11px] font-medium text-[#8E8E93] pr-1.5">
+                    {activeTab === 'changes'
+                      ? 'Review'
+                      : activeTab === 'editor'
+                      ? 'Files'
+                      : activeTab === 'terminal'
+                      ? 'Terminal'
+                      : activeTab === 'extensions'
+                      ? 'Extensions'
+                      : activeTab === 'subagents'
+                      ? 'Subagents'
+                      : activeTab === 'tasks'
+                      ? 'Background Tasks'
+                      : activeTab === 'plan'
+                      ? 'Artifacts'
+                      : activeTab === 'swarm'
+                      ? 'Swarm Board'
+                      : activeTab === 'preview'
+                      ? 'Vision Preview'
+                      : activeTab === 'harness'
+                      ? 'Task Harness'
+                      : activeTab === 'evidence'
+                      ? 'Evidence'
+                      : activeTab}
+                  </span>
                 </div>
-              </div>
+
+                {/* Active Workbench View Card */}
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
+                  {activeTab === 'changes' && <ChangesTab />}
+                  {activeTab === 'editor' && <WorkbenchEditor />}
+                  {activeTab === 'terminal' && <IntegratedTerminal />}
+                  {activeTab === 'extensions' && <ExtensionsTab />}
+                  {activeTab === 'preview' && <VisionPreviewTab />}
+                  {activeTab === 'harness' && <HarnessWorkbenchTab />}
+                  {activeTab === 'subagents' && <SubagentsTab />}
+                  {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
+                  {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
+                  {activeTab === 'evidence' && <EvidenceDrawer />}
+                  {activeTab === 'swarm' && <SwarmBoardTab />}
+                </div>
+              </>
             )}
-            {activeTab === 'changes' && <ChangesTab />}
-            {activeTab === 'editor' && <WorkbenchEditor />}
-            {activeTab === 'terminal' && <IntegratedTerminal />}
-            {activeTab === 'preview' && <VisionPreviewTab />}
-            {activeTab === 'harness' && <HarnessWorkbenchTab />}
-            {activeTab === 'subagents' && <SubagentsTab />}
-            {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
-            {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
-            {activeTab === 'evidence' && <EvidenceDrawer />}
-            {activeTab === 'swarm' && <SwarmBoardTab />}
-          </div>
         </aside>
         </>
       )}

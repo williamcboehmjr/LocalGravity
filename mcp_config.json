@@ -4,6 +4,11 @@
       "command": "uvx",
       "args": ["mcp-server-fetch"]
     },
+    "parallel": {
+      "url": "https://mcp.parallel.ai/mcp",
+      "transport": "http",
+      "enabled": false
+    },
     "filesystem": {
       "command": "npx",
       "args": [

@@ -7,7 +7,8 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
-  url?: string; // For SSE/HTTP transport
+  url?: string; // For Streamable HTTP / SSE transport
+  headers?: Record<string, string>;
   transport?: 'stdio' | 'sse' | 'http';
   enabled?: boolean;
 }
@@ -25,6 +26,7 @@ export interface McpServerStatus {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  headers?: Record<string, string>;
   enabled: boolean;
   status: 'connected' | 'ready' | 'disabled' | 'error';
   toolsCount: number;
@@ -48,16 +50,48 @@ interface PersistentMcpSession {
   pending: Map<number, { resolve: (msg: any) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>;
 }
 
+interface HttpMcpSession {
+  sessionId?: string;
+  initialized: boolean;
+  nextId: number;
+}
+
 export class McpClientManager {
   private localConfigPath: string;
   private globalConfigPath: string;
+  private toggleStatePath: string;
   private servers = new Map<string, McpServerStatus>();
   private sessions = new Map<string, PersistentMcpSession>();
+  private httpSessions = new Map<string, HttpMcpSession>();
 
   constructor(repoRoot: string) {
     this.localConfigPath = path.join(repoRoot, 'mcp_config.json');
     this.globalConfigPath = path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
+    this.toggleStatePath = path.join(repoRoot, '.runtime', 'mcp-toggle-state.json');
     this.loadConfig();
+  }
+
+  private readToggleOverrides(): Record<string, boolean> {
+    try {
+      if (fs.existsSync(this.toggleStatePath)) {
+        const parsed = JSON.parse(fs.readFileSync(this.toggleStatePath, 'utf-8'));
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return {};
+  }
+
+  private writeToggleOverrides(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.toggleStatePath), { recursive: true });
+      const state: Record<string, boolean> = {};
+      for (const [name, srv] of this.servers.entries()) {
+        state[name] = srv.enabled;
+      }
+      fs.writeFileSync(this.toggleStatePath, JSON.stringify(state, null, 2));
+    } catch (err) {
+      console.warn('[McpClientManager] Failed to persist toggle state:', err);
+    }
   }
 
   /**
@@ -71,6 +105,8 @@ export class McpClientManager {
       { path: this.localConfigPath, source: 'local' },
     ];
 
+    const toggleOverrides = this.readToggleOverrides();
+
     for (const src of configsToLoad) {
       if (!fs.existsSync(src.path)) continue;
 
@@ -79,8 +115,15 @@ export class McpClientManager {
         const mcpServers: Record<string, McpServerConfig> = raw.mcpServers || {};
 
         for (const [name, cfg] of Object.entries(mcpServers)) {
-          const transport: 'stdio' | 'sse' | 'http' = cfg.url ? 'sse' : cfg.transport || 'stdio';
-          const enabled = cfg.enabled !== false;
+          const transport: 'stdio' | 'sse' | 'http' = cfg.url
+            ? cfg.transport === 'sse'
+              ? 'sse'
+              : 'http'
+            : cfg.transport || 'stdio';
+          const enabled =
+            typeof toggleOverrides[name] === 'boolean'
+              ? toggleOverrides[name]
+              : cfg.enabled !== false;
           const defaultTools = this.getDefaultToolsForServer(name);
 
           this.servers.set(name, {
@@ -89,6 +132,7 @@ export class McpClientManager {
             command: cfg.command || cfg.url || '',
             args: cfg.args || [],
             env: cfg.env,
+            headers: cfg.headers,
             enabled,
             status: enabled ? 'ready' : 'disabled',
             toolsCount: defaultTools.length,
@@ -391,10 +435,14 @@ export class McpClientManager {
       return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
     }
 
+    if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
+      return this.executeHttpToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
+    }
+
     return {
       content: [],
       isError: true,
-      outputText: `Transport ${srv.transport} for ${serverName} is not yet supported.`,
+      outputText: `Transport ${srv.transport} for ${serverName} is not configured with a valid command or URL.`,
     };
   }
 
@@ -585,62 +633,7 @@ export class McpClientManager {
       }
 
       const result = msg.result || {};
-      const contentList = Array.isArray(result.content) ? result.content : [];
-      const textParts: string[] = [];
-      const outDir = path.join(path.dirname(this.localConfigPath), '.runtime', 'mcp-outputs');
-      for (const c of contentList) {
-        if (c?.type === 'image' && typeof c.data === 'string' && c.data.length > 0) {
-          try {
-            fs.mkdirSync(outDir, { recursive: true });
-            const ext = String(c.mimeType || 'image/png').includes('jpeg')
-              ? 'jpg'
-              : String(c.mimeType || 'image/png').includes('webp')
-              ? 'webp'
-              : 'png';
-            const fileName = `${srv.name}-${toolName}-${Date.now()}.${ext}`;
-            const outFile = path.join(outDir, fileName);
-            fs.writeFileSync(outFile, Buffer.from(c.data, 'base64'));
-            textParts.push(`[MCP Image saved to: ${outFile}](/api/mcp-outputs/${fileName})`);
-          } catch {
-            textParts.push('[MCP Image returned]');
-          }
-        } else if (typeof c?.text === 'string') {
-          textParts.push(c.text);
-        } else {
-          textParts.push(JSON.stringify(c));
-        }
-      }
-      let combinedText = textParts.join('\n');
-      if (!combinedText && result) {
-        combinedText = JSON.stringify(result, null, 2);
-      }
-
-      // Mirror any generated local image paths returned in text/JSON so UI can render them inline
-      const imgPathRegex =
-        /(?:[A-Za-z]:\\|\/)[^"\s<>|?*\r\n]+\.(?:png|jpg|jpeg|webp|gif)/gi;
-      const seenPaths = new Set<string>();
-      const matches = combinedText.match(imgPathRegex) || [];
-      for (const matchedPath of matches) {
-        if (seenPaths.has(matchedPath)) continue;
-        seenPaths.add(matchedPath);
-        const normalized = matchedPath.replace(/\\/g, '/');
-        if (normalized.includes('/.runtime/mcp-outputs/')) continue;
-        try {
-          if (fs.existsSync(matchedPath) && fs.statSync(matchedPath).isFile()) {
-            fs.mkdirSync(outDir, { recursive: true });
-            const ext = path.extname(matchedPath) || '.png';
-            const base = path.basename(matchedPath, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
-            const copyName = `${srv.name}-${base}-${Date.now()}${ext}`;
-            fs.copyFileSync(matchedPath, path.join(outDir, copyName));
-            combinedText += `\n[MCP Image saved to: ${matchedPath}](/api/mcp-outputs/${copyName})`;
-          }
-        } catch {}
-      }
-      return {
-        content: contentList,
-        isError: result.isError || false,
-        outputText: combinedText,
-      };
+      return this.formatMcpToolResult(srv, toolName, result);
     } catch (err: any) {
       return {
         content: [],
@@ -648,6 +641,243 @@ export class McpClientManager {
         outputText: err?.message || `Failed MCP call ${srv.name}:${toolName}`,
       };
     }
+  }
+
+  private async sendHttpJsonRpc(
+    srv: McpServerStatus,
+    method: string,
+    params: Record<string, any> | undefined,
+    timeoutMs: number,
+    isNotification = false
+  ): Promise<any> {
+    let sess = this.httpSessions.get(srv.name);
+    if (!sess) {
+      sess = { initialized: false, nextId: 1 };
+      this.httpSessions.set(srv.name, sess);
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...(srv.headers || {}),
+    };
+    if (sess.sessionId) {
+      headers['Mcp-Session-Id'] = sess.sessionId;
+    }
+
+    const id = isNotification ? undefined : sess.nextId++;
+    const bodyPayload: Record<string, any> = {
+      jsonrpc: '2.0',
+      method,
+    };
+    if (id !== undefined) bodyPayload.id = id;
+    if (params !== undefined) bodyPayload.params = params;
+
+    const resp = await fetch(srv.command, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    const newSessionId = resp.headers.get('mcp-session-id');
+    if (newSessionId) {
+      sess.sessionId = newSessionId;
+    }
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`HTTP ${resp.status} from ${srv.name}: ${errText.slice(0, 300)}`);
+    }
+
+    if (isNotification || resp.status === 202 || resp.status === 204) {
+      return null;
+    }
+
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const rawText = await resp.text();
+    if (!rawText.trim()) return null;
+
+    if (contentType.includes('text/event-stream')) {
+      // Parse SSE frames and return the JSON-RPC message matching id (or last data payload)
+      let lastParsed: any = null;
+      for (const line of rawText.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const jsonPart = trimmed.slice(5).trim();
+        if (!jsonPart || jsonPart === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(jsonPart);
+          lastParsed = parsed;
+          if (id !== undefined && parsed.id === id) {
+            return parsed;
+          }
+        } catch {}
+      }
+      return lastParsed;
+    }
+
+    return JSON.parse(rawText);
+  }
+
+  private async ensureHttpSessionInitialized(srv: McpServerStatus, timeoutMs: number): Promise<void> {
+    const existing = this.httpSessions.get(srv.name);
+    if (existing?.initialized) return;
+
+    const initMsg = await this.sendHttpJsonRpc(
+      srv,
+      'initialize',
+      {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'localgravity-brain', version: '2.3.12' },
+      },
+      Math.min(timeoutMs, 15000)
+    );
+
+    if (initMsg?.error) {
+      throw new Error(`MCP initialize error for ${srv.name}: ${initMsg.error.message}`);
+    }
+
+    const sess = this.httpSessions.get(srv.name);
+    if (sess) sess.initialized = true;
+
+    if (typeof initMsg?.result?.instructions === 'string' && initMsg.result.instructions.trim()) {
+      srv.instructions = initMsg.result.instructions.trim();
+    }
+
+    try {
+      await this.sendHttpJsonRpc(srv, 'notifications/initialized', {}, 5000, true);
+    } catch {
+      // Non-fatal if remote server ignores notification
+    }
+  }
+
+  public async refreshServerTools(serverName: string): Promise<McpServerStatus | undefined> {
+    const srv = this.servers.get(serverName);
+    if (!srv || !srv.enabled) return srv;
+    if ((srv.transport !== 'http' && srv.transport !== 'sse') || !srv.command) return srv;
+
+    try {
+      await this.ensureHttpSessionInitialized(srv, 15000);
+      const msg = await this.sendHttpJsonRpc(srv, 'tools/list', {}, 15000);
+      if (msg?.result?.tools && Array.isArray(msg.result.tools)) {
+        srv.tools = msg.result.tools.map((t: any) => ({
+          name: String(t.name),
+          serverName: srv.name,
+          description: String(t.description || ''),
+          inputSchema: t.inputSchema || { type: 'object', properties: {} },
+        }));
+        srv.toolsCount = srv.tools.length;
+        srv.status = 'connected';
+        srv.lastCheckedAt = new Date().toISOString();
+      }
+    } catch (err: any) {
+      console.warn(`[McpClientManager] Failed to refresh tools for ${srv.name}:`, err?.message || err);
+      srv.status = 'error';
+      srv.lastCheckedAt = new Date().toISOString();
+    }
+    return srv;
+  }
+
+  private async executeHttpToolCall(
+    srv: McpServerStatus,
+    toolName: string,
+    toolArgs: Record<string, any>,
+    timeoutMs: number
+  ): Promise<McpToolCallResult> {
+    try {
+      await this.ensureHttpSessionInitialized(srv, timeoutMs);
+      const msg = await this.sendHttpJsonRpc(
+        srv,
+        'tools/call',
+        { name: toolName, arguments: toolArgs || {} },
+        timeoutMs
+      );
+
+      if (msg?.error) {
+        return {
+          content: [],
+          isError: true,
+          outputText: `MCP Error (${msg.error.code}): ${msg.error.message}`,
+        };
+      }
+
+      srv.status = 'connected';
+      srv.lastCheckedAt = new Date().toISOString();
+      return this.formatMcpToolResult(srv, toolName, msg?.result || {});
+    } catch (err: any) {
+      // Reset session on transport error so next call re-initializes cleanly
+      this.httpSessions.delete(srv.name);
+      return {
+        content: [],
+        isError: true,
+        outputText: err?.message || `Failed HTTP MCP call ${srv.name}:${toolName}`,
+      };
+    }
+  }
+
+  private formatMcpToolResult(
+    srv: McpServerStatus,
+    toolName: string,
+    result: Record<string, any>
+  ): McpToolCallResult {
+    const contentList = Array.isArray(result.content) ? result.content : [];
+    const textParts: string[] = [];
+    const outDir = path.join(path.dirname(this.localConfigPath), '.runtime', 'mcp-outputs');
+    for (const c of contentList) {
+      if (c?.type === 'image' && typeof c.data === 'string' && c.data.length > 0) {
+        try {
+          fs.mkdirSync(outDir, { recursive: true });
+          const ext = String(c.mimeType || 'image/png').includes('jpeg')
+            ? 'jpg'
+            : String(c.mimeType || 'image/png').includes('webp')
+            ? 'webp'
+            : 'png';
+          const fileName = `${srv.name}-${toolName}-${Date.now()}.${ext}`;
+          const outFile = path.join(outDir, fileName);
+          fs.writeFileSync(outFile, Buffer.from(c.data, 'base64'));
+          textParts.push(`[MCP Image saved to: ${outFile}](/api/mcp-outputs/${fileName})`);
+        } catch {
+          textParts.push('[MCP Image returned]');
+        }
+      } else if (typeof c?.text === 'string') {
+        textParts.push(c.text);
+      } else {
+        textParts.push(JSON.stringify(c));
+      }
+    }
+    let combinedText = textParts.join('\n');
+    if (!combinedText && result) {
+      combinedText = JSON.stringify(result, null, 2);
+    }
+
+    // Mirror any generated local image paths returned in text/JSON so UI can render them inline
+    const imgPathRegex =
+      /(?:[A-Za-z]:\\|\/)[^"\s<>|?*\r\n]+\.(?:png|jpg|jpeg|webp|gif)/gi;
+    const seenPaths = new Set<string>();
+    const matches = combinedText.match(imgPathRegex) || [];
+    for (const matchedPath of matches) {
+      if (seenPaths.has(matchedPath)) continue;
+      seenPaths.add(matchedPath);
+      const normalized = matchedPath.replace(/\\/g, '/');
+      if (normalized.includes('/.runtime/mcp-outputs/')) continue;
+      try {
+        if (fs.existsSync(matchedPath) && fs.statSync(matchedPath).isFile()) {
+          fs.mkdirSync(outDir, { recursive: true });
+          const ext = path.extname(matchedPath) || '.png';
+          const base = path.basename(matchedPath, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+          const copyName = `${srv.name}-${base}-${Date.now()}${ext}`;
+          fs.copyFileSync(matchedPath, path.join(outDir, copyName));
+          combinedText += `\n[MCP Image saved to: ${matchedPath}](/api/mcp-outputs/${copyName})`;
+        }
+      } catch {}
+    }
+    return {
+      content: contentList,
+      isError: result.isError || false,
+      outputText: combinedText,
+    };
   }
 
   public toggleServer(serverName: string, enabled?: boolean): McpServerStatus | undefined {
@@ -662,7 +892,9 @@ export class McpClientManager {
         try { sess.child.kill(); } catch {}
         this.sessions.delete(serverName);
       }
+      this.httpSessions.delete(serverName);
     }
+    this.writeToggleOverrides();
     return srv;
   }
 

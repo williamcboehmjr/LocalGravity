@@ -22,6 +22,7 @@ export type WorkbenchTab =
   | 'changes'
   | 'editor'
   | 'terminal'
+  | 'extensions'
   | 'preview'
   | 'harness'
   | 'subagents'
@@ -147,7 +148,7 @@ const initialWalkthroughMd = `# Verification & Walkthrough (walkthrough.md)
 3. **19 Autonomous Tools**: \`inspect_models\` allows the agent to self-diagnose and test vision without guessing.`;
 
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
-  activeTab: 'changes',
+  activeTab: 'none',
   activeArtifactDoc: 'plan.md',
   taskMarkdown: initialTaskMd,
   parsedTasks: parseTasksFromMarkdown(initialTaskMd),

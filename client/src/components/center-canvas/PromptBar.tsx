@@ -243,6 +243,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   };
   const [showMentionPopover, setShowMentionPopover] = useState(false);
   const [mentionFilter, setMentionFilter] = useState('');
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [showSlashPopover, setShowSlashPopover] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
@@ -271,8 +272,11 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   const handleInputChange = (val: string) => {
     setInput(val);
 
-    // Check for leading `/` slash command trigger (e.g. "/" or "/go")
-    const slashMatch = val.match(/^\/([a-zA-Z0-9_-]*)$/);
+    const cursor = textareaRef.current?.selectionStart ?? val.length;
+    const beforeCursor = val.slice(0, cursor);
+
+    // Trigger `/` slash commands at start of prompt or mid-sentence after whitespace
+    const slashMatch = beforeCursor.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/);
     if (slashMatch) {
       setSlashFilter(slashMatch[1].toLowerCase());
       setSlashSelectedIndex(0);
@@ -283,9 +287,11 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       setShowSlashPopover(false);
     }
 
-    const atMatch = val.match(/@([a-zA-Z0-9_./-]*)$/);
+    // Trigger `@` context mentions at start of prompt or mid-sentence after whitespace
+    const atMatch = beforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_./-]*)$/);
     if (atMatch) {
       setMentionFilter(atMatch[1].toLowerCase());
+      setMentionSelectedIndex(0);
       setShowMentionPopover(true);
     } else {
       setShowMentionPopover(false);
@@ -308,16 +314,40 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     if (cmd.command === '/boost') {
       setThinkingBudget('deep');
     }
-    setInput(`${cmd.command} `);
+
+    const cursor = textareaRef.current?.selectionStart ?? input.length;
+    const beforeCursor = input.slice(0, cursor);
+    const afterCursor = input.slice(cursor);
+    const replacedBefore = /(?:^|\s)\/([a-zA-Z0-9_-]*)$/.test(beforeCursor)
+      ? beforeCursor.replace(/\/([a-zA-Z0-9_-]*)$/, `${cmd.command} `)
+      : `${beforeCursor}${beforeCursor && !/\s$/.test(beforeCursor) ? ' ' : ''}${cmd.command} `;
+    const nextVal = `${replacedBefore}${afterCursor.replace(/^\s+/, '')}`;
+    setInput(nextVal);
     setShowSlashPopover(false);
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(replacedBefore.length, replacedBefore.length);
+      }
+    });
   };
 
   const insertMention = (token: string) => {
-    const replaced = input.replace(/@([a-zA-Z0-9_./-]*)$/, `@${token} `);
-    setInput(replaced);
+    const cursor = textareaRef.current?.selectionStart ?? input.length;
+    const beforeCursor = input.slice(0, cursor);
+    const afterCursor = input.slice(cursor);
+    const replacedBefore = /(?:^|\s)@([a-zA-Z0-9_./-]*)$/.test(beforeCursor)
+      ? beforeCursor.replace(/@([a-zA-Z0-9_./-]*)$/, `@${token} `)
+      : `${beforeCursor}${beforeCursor && !/\s$/.test(beforeCursor) ? ' ' : ''}@${token} `;
+    const nextVal = `${replacedBefore}${afterCursor.replace(/^\s+/, '')}`;
+    setInput(nextVal);
     setShowMentionPopover(false);
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(replacedBefore.length, replacedBefore.length);
+      }
+    });
   };
 
   const addFile = (file: File) => {
@@ -403,7 +433,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       return;
     }
 
-    const effectiveBudget: ThinkingBudget = trimmed.toLowerCase().startsWith('/boost')
+    const effectiveBudget: ThinkingBudget = /(?:^|\s)\/boost(?=\s|$)/i.test(trimmed)
       ? 'deep'
       : thinkingBudget;
 
@@ -440,6 +470,30 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         const chosen = filteredSlashCommands[slashSelectedIndex] || filteredSlashCommands[0];
         if (chosen) {
           selectSlashCommand(chosen);
+        }
+        return;
+      }
+    }
+
+    const visibleMentions = mentionCandidates.slice(0, 10);
+    if (showMentionPopover && visibleMentions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionSelectedIndex((prev) => (prev + 1) % visibleMentions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionSelectedIndex(
+          (prev) => (prev - 1 + visibleMentions.length) % visibleMentions.length
+        );
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        const chosen = visibleMentions[mentionSelectedIndex] || visibleMentions[0];
+        if (chosen) {
+          insertMention(chosen.label);
         }
         return;
       }
@@ -510,10 +564,8 @@ export const PromptBar: React.FC<PromptBarProps> = ({
         ]),
   ].filter((c) => c.label.toLowerCase().includes(mentionFilter));
 
-  const activeSlashCmd = ANTIGRAVITY_SLASH_COMMANDS.find(
-    (c) =>
-      input.toLowerCase().startsWith(c.command + ' ') ||
-      input.trim().toLowerCase() === c.command
+  const activeSlashCmd = ANTIGRAVITY_SLASH_COMMANDS.find((c) =>
+    new RegExp(`(?:^|\\s)${c.command}(?=\\s|$)`, 'i').test(input)
   );
 
   const hasContent = Boolean(input.trim() || images.length > 0 || attachments.length > 0);
@@ -580,27 +632,35 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           <div className="text-[10px] font-medium uppercase tracking-wider text-[#6E6E73] px-2 py-1">
             Context Mentions
           </div>
-          {mentionCandidates.slice(0, 10).map((item, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => insertMention(item.label)}
-              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono text-[#E3E3E3] hover:bg-[#28282C] text-left transition-colors"
-            >
-              {item.type === 'mcp' ? (
-                <Plug className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />
-              ) : item.type === 'rule' ? (
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              ) : item.type === 'skill' ? (
-                <Wrench className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              ) : item.type === 'folder' ? (
-                <Folder className="w-3.5 h-3.5 text-[#FBBF24] shrink-0" />
-              ) : (
-                <FileCode2 className="w-3.5 h-3.5 text-[#60A5FA] shrink-0" />
-              )}
-              <span className="truncate">{item.label}</span>
-            </button>
-          ))}
+          {mentionCandidates.slice(0, 10).map((item, idx) => {
+            const isSelected = idx === mentionSelectedIndex;
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => insertMention(item.label)}
+                onMouseEnter={() => setMentionSelectedIndex(idx)}
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-mono text-left transition-colors ${
+                  isSelected
+                    ? 'bg-[#28282C] text-[#E3E3E3]'
+                    : 'text-[#C4C7C5] hover:bg-[#28282C]/60'
+                }`}
+              >
+                {item.type === 'mcp' ? (
+                  <Plug className="w-3.5 h-3.5 text-[#C084FC] shrink-0" />
+                ) : item.type === 'rule' ? (
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : item.type === 'skill' ? (
+                  <Wrench className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                ) : item.type === 'folder' ? (
+                  <Folder className="w-3.5 h-3.5 text-[#FBBF24] shrink-0" />
+                ) : (
+                  <FileCode2 className="w-3.5 h-3.5 text-[#60A5FA] shrink-0" />
+                )}
+                <span className="truncate">{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -756,10 +816,15 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           <button
             type="button"
             onClick={() => {
-              setInput('/');
+              const nextOpen = !showSlashPopover;
+              if (nextOpen && !/(?:^|\s)\/$/.test(input)) {
+                setInput((prev) =>
+                  prev.length === 0 || /\s$/.test(prev) ? `${prev}/` : `${prev} /`
+                );
+              }
               setSlashFilter('');
               setSlashSelectedIndex(0);
-              setShowSlashPopover(!showSlashPopover);
+              setShowSlashPopover(nextOpen);
               setShowMentionPopover(false);
               textareaRef.current?.focus();
             }}
