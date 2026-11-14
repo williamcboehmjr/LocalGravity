@@ -162,14 +162,22 @@ export async function downloadAndApplyUpdate(
     typeof navigator !== 'undefined' &&
     /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
 
-  // Extract updateHandle and downloadUrl
+  // Extract updateHandle and downloadUrl (guard against UpdateInfo objects without updateHandle)
+  const isUpdateInfoObj =
+    'available' in updateInfoOrHandle ||
+    'downloadUrl' in updateInfoOrHandle ||
+    'updateHandle' in updateInfoOrHandle;
+  const rawHandle = isUpdateInfoObj
+    ? (updateInfoOrHandle as UpdateInfo).updateHandle
+    : (updateInfoOrHandle as Update);
   const updateHandle =
-    'updateHandle' in updateInfoOrHandle
-      ? updateInfoOrHandle.updateHandle
-      : (updateInfoOrHandle as Update);
+    rawHandle && typeof (rawHandle as any).downloadAndInstall === 'function'
+      ? rawHandle
+      : null;
 
-  const downloadUrl =
-    'downloadUrl' in updateInfoOrHandle ? updateInfoOrHandle.downloadUrl : undefined;
+  const downloadUrl = isUpdateInfoObj
+    ? (updateInfoOrHandle as UpdateInfo).downloadUrl
+    : undefined;
 
   // On Android, trigger APK download so the user can tap to install the updated release APK
   if (isAndroid && downloadUrl) {
@@ -224,7 +232,7 @@ export async function downloadAndApplyUpdate(
   }
 
   if (!updateHandle) {
-    if (isTauri && !isMac && downloadUrl) {
+    if (isTauri && !isMac && downloadUrl && /\.msi(?:$|\?)/i.test(downloadUrl)) {
       onProgress?.({
         status: 'downloading',
         downloadedBytes: 2500000,
@@ -237,6 +245,13 @@ export async function downloadAndApplyUpdate(
     }
     if (downloadUrl) {
       window.open(downloadUrl, '_blank');
+      onProgress?.({
+        status: 'finished',
+        downloadedBytes: 100,
+        totalBytes: 100,
+        percent: 100,
+        statusText: 'Opened GitHub release page — installer assets may still be building.',
+      });
       return;
     }
     throw new Error('No update handle or download URL available to apply update.');
