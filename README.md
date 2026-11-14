@@ -110,10 +110,18 @@ flowchart LR
 | Platform | Package Formats | Notes |
 | :--- | :--- | :--- |
 | **Windows (`x64` & native `ARM64`)** | `.msi` + `.sig` | Signed Tauri v2 native installers + in-app auto-update |
-| **macOS (Apple Silicon + Intel)** | Universal `.dmg` + `.app.tar.gz` | Single Universal binary built on `macos-latest` |
+| **macOS (Apple Silicon + Intel)** | Universal `.dmg` + `.app.tar.gz` | Single Universal binary built on `macos-latest` ([one-line Terminal install](#macos-install-no-gatekeeper-warning)) |
 | **Linux (`x64`)** | `.AppImage`, `.deb`, `.rpm` | Covers Ubuntu, Debian, Arch, Fedora, openSUSE, SteamOS |
 | **Android & ChromeOS** | Signed `.apk` | Resizable window + non-touch Chromebook manifest support |
 | **Web Companion** | Built-in WebUI | Served directly from Central Brain (`http://<host>:3390`) |
+
+### macOS Install (No Gatekeeper Warning)
+
+Because the macOS `.dmg` is not notarized with a paid Apple Developer ID, downloading it in a browser triggers Gatekeeper on macOS Sequoia / Tahoe / Golden Gate. Run this one-line command in **Terminal** to install the latest release cleanly without quarantine flags (in-app updates afterward are automatic):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/williamcboehmjr/LocalGravity/main/scripts/install-macos.sh | bash
+```
 
 ---
 
@@ -153,14 +161,6 @@ npm run tauri dev  # Native desktop shell
 ```
 
 Prebuilt installers are available on the [Releases](https://github.com/williamcboehmjr/LocalGravity/releases) page.
-
-### macOS One-Line Install (No Gatekeeper Warning)
-
-Because the macOS `.dmg` is not notarized with a paid Apple Developer ID, downloading it in a browser triggers Gatekeeper on macOS Sequoia / Tahoe / Golden Gate. You can install the latest `.dmg` cleanly from **Terminal** without quarantine flags:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/williamcboehmjr/LocalGravity/main/scripts/install-macos.sh | bash
-```
 
 ---
 
