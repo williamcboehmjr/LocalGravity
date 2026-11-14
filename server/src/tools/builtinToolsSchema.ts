@@ -726,6 +726,29 @@ export const SWARM_TOOLS_SCHEMA = [
   {
     type: 'function',
     function: {
+      name: 'lsp_diagnostics',
+      description:
+        'Run fast LSP syntax/parse diagnostics on a file or workspace, extract symbol outlines (classes/functions/interfaces with line numbers), or generate a compact ~1,000-token structural repo map.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['diagnostics', 'symbols', 'repo_map'],
+            description: 'LSP inspection action to perform',
+          },
+          path: {
+            type: 'string',
+            description: 'Target file path (required for symbols, optional for diagnostics)',
+          },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'swarm_wait',
       description: 'Park the current worker at zero GPU cost until another swarm member posts a matching message.',
       parameters: {

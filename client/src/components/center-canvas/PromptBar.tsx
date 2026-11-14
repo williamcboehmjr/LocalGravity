@@ -543,6 +543,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   };
 
   const mentionCandidates = [
+    { type: 'skill' as const, label: 'git-diff' },
+    { type: 'skill' as const, label: 'problems' },
+    { type: 'skill' as const, label: 'repo-map' },
     { type: 'rule' as const, label: 'rule:RULES.md' },
     { type: 'rule' as const, label: 'rule:ARCHITECTURE.md' },
     { type: 'rule' as const, label: 'rule:EXPERIENCE.md' },

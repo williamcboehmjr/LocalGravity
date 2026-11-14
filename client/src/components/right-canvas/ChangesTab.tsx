@@ -31,6 +31,30 @@ export const ChangesTab: React.FC = () => {
     setRevertingId(null);
   };
 
+  const handleRewindAll = async (cp: FileCheckpointItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setRevertingId(cp.id);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/checkpoints/${cp.id}/rewind`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        const name = cp.file_path.split(/[/\\]/).pop() || cp.file_path;
+        setNotice(`Rewound files & chat to ${name}`);
+        if (Array.isArray(data.checkpoints)) {
+          setCheckpoints(data.checkpoints);
+        } else {
+          setCheckpoints(checkpoints.filter((c) => c.id !== cp.id));
+        }
+        if (Array.isArray(data.messages)) {
+          useSessionStore.getState().hydrateMessagesFromServer(data.messages);
+        }
+        if (activeCheckpoint?.id === cp.id) setActiveCheckpoint(null);
+        setTimeout(() => setNotice(null), 2800);
+      }
+    } catch {}
+    setRevertingId(null);
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 text-xs bg-[#131314]">
       <div className="px-3 py-2 bg-[#161618] border-b border-[#222226] flex items-center justify-between shrink-0 select-none">
@@ -75,16 +99,27 @@ export const ChangesTab: React.FC = () => {
                     <div className="font-mono text-xs text-[#E8EAED] truncate">{fileName}</div>
                     <div className="text-[10px] text-[#6E6E73] truncate">{cp.file_path}</div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => handleRevert(cp, e)}
-                    disabled={revertingId === cp.id}
-                    className="px-2 py-1 rounded bg-[#222327] hover:bg-rose-950/60 text-[#9AA0A6] hover:text-rose-300 text-[10.5px] font-medium flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
-                    title="Revert file to previous state"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>{revertingId === cp.id ? '...' : 'Revert'}</span>
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => handleRevert(cp, e)}
+                      disabled={revertingId === cp.id}
+                      className="px-2 py-1 rounded bg-[#222327] hover:bg-rose-950/60 text-[#9AA0A6] hover:text-rose-300 text-[10.5px] font-medium flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                      title="Revert file only"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>{revertingId === cp.id ? '...' : 'Revert'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleRewindAll(cp, e)}
+                      disabled={revertingId === cp.id}
+                      className="px-2 py-1 rounded bg-[#222327] hover:bg-amber-950/60 text-[#9AA0A6] hover:text-amber-300 text-[10.5px] font-medium flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                      title="Revert this file, newer checkpoints, and rewind chat here"
+                    >
+                      <span>Rewind</span>
+                    </button>
+                  </div>
                 </div>
               );
             })}

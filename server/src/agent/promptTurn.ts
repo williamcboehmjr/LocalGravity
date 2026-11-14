@@ -20,6 +20,9 @@ import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 import { SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
 import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
 import fs from 'node:fs';
+import { execSync } from 'node:child_process';
+import { buildCompactRepoMap } from '../tools/repoMap.js';
+import { LspDiagnosticsManager } from '../tools/lspManager.js';
 
 export type TurnPhaseName =
   | 'queued'
@@ -380,6 +383,28 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
         (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
 
+      let expandedSystemDirective = systemDirective;
+      if (/(?:^|\s)@repo-map(?=\s|$)/i.test(promptStr)) {
+        expandedSystemDirective += `\n\n=== COMPACT WORKSPACE REPO MAP (@repo-map) ===\n${buildCompactRepoMap(project.root_path)}\n`;
+      }
+      if (/(?:^|\s)@git-diff(?=\s|$)/i.test(promptStr)) {
+        try {
+          const stat = execSync('git diff --stat', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8' });
+          const patch = execSync('git diff', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8' }).slice(0, 6000);
+          expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n${stat}\n${patch || '(No unstaged changes)'}\n`;
+        } catch (diffErr: any) {
+          expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n(git diff unavailable: ${diffErr?.message || diffErr})\n`;
+        }
+      }
+      if (/(?:^|\s)@problems(?=\s|$)/i.test(promptStr)) {
+        const wsProblems = new LspDiagnosticsManager().getWorkspaceDiagnostics(project.root_path);
+        const probText =
+          wsProblems.length === 0
+            ? 'No syntax/parse problems detected in workspace.'
+            : JSON.stringify(wsProblems, null, 2);
+        expandedSystemDirective += `\n\n=== WORKSPACE DIAGNOSTICS (@problems) ===\n${probText}\n`;
+      }
+
       const historyMessages = history
         .filter((m) => m.id !== assistantMsg.id)
         .slice(-14)
@@ -495,7 +520,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const chatMessages: Array<{ role: string; content: any; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
         {
           role: 'system',
-          content: systemDirective,
+          content: expandedSystemDirective,
         },
         ...historyMessages,
       ];

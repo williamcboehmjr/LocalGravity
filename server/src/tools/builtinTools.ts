@@ -13,6 +13,9 @@ import { createRequire } from 'node:module';
 import { HANDLER_REGISTRY } from './handlers/index.js';
 import { applyFuzzyPatch } from '../utils/patchDoctor.js';
 import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
+import { LspDiagnosticsManager } from './lspManager.js';
+import { buildCompactRepoMap } from './repoMap.js';
+import { PermissionEngine } from './permissionEngine.js';
 const require = createRequire(import.meta.url);
 
 export interface ToolExecutionContext {
@@ -54,19 +57,27 @@ export class BuiltinToolExecutor {
   private mcp?: McpClientManager;
   private skills?: SkillManager;
   private attachmentManager?: AttachmentManager;
+  private lsp = new LspDiagnosticsManager();
+  private permissions: PermissionEngine;
 
   constructor(
     db: LocalGravityDB,
     terminal: SharedTerminalManager,
     mcp?: McpClientManager,
     skills?: SkillManager,
-    attachmentManager?: AttachmentManager
+    attachmentManager?: AttachmentManager,
+    repoRoot?: string
   ) {
     this.db = db;
     this.terminal = terminal;
     this.mcp = mcp;
     this.skills = skills;
     this.attachmentManager = attachmentManager;
+    this.permissions = new PermissionEngine(repoRoot || process.cwd());
+  }
+
+  public getPermissionEngine(): PermissionEngine {
+    return this.permissions;
   }
 
   public resolveSafePath(workspaceRoot: string, inputPath?: string): string {
@@ -145,6 +156,16 @@ export class BuiltinToolExecutor {
         stdout: '',
         stderr: 'Tool execution aborted by user.',
         exitCode: 130,
+        durationMs: 0,
+      };
+    }
+
+    const perm = this.permissions.evaluate(toolName, args);
+    if (perm.decision === 'deny') {
+      return {
+        stdout: '',
+        stderr: `Blocked by PermissionEngine rule (${perm.matchedRule?.id || 'deny'}): ${perm.reason || toolName}`,
+        exitCode: 1,
         durationMs: 0,
       };
     }
@@ -370,9 +391,10 @@ export class BuiltinToolExecutor {
             new_content_blob: newContent,
           });
           ctx.onFileCheckpointCreated?.(checkpoint);
+          const diagNote = this.lsp.formatPostEditDiagnosticNote(targetPath);
 
           return {
-            stdout: `Wrote ${newContent.length} bytes to ${targetPath} (checkpoint ${checkpoint.id} saved)`,
+            stdout: `Wrote ${newContent.length} bytes to ${targetPath} (checkpoint ${checkpoint.id} saved)${diagNote}`,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
@@ -417,13 +439,61 @@ export class BuiltinToolExecutor {
             new_content_blob: newContent,
           });
           ctx.onFileCheckpointCreated?.(checkpoint);
+          const diagNote = this.lsp.formatPostEditDiagnosticNote(targetPath);
 
           return {
-            stdout: `Applied edit/diff to ${targetPath} via ${patchResult.strategy} match (lines ${patchResult.matchedLineStart}-${patchResult.matchedLineEnd}, checkpoint ${checkpoint.id} saved)`,
+            stdout: `Applied edit/diff to ${targetPath} via ${patchResult.strategy} match (lines ${patchResult.matchedLineStart}-${patchResult.matchedLineEnd}, checkpoint ${checkpoint.id} saved)${diagNote}`,
             stderr: '',
             exitCode: 0,
             durationMs: Math.round(performance.now() - startMs),
             checkpoint,
+          };
+        }
+
+        case 'lsp_diagnostics': {
+          const action = String(args.action || 'diagnostics').toLowerCase();
+          if (action === 'repo_map') {
+            return {
+              stdout: buildCompactRepoMap(ctx.workspaceRoot),
+              stderr: '',
+              exitCode: 0,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+          if (action === 'symbols') {
+            const targetPath = this.resolveSafePath(ctx.workspaceRoot, String(args.path || ''));
+            if (!fs.existsSync(targetPath)) {
+              return {
+                stdout: '',
+                stderr: `File not found: ${targetPath}`,
+                exitCode: 1,
+                durationMs: Math.round(performance.now() - startMs),
+              };
+            }
+            const symbols = this.lsp.extractSymbols(targetPath);
+            return {
+              stdout: JSON.stringify({ file: targetPath, symbols }, null, 2),
+              stderr: '',
+              exitCode: 0,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+          if (args.path) {
+            const targetPath = this.resolveSafePath(ctx.workspaceRoot, String(args.path));
+            const diagnostics = this.lsp.checkFileDiagnostics(targetPath);
+            return {
+              stdout: JSON.stringify({ file: targetPath, count: diagnostics.length, diagnostics }, null, 2),
+              stderr: '',
+              exitCode: 0,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+          const wsIssues = this.lsp.getWorkspaceDiagnostics(ctx.workspaceRoot);
+          return {
+            stdout: JSON.stringify({ filesWithIssues: wsIssues.length, issues: wsIssues }, null, 2),
+            stderr: '',
+            exitCode: 0,
+            durationMs: Math.round(performance.now() - startMs),
           };
         }
 

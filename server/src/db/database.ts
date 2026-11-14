@@ -981,6 +981,54 @@ export class LocalGravityDB {
     }
   }
 
+  public revertCheckpointAndRewindThread(checkpointId: string): {
+    reverted: boolean;
+    rewound: boolean;
+    threadId: string;
+    filePath: string;
+    messages: MessageRecord[];
+    checkpoints: FileCheckpointRecord[];
+  } {
+    const cp = this.getFileCheckpoint(checkpointId);
+    if (!cp) {
+      throw new Error(`Checkpoint ${checkpointId} not found`);
+    }
+
+    // Roll back any newer checkpoints on this thread in reverse chronological order first
+    const newerCheckpoints = this.db
+      .prepare('SELECT id FROM file_checkpoints WHERE thread_id = ? AND created_at > ? ORDER BY created_at DESC')
+      .all(cp.thread_id, cp.created_at) as Array<{ id: string }>;
+    for (const newer of newerCheckpoints) {
+      this.revertFileCheckpoint(newer.id);
+    }
+
+    // Revert the selected checkpoint itself
+    this.revertFileCheckpoint(checkpointId);
+
+    // Delete this checkpoint and all subsequent checkpoints on the thread
+    this.db
+      .prepare('DELETE FROM file_checkpoints WHERE thread_id = ? AND created_at >= ?')
+      .run(cp.thread_id, cp.created_at);
+
+    // Delete messages created after this checkpoint's turn message (or timestamp)
+    const msgRow = cp.message_id
+      ? (this.db.prepare('SELECT created_at FROM messages WHERE id = ?').get(cp.message_id) as { created_at: string } | undefined)
+      : undefined;
+    const cutoff = msgRow?.created_at || cp.created_at;
+    this.db
+      .prepare('DELETE FROM messages WHERE thread_id = ? AND created_at > ?')
+      .run(cp.thread_id, cutoff);
+
+    return {
+      reverted: true,
+      rewound: true,
+      threadId: cp.thread_id,
+      filePath: cp.file_path,
+      messages: this.listMessages(cp.thread_id),
+      checkpoints: this.listFileCheckpoints(cp.thread_id),
+    };
+  }
+
   // ==================== SWARM SESSIONS, MEMBERS & BOARD ====================
   public createOrGetSwarmSession(parentThreadId: string, title = 'Swarm Session'): SwarmSessionRecord {
     const existing = this.getSwarmSessionByThread(parentThreadId);

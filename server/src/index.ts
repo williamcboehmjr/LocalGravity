@@ -66,6 +66,8 @@ import { BackgroundTaskManager } from './tools/taskManager.js';
 import { SubagentManager } from './tools/subagentManager.js';
 import { EdgeBridgeManager } from './bridge/edgeBridge.js';
 import { ArtifactManager } from './tools/artifactManager.js';
+import { ProviderRegistry, type ProviderProfile } from './providers/providerRegistry.js';
+import type { PermissionRule } from './tools/permissionEngine.js';
 import {
   Harness2Manager,
   getClientAppDataDir,
@@ -135,7 +137,8 @@ export async function createDaemonServer(options?: {
   const mcp = new McpClientManager(REPO_ROOT);
   const skills = new SkillManager(REPO_ROOT);
   const terminal = new SharedTerminalManager(REPO_ROOT);
-  const tools = new BuiltinToolExecutor(db, terminal, mcp, skills, attachmentManager);
+  const tools = new BuiltinToolExecutor(db, terminal, mcp, skills, attachmentManager, REPO_ROOT);
+  const providerRegistry = new ProviderRegistry(REPO_ROOT);
 
   const app = Fastify({ logger: false, bodyLimit: 50 * 1024 * 1024 });
   await app.register(fastifyCors, { origin: '*' });
@@ -954,6 +957,98 @@ export async function createDaemonServer(options?: {
       payload: { checkpointId: id, ...result },
     });
     return result;
+  });
+
+  app.post('/api/checkpoints/:id/rewind', async (req) => {
+    const { id } = req.params as { id: string };
+    const result = db.revertCheckpointAndRewindThread(id);
+    broadcastSync({
+      type: 'CHECKPOINT_REVERTED',
+      payload: { checkpointId: id, ...result },
+    });
+    return result;
+  });
+
+  // ==================== UNIFORM PROVIDER REGISTRY & PERMISSION ENGINE API ====================
+  app.get('/api/providers', async () => {
+    return {
+      activeProvider: providerRegistry.getActiveProfile(),
+      profiles: providerRegistry.listProfiles(),
+    };
+  });
+
+  app.post('/api/providers', async (req, reply) => {
+    const body = (req.body || {}) as {
+      activeProviderId?: string;
+      profile?: ProviderProfile;
+    };
+    try {
+      if (body.profile) {
+        providerRegistry.upsertProfile(body.profile);
+      }
+      if (body.activeProviderId) {
+        providerRegistry.setActiveProfile(body.activeProviderId);
+      }
+      return {
+        activeProvider: providerRegistry.getActiveProfile(),
+        profiles: providerRegistry.listProfiles(),
+      };
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || 'Invalid provider request' });
+    }
+  });
+
+  app.post('/api/providers/test', async (req) => {
+    const { id } = (req.body || {}) as { id: string };
+    return providerRegistry.probeProfileHealth(id);
+  });
+
+  app.get('/api/permissions', async () => {
+    return { rules: tools.getPermissionEngine().listRules() };
+  });
+
+  app.post('/api/permissions', async (req) => {
+    const body = (req.body || {}) as {
+      rules?: PermissionRule[];
+      rule?: PermissionRule;
+      deleteId?: string;
+    };
+    const permEngine = tools.getPermissionEngine();
+    if (body.deleteId) {
+      return { rules: permEngine.deleteRule(body.deleteId) };
+    }
+    if (body.rule) {
+      return { rules: permEngine.upsertRule(body.rule) };
+    }
+    if (Array.isArray(body.rules)) {
+      return { rules: permEngine.saveRules(body.rules) };
+    }
+    return { rules: permEngine.listRules() };
+  });
+
+  app.get('/api/openapi.json', async () => {
+    return {
+      openapi: '3.1.0',
+      info: {
+        title: 'LocalGravity Central Brain API',
+        version: '2.3.14',
+        description: 'Local-first, cloud-optional autonomous AI engineering daemon API.',
+      },
+      paths: {
+        '/api/health': { get: { summary: 'Daemon & hardware health' } },
+        '/api/projects': { get: { summary: 'List projects' }, post: { summary: 'Create project' } },
+        '/api/threads': { get: { summary: 'List threads' }, post: { summary: 'Create thread' } },
+        '/api/checkpoints/{id}/revert': { post: { summary: 'Revert single file checkpoint' } },
+        '/api/checkpoints/{id}/rewind': { post: { summary: 'Revert files and rewind thread messages to checkpoint' } },
+        '/api/providers': { get: { summary: 'List local/cloud provider profiles' }, post: { summary: 'Switch active or upsert provider profile' } },
+        '/api/providers/test': { post: { summary: 'Probe provider endpoint health' } },
+        '/api/permissions': { get: { summary: 'List granular allow/ask/deny tool rules' }, post: { summary: 'Save or update permission rules' } },
+        '/api/mcp/servers': { get: { summary: 'List configured MCP servers & active tools' } },
+        '/api/mcp/toggle': { post: { summary: 'Enable or disable an MCP server (persisted)' } },
+        '/api/skills': { get: { summary: 'List discovered workspace & user skills' } },
+        '/api/swarm/{threadId}': { get: { summary: 'Inspect swarm roster and board messages' } },
+      },
+    };
   });
 
   // ==================== WORKSPACE FILES & MONACO EDITOR API ====================

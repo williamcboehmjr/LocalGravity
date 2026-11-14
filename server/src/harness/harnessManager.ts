@@ -392,6 +392,10 @@ export class Harness2Manager {
       { label: 'Global GEMINI.md', filePath: path.join(os.homedir(), '.gemini', 'GEMINI.md') },
       { label: 'Workspace GEMINI.md', filePath: path.join(workspaceRoot, 'GEMINI.md') },
       { label: 'Workspace AGENTS.md', filePath: path.join(workspaceRoot, 'AGENTS.md') },
+      { label: 'Workspace CLAUDE.md', filePath: path.join(workspaceRoot, 'CLAUDE.md') },
+      { label: 'Workspace .clinerules', filePath: path.join(workspaceRoot, '.clinerules') },
+      { label: 'Workspace .cursorrules', filePath: path.join(workspaceRoot, '.cursorrules') },
+      { label: 'Workspace .goosehints', filePath: path.join(workspaceRoot, '.goosehints') },
     ];
     for (const rulesDir of [
       path.join(os.homedir(), '.gemini', 'localgravity', 'rules'),
