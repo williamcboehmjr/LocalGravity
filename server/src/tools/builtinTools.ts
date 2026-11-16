@@ -16,6 +16,7 @@ import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 import { LspDiagnosticsManager } from './lspManager.js';
 import { buildCompactRepoMap } from './repoMap.js';
 import { PermissionEngine } from './permissionEngine.js';
+import { LlamaMoESidecar } from '../tabby/llamaSidecar.js';
 const require = createRequire(import.meta.url);
 
 export interface ToolExecutionContext {
@@ -1235,44 +1236,61 @@ export class BuiltinToolExecutor {
             }
           }
 
+          if (action === 'offload') {
+            await LlamaMoESidecar.getInstance().offloadFromGpu('tool_request');
+            return {
+              stdout: JSON.stringify(
+                {
+                  status: 'offloaded',
+                  engine: 'Strata (port 8080)',
+                  state: await LlamaMoESidecar.getInstance().getState(),
+                  offloadedAt: LlamaMoESidecar.getInstance().getOffloadedAt(),
+                },
+                null,
+                2
+              ),
+              stderr: '',
+              exitCode: 0,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+
+          if (action === 'wake') {
+            const ok = await LlamaMoESidecar.getInstance().ensureRunning('swift-1.5-iq2_xs');
+            return {
+              stdout: ok
+                ? JSON.stringify(
+                    {
+                      status: 'awake',
+                      engine: 'Strata (port 8080)',
+                      profile: LlamaMoESidecar.getInstance().getActiveProfile(),
+                      state: await LlamaMoESidecar.getInstance().getState(),
+                    },
+                    null,
+                    2
+                  )
+                : '',
+              stderr: ok ? '' : 'Failed to wake Strata onto GPU on port 8080',
+              exitCode: ok ? 0 : 1,
+              durationMs: Math.round(performance.now() - startMs),
+            };
+          }
+
           if (action === 'restart') {
             try {
-              execSync('powershell -Command "Get-Process strata -ErrorAction SilentlyContinue | Stop-Process -Force"', { timeout: 5000, windowsHide: true });
-              await new Promise(r => setTimeout(r, 1000));
-              const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
-              const configPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.json');
-              const pythonExe = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'python', 'python.exe');
-              const serverPy = path.join(localAppData, 'Strata', 'terminal', '0.1.58', 'serve', 'server.py');
-              const strataCwd = path.join(localAppData, 'Strata', 'terminal', '0.1.58');
-
-              const child = spawn(pythonExe, [serverPy, '--engine', 'strata', '--config', configPath, '--port', '8080'], {
-                cwd: strataCwd,
-                detached: true,
-                stdio: 'ignore',
-                windowsHide: true,
-              });
-              child.unref();
-
-              let ready = false;
-              for (let i = 0; i < 30; i++) {
-                await new Promise(r => setTimeout(r, 500));
-                try {
-                  const check = await fetch('http://127.0.0.1:8080/health', { signal: AbortSignal.timeout(1000) });
-                  if (check.ok) {
-                    ready = true;
-                    break;
-                  }
-                } catch {}
-              }
+              const sidecar = LlamaMoESidecar.getInstance();
+              await sidecar.offloadFromGpu('restart_requested');
+              const ready = await sidecar.ensureRunning('swift-1.5-iq2_xs');
 
               return {
                 stdout: JSON.stringify({
-                  status: ready ? 'restarted_successfully' : 'restart_initiated_still_loading',
+                  status: ready ? 'restarted_successfully' : 'restart_failed',
                   engine: 'Strata (port 8080)',
+                  profile: sidecar.getActiveProfile(),
                   ready,
                 }, null, 2),
-                stderr: ready ? '' : 'Strata is still initializing weights into VRAM/RAM',
-                exitCode: 0,
+                stderr: ready ? '' : 'Strata failed to restart on port 8080',
+                exitCode: ready ? 0 : 1,
                 durationMs: Math.round(performance.now() - startMs),
               };
             } catch (e: any) {
@@ -1297,8 +1315,8 @@ export class BuiltinToolExecutor {
             if (mRes.ok) modelsData = await mRes.json();
           } catch {}
 
-          const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
-          const configPath = path.join(localAppData, 'Strata', 'launch', 'iq3_s-64k.json');
+          const sidecar = LlamaMoESidecar.getInstance();
+          const { profile, configPath } = sidecar.resolveProfileConfig('swift-1.5-iq2_xs');
           let launchConfig: any = null;
           if (fs.existsSync(configPath)) {
             try {

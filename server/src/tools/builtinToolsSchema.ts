@@ -271,18 +271,81 @@ export const BUILTIN_TOOLS_SCHEMA = [
     function: {
       name: 'inspect_models',
       description:
-        'Inspect the local inference engines (Strata / TabbyAPI), loaded model metadata, vision/multimodal status, and local model files on disk (E:/Models and Strata launch configs). Also supports testing vision inference or restarting Strata.',
+        'Inspect the local inference engines (Strata), loaded model metadata, vision/multimodal status, and local model files on disk (E:/Models and Strata launch configs). Also supports testing vision inference, offloading Strata VRAM, waking Strata, or restarting Strata.',
       parameters: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['inspect', 'test_vision', 'restart'],
-            description: '"inspect" (default): reports active model, vision status, context size, and disk models. "test_vision": sends a live multimodal test image to Strata and verifies end-to-end vision processing. "restart": restarts the Strata inference engine on port 8080.',
+            enum: ['inspect', 'test_vision', 'restart', 'offload', 'wake'],
+            description:
+              '"inspect" (default): reports active model, vision status, context size, and disk models. "test_vision": sends a live multimodal test image to Strata. "offload": unloads Strata from GPU VRAM to 0 MB. "wake": loads Strata back onto GPU. "restart": restarts Strata on port 8080.',
           },
           test_prompt: {
             type: 'string',
             description: 'Optional prompt when action is "test_vision" (default: "What color is this test image?")',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'comfyui',
+      description:
+        'Generate images and videos via either local ComfyUI workflows (MOSS-Image, MiniMax H3, Krea 2) or Google Gemini API ("gemini_image" with gemini-nano-banana-2.1, "gemini_video" with gemini-omni-1.2-flash). Works seamlessly in both Strata mode and Google AI Studio API mode: in Google API mode, ComfyUI prompt enhancers run on Gemini API at zero GPU cost and Strata is not needlessly loaded/reloaded; in Strata mode, Strata enhances the prompt first, offloads GPU VRAM to 0 MB, runs ComfyUI, frees ComfyUI VRAM, and reloads Strata.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['generate', 'list_workflows', 'inspect_workflow', 'status', 'start_server', 'free_vram', 'gemini_image', 'gemini_video'],
+            description: 'Action to perform (default: "generate"). Use "gemini_image" or "gemini_video" for cloud Gemini/Nano Banana/Omni Flash media generation in Google API mode.',
+          },
+          workflow: {
+            type: 'string',
+            description: 'Workflow name, alias ("moss", "h3", "krea", "qwen"), or filename in user workflows folder (default: "Moss Image.json").',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Text prompt to generate (for action="generate", "gemini_image", or "gemini_video").',
+          },
+          negative_prompt: {
+            type: 'string',
+            description: 'Optional negative prompt override.',
+          },
+          aspect_ratio: {
+            type: 'string',
+            description: 'Optional aspect ratio (e.g. "1:1 (Square)", "16:9 (Widescreen)", "9:16 (Portrait Widescreen)").',
+          },
+          megapixels: {
+            type: 'number',
+            description: 'Optional megapixels for ResolutionSelector (e.g. 1 or 2).',
+          },
+          steps: {
+            type: 'number',
+            description: 'Optional sampling steps override.',
+          },
+          cfg: {
+            type: 'number',
+            description: 'Optional CFG scale override.',
+          },
+          seed: {
+            type: 'number',
+            description: 'Optional seed override (random positive seed if omitted or negative).',
+          },
+          enhance_prompt: {
+            type: 'boolean',
+            description: 'Whether to expand the prompt via Strata (or Gemini in Google mode) using the workflow\'s prompt enhancer before running ComfyUI (default: true).',
+          },
+          input_image: {
+            type: 'string',
+            description: 'Optional local image path for Gemini image editing ("gemini_image") or image-to-video ("gemini_video").',
+          },
+          google_model: {
+            type: 'string',
+            description: 'Optional Gemini model override (defaults: "gemini-nano-banana-2.1" for gemini_image, "gemini-omni-1.2-flash" for gemini_video).',
           },
         },
       },
@@ -413,13 +476,13 @@ export const BUILTIN_TOOLS_SCHEMA = [
     function: {
       name: 'manage_strata',
       description:
-        'Inspect or control the Strata local inference engine on port 8080: "status" (check if active and get loaded model/context), "test_vision" (verify live multimodal vision processing with a test image), "restart" (reboot engine).',
+        'Inspect or control the Strata local inference engine on port 8080: "status" (check if active and get loaded model/context), "test_vision" (verify live multimodal vision processing with a test image), "offload" (free GPU VRAM to 0 MB), "wake" (load Strata back onto GPU), or "restart" (reboot engine).',
       parameters: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['status', 'test_vision', 'restart'],
+            enum: ['status', 'test_vision', 'restart', 'offload', 'wake'],
             description: 'Action to perform on Strata engine',
           },
           test_prompt: {

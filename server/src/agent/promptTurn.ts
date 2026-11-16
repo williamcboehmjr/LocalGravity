@@ -348,6 +348,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `   - Web & Models: search_web (live DuckDuckGo), search_models (Hugging Face Hub & repo tree), download_file (streaming file/model downloader), browser_inspect\n` +
         `   - Configuration & System: patch_json (safe deep JSON updater), manage_files (stat, copy, move, delete), http_request (REST API client), run_terminal (interactive shell)\n` +
         `   - Vision Grounding: capture_screen, inspect_window\n` +
+        `   - ComfyUI & Media Generation: comfyui (generate, list_workflows, inspect_workflow, status, start_server, free_vram, gemini_image, gemini_video)\n` +
+        `=== COMFYUI, MOSS & GOOGLE API MEDIA GENERATION PROTOCOL ===\n` +
+        `- When the user asks to generate images with MOSS or run any ComfyUI workflow (e.g. Moss Image, MiniMax H3, Krea 2), ALWAYS call the native "comfyui" tool (e.g. comfyui({ action: "generate", workflow: "Moss Image.json", prompt: "..." })).\n` +
+        `- Works in BOTH Strata mode and Google AI Studio API mode:\n` +
+        `  * In Strata mode: "comfyui" enhances the prompt on Strata using any workflow enhancer instructions, offloads Strata from VRAM (0 MB), starts/uses ComfyUI on port 8188, strips dead Ollama nodes during UI->API conversion, saves outputs inline in chat, frees ComfyUI VRAM (POST /free), and reloads Strata back onto the GPU.\n` +
+        `  * In Google API mode: "comfyui" enhances ComfyUI prompts via Gemini API (zero GPU cost) without waking Strata, runs ComfyUI cleanly, and frees ComfyUI VRAM without reloading Strata. You can also use comfyui({ action: "gemini_image", prompt: "..." }) (Nano Banana 2.1) or comfyui({ action: "gemini_video", prompt: "..." }) (Gemini Omni 1.2 Flash) to generate images/videos directly via Gemini API.\n` +
+        `- Do NOT download duplicate checkpoints, VAEs, or text encoders — the user's models already live on E:\\Github\\Models (mapped via ComfyUI-Easy-Install extra_model_paths.yaml) and workflows live in C:\\Users\\Sue\\Documents\\GitHub\\ComfyUI\\ComfyUI-Easy-Install\\ComfyUI\\user\\default\\workflows.\n` +
         `4. EMPIRICAL VERIFICATION BEFORE CLAIMING: Before claiming any file, model, or vision feature is missing or broken, ALWAYS run inspect_models, find_files, or manage_files to check actual disk state and engine status. NEVER guess or hallucinate.\n` +
         `5. AUTONOMOUS INVESTIGATION: When asked to fix, configure, or enhance local models, vision, tools, or workstation services, DO NOT stall, ask for repo names, or ask the user for technical inputs that you can discover yourself. Autonomously research missing files or errors, inspect local configs, apply necessary edits or downloads, and verify end-to-end before delivering your response.\n` +
         `6. EXECUTE END-TO-END WITHOUT ASKING PERMISSION: When the user's prompt already asks you to fix, implement, build, finish, or release something, DO NOT stop midway to ask "Want me to implement this?", "Should I proceed?", or "Would you like me to fix it?". Execute the full workflow autonomously, verify builds/tests, and only then present your concise final summary.\n\n` +
@@ -655,7 +662,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           },
         });
 
-        const compactThreshold = params.tier === 'high' ? 140000 : 54000;
+        const compactThreshold =
+          brainProviderCfg.provider === 'google_ai_studio' && params.tier === 'high' ? 140000 : 42000;
         const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
         if (compactRes.didCompact) {
           chatMessages.splice(0, chatMessages.length, ...compactRes.messages);

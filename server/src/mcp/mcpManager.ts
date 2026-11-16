@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { LlamaMoESidecar } from '../tabby/llamaSidecar.js';
 
 export interface McpServerConfig {
   command?: string;
@@ -208,10 +209,14 @@ export class McpClientManager {
         {
           name: 'run_workflow',
           serverName,
-          description: 'Run a ComfyUI workflow JSON graph.',
+          description: 'Run a ComfyUI workflow JSON file using workflow_path.',
           inputSchema: {
             type: 'object',
-            properties: { workflow: { type: 'object' }, prompt: { type: 'string' } },
+            properties: {
+              workflow_path: { type: 'string', description: 'Path to workflow JSON file' },
+              wait: { type: 'boolean', description: 'Wait for completion (default true)' },
+            },
+            required: ['workflow_path'],
           },
         },
         {
@@ -431,19 +436,64 @@ export class McpClientManager {
     const effectiveTimeout =
       timeoutMs === 30000 && longRunningTools.has(cleanToolName) ? 300000 : timeoutMs;
 
-    if (srv.transport === 'stdio' && srv.command) {
-      return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
-    }
+    const needsGpuHandoff =
+      srv.name.toLowerCase().includes('comfy') &&
+      (cleanToolName === 'run_workflow' ||
+        cleanToolName === 'run_template' ||
+        cleanToolName === 'generate_image');
 
-    if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
-      return this.executeHttpToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
-    }
-
-    return {
-      content: [],
-      isError: true,
-      outputText: `Transport ${srv.transport} for ${serverName} is not configured with a valid command or URL.`,
+    const invokeTransport = () => {
+      if (srv.transport === 'stdio' && srv.command) {
+        return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
+      }
+      if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
+        return this.executeHttpToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
+      }
+      return Promise.resolve({
+        content: [],
+        isError: true,
+        outputText: `Transport ${srv.transport} for ${serverName} is not configured with a valid command or URL.`,
+      });
     };
+
+    if (needsGpuHandoff) {
+      const effectiveArgs = { ...toolArgs, wait: true };
+      const sidecar = LlamaMoESidecar.getInstance();
+      const wasStrataActive = await sidecar.isHealthy();
+      let isGoogleProvider = false;
+      try {
+        const providerCfgPath = path.join(path.dirname(this.localConfigPath), '.runtime', 'brain-provider.json');
+        if (fs.existsSync(providerCfgPath)) {
+          const parsed = JSON.parse(fs.readFileSync(providerCfgPath, 'utf-8'));
+          isGoogleProvider = parsed?.provider === 'google_ai_studio';
+        }
+      } catch {}
+      if (wasStrataActive || !isGoogleProvider) {
+        await sidecar.offloadFromGpu('comfy_mcp');
+      }
+      try {
+        if (srv.transport === 'stdio' && srv.command) {
+          return await this.executeStdioToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout);
+        }
+        if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
+          return await this.executeHttpToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout);
+        }
+      } finally {
+        try {
+          await fetch('http://127.0.0.1:8188/free', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ unload_models: true, free_memory: true }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {}
+        if (!isGoogleProvider || wasStrataActive) {
+          await sidecar.ensureRunning('swift-1.5-iq2_xs');
+        }
+      }
+    }
+
+    return invokeTransport();
   }
 
   private async getOrCreatePersistentSession(srv: McpServerStatus, timeoutMs: number): Promise<PersistentMcpSession> {

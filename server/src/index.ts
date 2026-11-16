@@ -380,6 +380,14 @@ export async function createDaemonServer(options?: {
         ? 'image/webp'
         : ext === '.gif'
         ? 'image/gif'
+        : ext === '.mp4'
+        ? 'video/mp4'
+        : ext === '.webm'
+        ? 'video/webm'
+        : ext === '.wav'
+        ? 'audio/wav'
+        : ext === '.mp3'
+        ? 'audio/mpeg'
         : 'image/png';
     return reply.type(mime).send(fs.readFileSync(fullPath));
   });
@@ -1031,7 +1039,7 @@ export async function createDaemonServer(options?: {
       openapi: '3.1.0',
       info: {
         title: 'LocalGravity Central Brain API',
-        version: '2.3.19',
+        version: '2.3.20',
         description: 'Local-first, cloud-optional autonomous AI engineering daemon API.',
       },
       paths: {
