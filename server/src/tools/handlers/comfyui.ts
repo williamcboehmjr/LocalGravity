@@ -20,8 +20,11 @@ const WORKFLOW_ALIASES: Record<string, string> = {
   'moss image': 'Moss Image.json',
   'moss-image': 'Moss Image.json',
   h3: 'H3 Image Easy Workflow.json',
-  minimax: 'H3 Image Easy Workflow.json',
   'h3 image': 'H3 Image Easy Workflow.json',
+  'h3-image': 'H3 Image Easy Workflow.json',
+  'minimax h3 image': 'H3 Image Easy Workflow.json',
+  'minimax-h3-image': 'H3 Image Easy Workflow.json',
+  minimax: 'H3 Image Easy Workflow.json',
   krea: 'Famegrid Krea 2 Spice V2 - Simplified.json',
   'krea 2': 'Famegrid Krea 2 Spice V2 - Simplified.json',
   qwen: 'Qwen 2.1 Image Edit.json',
@@ -507,7 +510,7 @@ if not has_save:
             node['inputs']['filename_prefix'] = 'LocalGravity_MOSS'
 
 # 4. Backward BFS reachability from output nodes
-output_types = {'SaveImage', 'VHS_VideoCombine', 'SaveAnimatedWEBP', 'SaveAudio'}
+output_types = {'SaveImage', 'SaveVideo', 'VHS_VideoCombine', 'SaveAnimatedWEBP', 'SaveAudio'}
 queue = [nid for nid, n in api_wf.items() if n.get('class_type') in output_types]
 reachable = set(queue)
 while queue:

@@ -752,6 +752,44 @@ export const BUILTIN_TOOLS_SCHEMA = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'run_code_batch',
+      description:
+        'Execute a single Node ESM JavaScript script with injected global `lg` helpers (`lg.readFile`, `lg.writeFile`, `lg.editFile`, `lg.listFiles`, `lg.search`, `lg.sh`) to batch multi-file inspections, edits, and checks in one round-trip while automatically recording file checkpoints.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: 'Async JavaScript code body (runs inside an async IIFE with global `lg` helpers).',
+          },
+          cwd: {
+            type: 'string',
+            description: 'Optional working directory (defaults to workspace root).',
+          },
+          timeout_ms: {
+            type: 'number',
+            description: 'Optional timeout in milliseconds (default 30000, max 120000).',
+          },
+        },
+        required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'reload_harness',
+      description:
+        'Hot-reload discovered skills, MCP server configurations, and permission rules from disk without restarting Central Brain.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
 ];
 
 export const SWARM_TOOLS_SCHEMA = [

@@ -114,6 +114,14 @@ export async function createDaemonServer(options?: {
   const db = new LocalGravityDB(
     options?.dbPath || path.join(REPO_ROOT, '.runtime', 'localgravity.sqlite')
   );
+  try {
+    db.db.prepare("UPDATE threads SET status = 'idle' WHERE status != 'idle'").run();
+    db.db
+      .prepare(
+        "UPDATE tool_executions SET status = 'error', stderr_stream = CASE WHEN stderr_stream = '' THEN 'Interrupted by Central Brain restart' ELSE stderr_stream END WHERE status = 'running'"
+      )
+      .run();
+  } catch {}
   const defaultProject = db.ensureDefaultProject(REPO_ROOT);
   const existingThreads = db.listThreads(defaultProject.id);
   if (existingThreads.length === 0) {
@@ -819,6 +827,43 @@ export async function createDaemonServer(options?: {
     return { cleared: true };
   });
 
+  app.post('/api/threads/:id/branch', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { message_id?: string; title?: string };
+    try {
+      const res = db.branchThreadFromMessage(id, body.message_id, body.title);
+      broadcastSync({
+        type: 'THREAD_CREATED',
+        payload: {
+          thread: res.thread,
+          parentThreadId: id,
+          branchedFromMessageId: body.message_id,
+        },
+      });
+      return res;
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || 'Failed to branch thread' });
+    }
+  });
+
+  app.post('/api/threads/:id/rewind', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body || {}) as { message_id: string; revert_files?: boolean };
+    if (!body.message_id) {
+      return reply.status(400).send({ error: 'message_id is required' });
+    }
+    try {
+      const res = db.rewindThreadToMessage(id, body.message_id, body.revert_files !== false);
+      broadcastSync({
+        type: 'THREAD_REWOUND',
+        payload: { ...res },
+      });
+      return res;
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message || 'Failed to rewind thread' });
+    }
+  });
+
   const stopGenerationHandler = async (threadId?: string, rawTurnId?: string) => {
     const turnId = rawTurnId && !rawTurnId.startsWith('pending-') ? rawTurnId : undefined;
     let abortedCount = 0;
@@ -834,12 +879,7 @@ export async function createDaemonServer(options?: {
         return { stopped: false, abortedCount: 0, staleTurn: true, threadId, turnId };
       }
 
-      // Idempotent: if this turn/thread has no active controller or active stream, return cleanly.
       const streams = db.getActiveStreamsForThread(threadId);
-      if (!ctrl && !currentTurn && streams.length === 0) {
-        return { stopped: true, abortedCount: 0, alreadyIdle: true, threadId, turnId };
-      }
-
       targetTurnId = currentTurn?.turn_id || turnId || streams[0]?.messageId;
       targetMessageId = currentTurn?.message_id || streams[0]?.messageId;
 
@@ -855,8 +895,19 @@ export async function createDaemonServer(options?: {
         db.finalizeRunningToolExecutions(s.messageId);
         db.finalizeStreamingMessage(s.messageId);
       }
+      const prevThread = db.getThread(threadId);
+      const stoppedOrphanTools = db.db
+        .prepare(
+          "UPDATE tool_executions SET status = 'error', stderr_stream = CASE WHEN stderr_stream = '' THEN 'Stopped by user' ELSE stderr_stream END WHERE thread_id = ? AND status = 'running'"
+        )
+        .run(threadId);
       db.updateThread(threadId, { status: 'idle' });
-      if (streams.length > 0 && abortedCount === 0) {
+      if (
+        abortedCount === 0 &&
+        (streams.length > 0 ||
+          (prevThread && prevThread.status !== 'idle') ||
+          stoppedOrphanTools.changes > 0)
+      ) {
         abortedCount++;
       }
     } else {
@@ -876,7 +927,7 @@ export async function createDaemonServer(options?: {
       }
     }
 
-    if (abortedCount > 0) {
+    if (abortedCount > 0 || threadId) {
       if (threadId && targetTurnId) {
         broadcastSync({
           type: 'TURN_PHASE',
@@ -1206,6 +1257,25 @@ export async function createDaemonServer(options?: {
 
   app.get('/api/skills', async () => {
     return { skills: skills.listSkills() };
+  });
+
+  app.post('/api/reload', async () => {
+    const discoveredSkills = skills.discoverSkills();
+    harness.ensureWorkspaceHarness(REPO_ROOT);
+    const components = harness.listHarnessComponents(REPO_ROOT);
+    const mcpServers = mcp.loadConfig();
+    const permRules = tools.getPermissionEngine().reloadRules();
+    const payload = {
+      reloaded: true,
+      skillsCount: discoveredSkills.length,
+      skills: discoveredSkills,
+      componentsCount: components.length,
+      mcpServersCount: mcpServers.length,
+      permissionRulesCount: permRules.length,
+      timestamp: Date.now(),
+    };
+    broadcastSync({ type: 'HARNESS_RELOADED', payload });
+    return payload;
   });
 
   app.get('/api/skills/:name', async (req, reply) => {

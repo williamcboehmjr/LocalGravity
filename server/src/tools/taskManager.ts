@@ -78,7 +78,7 @@ export class BackgroundTaskManager {
     const isWin = process.platform === 'win32';
     const shell = isWin ? 'powershell.exe' : '/bin/sh';
     const shellArgs = isWin
-      ? ['-NoProfile', '-NonInteractive', '-Command', params.command]
+      ? ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', params.command]
       : ['-c', params.command];
 
     const child = spawn(shell, shellArgs, {

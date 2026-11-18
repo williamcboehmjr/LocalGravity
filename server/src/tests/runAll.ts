@@ -16,6 +16,7 @@ const tests = [
   'swarmManager.test.js',
   'edgeBridge.test.js',
   'googleAiEngine.test.js',
+  'piHarnessUpgrades.test.js',
 ];
 
 console.log('==============================================================');

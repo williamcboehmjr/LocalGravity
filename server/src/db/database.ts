@@ -33,6 +33,8 @@ export interface ThreadRecord {
   active_model_tier: ModelTier;
   active_thinking_budget: ThinkingBudget;
   kv_prefix_hash: string;
+  parent_thread_id?: string;
+  branched_from_message_id?: string;
   updated_at: string;
   created_at: string;
 }
@@ -276,6 +278,12 @@ export class LocalGravityDB {
     try {
       this.db.prepare(`UPDATE projects SET host_name = ? WHERE host_name = '' OR host_name IS NULL`).run(os.hostname());
     } catch {}
+    try {
+      this.db.exec(`ALTER TABLE threads ADD COLUMN parent_thread_id TEXT NOT NULL DEFAULT ''`);
+    } catch {}
+    try {
+      this.db.exec(`ALTER TABLE threads ADD COLUMN branched_from_message_id TEXT NOT NULL DEFAULT ''`);
+    } catch {}
   }
 
   public getPragmas(): { journal_mode: string; synchronous: number; foreign_keys: number } {
@@ -471,6 +479,8 @@ export class LocalGravityDB {
     active_model_tier?: ModelTier;
     active_thinking_budget?: ThinkingBudget;
     kv_prefix_hash?: string;
+    parent_thread_id?: string;
+    branched_from_message_id?: string;
   }): ThreadRecord {
     const id = input.id || crypto.randomUUID();
     const now = new Date().toISOString();
@@ -482,6 +492,8 @@ export class LocalGravityDB {
       active_model_tier: input.active_model_tier || 'high',
       active_thinking_budget: input.active_thinking_budget || 'fast',
       kv_prefix_hash: input.kv_prefix_hash || crypto.createHash('sha256').update(id).digest('hex').slice(0, 16),
+      parent_thread_id: input.parent_thread_id || '',
+      branched_from_message_id: input.branched_from_message_id || '',
       updated_at: now,
       created_at: now,
     };
@@ -490,10 +502,10 @@ export class LocalGravityDB {
       .prepare(
         `INSERT INTO threads (
           id, project_id, title, status, active_model_tier, active_thinking_budget,
-          kv_prefix_hash, updated_at, created_at
+          kv_prefix_hash, parent_thread_id, branched_from_message_id, updated_at, created_at
         ) VALUES (
           @id, @project_id, @title, @status, @active_model_tier, @active_thinking_budget,
-          @kv_prefix_hash, @updated_at, @created_at
+          @kv_prefix_hash, @parent_thread_id, @branched_from_message_id, @updated_at, @created_at
         )`
       )
       .run(record);
@@ -582,6 +594,186 @@ export class LocalGravityDB {
     });
     tx();
     return pruneIds.length;
+  }
+
+  public branchThreadFromMessage(
+    threadId: string,
+    upToMessageId?: string,
+    customTitle?: string
+  ): {
+    thread: ThreadRecord;
+    messages: Array<MessageRecord & { tool_executions: ToolExecutionRecord[] }>;
+  } {
+    const sourceThread = this.getThread(threadId);
+    if (!sourceThread) {
+      throw new Error(`Thread ${threadId} not found`);
+    }
+
+    const allMsgs = this.listMessages(threadId);
+    let sliced = allMsgs;
+    let branchedFromId = allMsgs[allMsgs.length - 1]?.id || '';
+
+    if (upToMessageId) {
+      const idx = allMsgs.findIndex((m) => m.id === upToMessageId);
+      if (idx === -1) {
+        throw new Error(`Message ${upToMessageId} not found in thread ${threadId}`);
+      }
+      sliced = allMsgs.slice(0, idx + 1);
+      branchedFromId = upToMessageId;
+    }
+
+    const baseTitle = sourceThread.title.replace(/\s+\(Branch(?:\s+\d+)?\)$/i, '');
+    const newThread = this.createThread({
+      project_id: sourceThread.project_id,
+      title: customTitle || `${baseTitle} (Branch)`,
+      status: 'idle',
+      active_model_tier: sourceThread.active_model_tier,
+      active_thinking_budget: sourceThread.active_thinking_budget,
+      parent_thread_id: threadId,
+      branched_from_message_id: branchedFromId,
+    });
+
+    const insertMsg = this.db.prepare(
+      `INSERT INTO messages (
+        id, thread_id, role, content, thinking_content, thinking_duration_ms,
+        thinking_tokens, output_tokens, attachments, created_at
+      ) VALUES (
+        @id, @thread_id, @role, @content, @thinking_content, @thinking_duration_ms,
+        @thinking_tokens, @output_tokens, @attachments, @created_at
+      )`
+    );
+    const insertTool = this.db.prepare(
+      `INSERT INTO tool_executions (
+        id, message_id, thread_id, tool_name, mcp_server, arguments_json,
+        stdout_stream, stderr_stream, exit_code, status, duration_ms
+      ) VALUES (
+        @id, @message_id, @thread_id, @tool_name, @mcp_server, @arguments_json,
+        @stdout_stream, @stderr_stream, @exit_code, @status, @duration_ms
+      )`
+    );
+
+    const tx = this.db.transaction(() => {
+      for (const m of sliced) {
+        const newMsgId = crypto.randomUUID();
+        insertMsg.run({
+          id: newMsgId,
+          thread_id: newThread.id,
+          role: m.role,
+          content: m.content,
+          thinking_content: m.thinking_content,
+          thinking_duration_ms: m.thinking_duration_ms,
+          thinking_tokens: m.thinking_tokens,
+          output_tokens: m.output_tokens,
+          attachments: m.attachments,
+          created_at: m.created_at,
+        });
+        for (const t of m.tool_executions || []) {
+          insertTool.run({
+            id: crypto.randomUUID(),
+            message_id: newMsgId,
+            thread_id: newThread.id,
+            tool_name: t.tool_name,
+            mcp_server: t.mcp_server,
+            arguments_json: t.arguments_json,
+            stdout_stream: t.stdout_stream,
+            stderr_stream: t.stderr_stream,
+            exit_code: t.exit_code,
+            status: t.status,
+            duration_ms: t.duration_ms,
+          });
+        }
+      }
+    });
+    tx();
+
+    return {
+      thread: this.getThread(newThread.id) || newThread,
+      messages: this.listMessages(newThread.id),
+    };
+  }
+
+  public rewindThreadToMessage(
+    threadId: string,
+    messageId: string,
+    revertFiles = true
+  ): {
+    rewound: boolean;
+    threadId: string;
+    targetMessageId: string;
+    prunedMessageCount: number;
+    revertedFiles: string[];
+    messages: Array<MessageRecord & { tool_executions: ToolExecutionRecord[] }>;
+    checkpoints: FileCheckpointRecord[];
+  } {
+    const thread = this.getThread(threadId);
+    if (!thread) {
+      throw new Error(`Thread ${threadId} not found`);
+    }
+
+    const orderedMsgs = this.db
+      .prepare('SELECT id, created_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC')
+      .all(threadId) as Array<{ id: string; created_at: string }>;
+
+    const targetIdx = orderedMsgs.findIndex((m) => m.id === messageId);
+    if (targetIdx === -1) {
+      throw new Error(`Message ${messageId} not found in thread ${threadId}`);
+    }
+
+    const targetCreatedAt = orderedMsgs[targetIdx].created_at;
+    const pruneMsgs = orderedMsgs.slice(targetIdx + 1);
+    const pruneIds = pruneMsgs.map((m) => m.id);
+    const pruneIdSet = new Set(pruneIds);
+
+    const revertedFiles: string[] = [];
+    const cpsToDelete: string[] = [];
+
+    if (pruneIds.length > 0 || revertFiles) {
+      const allCps = this.db
+        .prepare('SELECT * FROM file_checkpoints WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC')
+        .all(threadId) as FileCheckpointRecord[];
+
+      for (const cp of allCps) {
+        if (pruneIdSet.has(cp.message_id) || cp.created_at > targetCreatedAt) {
+          cpsToDelete.push(cp.id);
+          if (revertFiles) {
+            try {
+              const res = this.revertFileCheckpoint(cp.id);
+              if (res.reverted) {
+                revertedFiles.push(res.filePath);
+              }
+            } catch (err) {
+              console.warn(`[DB] Failed to revert checkpoint ${cp.id}:`, err);
+            }
+          }
+        }
+      }
+    }
+
+    const tx = this.db.transaction(() => {
+      const delTool = this.db.prepare('DELETE FROM tool_executions WHERE message_id = ?');
+      const delMsg = this.db.prepare('DELETE FROM messages WHERE id = ?');
+      for (const id of pruneIds) {
+        delTool.run(id);
+        delMsg.run(id);
+      }
+      const delCp = this.db.prepare('DELETE FROM file_checkpoints WHERE id = ?');
+      for (const cpId of cpsToDelete) {
+        delCp.run(cpId);
+      }
+    });
+    tx();
+
+    this.updateThread(threadId, { status: 'idle' });
+
+    return {
+      rewound: true,
+      threadId,
+      targetMessageId: messageId,
+      prunedMessageCount: pruneIds.length,
+      revertedFiles,
+      messages: this.listMessages(threadId),
+      checkpoints: this.listFileCheckpoints(threadId),
+    };
   }
 
   // ==================== MESSAGES ====================

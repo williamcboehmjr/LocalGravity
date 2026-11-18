@@ -13,6 +13,7 @@ import {
   FolderPlus,
   ListFilter,
   Monitor,
+  GitBranch,
 } from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 
@@ -204,7 +205,15 @@ export const SessionList: React.FC<SessionListProps> = ({
           </div>
         ) : (
           <>
-            <span className="truncate flex-1 pr-2">{s.title}</span>
+            <div className="flex items-center gap-1.5 flex-1 min-w-0 pr-2">
+              {Boolean(s.parent_thread_id) && (
+                <GitBranch
+                  className="w-3 h-3 text-violet-400 shrink-0"
+                  aria-label="Branched session"
+                />
+              )}
+              <span className="truncate flex-1">{s.title}</span>
+            </div>
 
             <div className="flex items-center gap-1 shrink-0">
               {isRunning ? (

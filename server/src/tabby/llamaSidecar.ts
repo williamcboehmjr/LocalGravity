@@ -28,6 +28,7 @@ export class LlamaMoESidecar {
   private offloadedAt: string | null = null;
   private wakePromise: Promise<boolean> | null = null;
   private wakeTargetProfile: StrataProfileId | null = null;
+  private offloadPromise: Promise<void> | null = null;
 
   constructor(config?: LlamaMoESidecarConfig) {
     this.port = config?.port || 8080;
@@ -123,6 +124,11 @@ export class LlamaMoESidecar {
     const resolved = this.resolveProfileConfig(requestedProfile);
     const targetProfile = resolved.profile;
 
+    // Wait for any in-flight offload to finish before checking/waking Strata
+    if (this.offloadPromise) {
+      await this.offloadPromise.catch(() => {});
+    }
+
     // Serialize concurrent wake/swap calls so two Strata processes never race for VRAM, pinned RAM, and port 8080
     if (this.wakePromise) {
       if (this.wakeTargetProfile === targetProfile) {
@@ -141,12 +147,7 @@ export class LlamaMoESidecar {
 
   private async ensureRunningInternal(targetProfile: StrataProfileId, configPath: string): Promise<boolean> {
     const procAlive = Boolean(this.proc && this.proc.exitCode === null && !this.proc.killed);
-    if (procAlive && this.activeProfile === targetProfile) {
-      this.state = 'active';
-      return true;
-    }
-
-    if ((await this.isHealthy()) || procAlive) {
+    if (await this.isHealthy()) {
       if (this.activeProfile === targetProfile) {
         this.state = 'active';
         return true;
@@ -154,6 +155,24 @@ export class LlamaMoESidecar {
       this.appendLog(
         `[LlamaMoE] Hot-swapping Strata profile on port ${this.port}: ${this.activeProfile} -> ${targetProfile}`
       );
+      await this.offloadFromGpu(`profile_swap:${targetProfile}`);
+    } else if (procAlive && this.activeProfile === targetProfile) {
+      // Process was already spawned and is still loading weights into VRAM: wait for /health instead of returning prematurely!
+      this.state = 'waking';
+      const existingProc = this.proc!;
+      const waitDeadline = Date.now() + 120000;
+      while (Date.now() < waitDeadline) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (existingProc.exitCode !== null || existingProc.killed) {
+          break;
+        }
+        if (await this.isHealthy()) {
+          this.state = 'active';
+          this.offloadedAt = null;
+          return true;
+        }
+      }
+    } else if (procAlive) {
       await this.offloadFromGpu(`profile_swap:${targetProfile}`);
     }
 
@@ -239,6 +258,16 @@ export class LlamaMoESidecar {
    * Strictly verifies it never touches forbidden ports 5000 or 5001.
    */
   public async offloadFromGpu(reason: string = 'idle_timeout'): Promise<void> {
+    if (this.offloadPromise) {
+      return this.offloadPromise;
+    }
+    this.offloadPromise = this.offloadFromGpuInternal(reason).finally(() => {
+      this.offloadPromise = null;
+    });
+    return this.offloadPromise;
+  }
+
+  private async offloadFromGpuInternal(reason: string = 'idle_timeout'): Promise<void> {
     console.log(`[LlamaMoE] Offloading Strata from GPU (${reason}) -> freeing 100% VRAM...`);
     this.appendLog(`[LlamaMoE] Offloading Strata from GPU (${reason}) to free VRAM.`);
 

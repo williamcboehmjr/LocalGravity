@@ -737,7 +737,10 @@ export class TabbyEngine {
           const targetProfile = orchestratorCfg
             ? orchestratorCfg.targetStrataProfile
             : 'swift-1.5-iq2_xs';
-          await sidecar.ensureRunning(targetProfile);
+          const woke = await sidecar.ensureRunning(targetProfile);
+          if (!woke && !(await sidecar.isHealthy())) {
+            await sidecar.ensureRunning(targetProfile);
+          }
           endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
 
           // Strata Reasoning Effort & Dual-Model Orchestrator Tuning:

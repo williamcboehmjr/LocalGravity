@@ -44,7 +44,7 @@ export class SharedTerminalManager {
     const isWin = os.platform() === 'win32';
     const resolved = resolveDefaultShell();
     const shellBin = resolved.bin;
-    const shellArgs = isWin ? ['-NoLogo', '-NoExit'] : ['-i'];
+    const shellArgs = isWin ? ['-NoLogo', '-NoExit', '-WindowStyle', 'Hidden'] : ['-i'];
 
     this.shellProc = spawn(shellBin, shellArgs, {
       cwd: this.cwd,
@@ -142,7 +142,7 @@ export class SharedTerminalManager {
       // Passing raw strings via `-Command` causes PowerShell to prematurely expand `$vars` as empty strings
       // (e.g. `$t0 = Get-Date` became `= Get-Date`). `-EncodedCommand` preserves all variables and quotes byte-for-byte!
       const b64 = Buffer.from(command, 'utf16le').toString('base64');
-      shellArgs = ['-NoProfile', '-EncodedCommand', b64];
+      shellArgs = ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', b64];
     } else {
       shellArgs = ['-c', command];
     }

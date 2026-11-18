@@ -116,6 +116,10 @@ export class PermissionEngine {
     return this.rules;
   }
 
+  public reloadRules(): PermissionRule[] {
+    return this.load();
+  }
+
   public saveRules(rules: PermissionRule[]): PermissionRule[] {
     this.rules = rules;
     try {

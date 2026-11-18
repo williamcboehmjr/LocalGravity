@@ -72,6 +72,11 @@ export function autoCompactMessages(
   const userObjectives: string[] = [];
   const toolSummaries: string[] = [];
   const assistantMilestones: string[] = [];
+  const filesModified = new Set<string>();
+  const filesInspected = new Set<string>();
+
+  const FILE_MODIFY_TOOLS = new Set(['write_file', 'edit_file', 'apply_diff', 'patch_json', 'run_code_batch']);
+  const FILE_READ_TOOLS = new Set(['read_file', 'code_outline']);
 
   for (const msg of middleMessages) {
     const text = extractMessageText(msg.content);
@@ -87,6 +92,18 @@ export function autoCompactMessages(
             if (req && !req.startsWith('[ACTION REQUIRED')) userObjectives.push(req);
           }
         }
+        const modMatch = text.match(/^•\s*Files Modified:\s*(.+)$/m);
+        if (modMatch?.[1]) {
+          for (const p of modMatch[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+            filesModified.add(p);
+          }
+        }
+        const readMatch = text.match(/^•\s*Files Inspected:\s*(.+)$/m);
+        if (readMatch?.[1]) {
+          for (const p of readMatch[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+            filesInspected.add(p);
+          }
+        }
       } else if (!clean.startsWith('[ACTION REQUIRED')) {
         userObjectives.push(clean.slice(0, 260));
       }
@@ -95,10 +112,16 @@ export function autoCompactMessages(
         for (const tc of msg.tool_calls) {
           const fnName = tc?.function?.name || 'tool';
           let argPreview = '';
+          let targetPath = '';
           try {
             const parsed = JSON.parse(tc?.function?.arguments || '{}');
-            argPreview = parsed.path || parsed.command || parsed.query || parsed.url || '';
+            targetPath = String(parsed.path || parsed.file_path || parsed.target || '').trim();
+            argPreview = targetPath || parsed.command || parsed.query || parsed.url || '';
           } catch {}
+          if (targetPath) {
+            if (FILE_MODIFY_TOOLS.has(fnName)) filesModified.add(targetPath);
+            else if (FILE_READ_TOOLS.has(fnName)) filesInspected.add(targetPath);
+          }
           toolSummaries.push(argPreview ? `${fnName}(${String(argPreview).slice(0, 60)})` : fnName);
         }
       }
@@ -132,6 +155,12 @@ export function autoCompactMessages(
     if (!hasRecentRealUser && activeReq) {
       distilledLines.push(`[ACTIVE USER REQUEST]: ${activeReq}`);
     }
+  }
+  if (filesModified.size > 0) {
+    distilledLines.push(`• Files Modified: ${Array.from(filesModified).slice(-16).join(', ')}`);
+  }
+  if (filesInspected.size > 0) {
+    distilledLines.push(`• Files Inspected: ${Array.from(filesInspected).slice(-16).join(', ')}`);
   }
   if (toolSummaries.length > 0) {
     const uniqueTools = Array.from(new Set(toolSummaries)).slice(-12);

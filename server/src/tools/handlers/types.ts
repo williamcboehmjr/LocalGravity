@@ -6,6 +6,7 @@ import type { SharedTerminalManager } from '../../terminal/terminalManager.js';
 import type { McpClientManager } from '../../mcp/mcpManager.js';
 import type { SkillManager } from '../../skills/skillManager.js';
 import type { AttachmentManager } from '../../files/attachmentManager.js';
+import type { PermissionEngine } from '../permissionEngine.js';
 
 // Re-declared here to avoid a circular import with builtinTools.ts. These structural
 // types must stay in sync with the originals exported from ../builtinTools.js.
@@ -39,6 +40,7 @@ export interface ToolExec {
   mcp?: McpClientManager;
   skills?: SkillManager;
   attachmentManager?: AttachmentManager;
+  permissions?: PermissionEngine;
 
   resolveSafePath(workspaceRoot: string, inputPath?: string): string;
   executeTool(

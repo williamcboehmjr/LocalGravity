@@ -15,6 +15,8 @@ import * as scheduleTimer from './scheduleTimer.js';
 import * as invokeSubagent from './invokeSubagent.js';
 import * as writeArtifact from './writeArtifact.js';
 import * as comfyui from './comfyui.js';
+import * as runCodeBatch from './runCodeBatch.js';
+import * as reloadHarness from './reloadHarness.js';
 import { swarmTool, postMessageTool, readBoardTool, swarmWaitTool } from './swarmTools.js';
 
 export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
@@ -29,6 +31,8 @@ export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
   [invokeSubagent.name]: invokeSubagent.execute,
   [writeArtifact.name]: writeArtifact.execute,
   [comfyui.name]: comfyui.execute,
+  [runCodeBatch.name]: runCodeBatch.execute,
+  [reloadHarness.name]: reloadHarness.execute,
   [swarmTool.name]: swarmTool.execute,
   [postMessageTool.name]: postMessageTool.execute,
   [readBoardTool.name]: readBoardTool.execute,

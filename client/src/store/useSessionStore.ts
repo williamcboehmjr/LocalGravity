@@ -164,6 +164,8 @@ export interface ThreadItem {
   active_model_tier: ModelTier;
   active_thinking_budget: ThinkingBudget;
   kv_prefix_hash: string;
+  parent_thread_id?: string;
+  branched_from_message_id?: string;
   updated_at: string;
   created_at: string;
   pinned?: boolean;
@@ -174,6 +176,8 @@ export interface SessionItem {
   title: string;
   updated: string;
   status?: 'idle' | 'thinking' | 'executing_tool' | 'awaiting_approval' | 'error';
+  parent_thread_id?: string;
+  branched_from_message_id?: string;
   messages: ChatMessage[];
   messageQueue?: QueuedMessage[];
 }
@@ -404,6 +408,8 @@ interface SessionState {
   deleteSession: (sessionId: string) => void;
   renameSession: (sessionId: string, newTitle: string) => void;
   autoNameSessionFromPrompt: (sessionId: string, promptText: string) => void;
+  branchFromMessage: (messageId: string) => Promise<string | null>;
+  rewindToMessage: (messageId: string) => Promise<boolean>;
 }
 
 export function applyDpiScaleToDom(scale: number) {
@@ -653,6 +659,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           minute: '2-digit',
         }),
         status: t.status,
+        parent_thread_id: t.parent_thread_id,
+        branched_from_message_id: t.branched_from_message_id,
         messages: [],
       }));
       let candidateId = activeThreadId && activeThreadId !== initialSessionId
@@ -1456,6 +1464,61 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: state.sessions.map((s) => (s.id === targetSessionId ? { ...s, title } : s)),
       threads: state.threads.map((t) => (t.id === targetSessionId ? { ...t, title } : t)),
     });
+  },
+
+  branchFromMessage: async (messageId: string) => {
+    const state = get();
+    try {
+      const res = await fetch(`${state.apiBaseUrl}/api/threads/${state.sessionId}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const newThread: ThreadItem | undefined = data.thread;
+      if (!newThread) return null;
+
+      set((prev) => {
+        const existsThread = prev.threads.some((t) => t.id === newThread.id);
+        const nextThreads = existsThread ? prev.threads : [newThread, ...prev.threads];
+        const existsSession = prev.sessions.some((s) => s.id === newThread.id);
+        const newSessionItem: SessionItem = {
+          id: newThread.id,
+          title: newThread.title,
+          updated: 'Just now',
+          status: newThread.status,
+          parent_thread_id: newThread.parent_thread_id,
+          branched_from_message_id: newThread.branched_from_message_id,
+          messages: [],
+        };
+        const nextSessions = existsSession ? prev.sessions : [newSessionItem, ...prev.sessions];
+        return { threads: nextThreads, sessions: nextSessions };
+      });
+
+      get().switchSession(newThread.id);
+      get().hydrateMessagesFromServer(data.messages || [], [], newThread.status, null);
+      return newThread.id;
+    } catch {
+      return null;
+    }
+  },
+
+  rewindToMessage: async (messageId: string) => {
+    const state = get();
+    try {
+      const res = await fetch(`${state.apiBaseUrl}/api/threads/${state.sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, revert_files: true }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      get().hydrateMessagesFromServer(data.messages || [], [], 'idle', null);
+      return true;
+    } catch {
+      return false;
+    }
   },
 }));
 

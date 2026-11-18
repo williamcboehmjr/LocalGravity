@@ -132,7 +132,7 @@ async function runTurnPipelineTests() {
 
   await handleTurn({
     threadId: 'thread-test-1',
-    prompt: 'Inspect foo.ts',
+    prompt: '/goal Inspect foo.ts',
     tier: 'high',
     thinkingBudget: 'fast',
   });

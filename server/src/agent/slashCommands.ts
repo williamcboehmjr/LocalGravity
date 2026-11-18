@@ -11,7 +11,7 @@ export interface SlashCommandParseResult {
 }
 
 const KNOWN_SLASH_COMMANDS =
-  'goal|plan|boost|grill-me|teamwork|restart|browser|learn|schedule|vision|swarm';
+  'goal|plan|boost|grill-me|teamwork|restart|browser|learn|schedule|vision|swarm|lean|reload';
 
 export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResult {
   const trimmed = rawPrompt.trim();
@@ -173,6 +173,28 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         maxToolSteps: 45,
         maxAutoContinues: 2,
         subagentRole: 'Swarm Coordinator',
+      };
+    case 'lean':
+      return {
+        command: '/lean',
+        cleanPrompt: body || 'Execute the task using Pi minimal-core prompt and batched tool execution.',
+        modeDirective:
+          '=== SLASH COMMAND ACTIVE: /lean (PI MINIMAL-CORE FAST MODE) ===\n' +
+          'Operate with minimal system-prompt & tool-schema overhead. Batch multi-file inspections, edits, and verifications into `run_code_batch` wherever possible to minimize round-trips and keep context tight.',
+        maxToolSteps: 32,
+        maxAutoContinues: 3,
+        subagentRole: 'Lean Engineer',
+      };
+    case 'reload':
+      return {
+        command: '/reload',
+        cleanPrompt: body || 'Hot-reload LocalGravity skills, Harness² components, MCP configs, and permission rules.',
+        modeDirective:
+          '=== SLASH COMMAND ACTIVE: /reload (HOT-RELOAD HARNESS & SKILLS) ===\n' +
+          'Reloading discovered skills, workspace Harness² components, MCP server configurations, and permission rules without restarting Central Brain.',
+        maxToolSteps: 5,
+        maxAutoContinues: 0,
+        subagentRole: 'Harness Reloader',
       };
     default:
       return {

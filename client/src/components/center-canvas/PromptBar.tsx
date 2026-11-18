@@ -194,6 +194,20 @@ export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommandItem[] = [
     icon: <RefreshCw className="w-3.5 h-3.5 text-emerald-400 shrink-0" />,
   },
   {
+    command: '/lean',
+    title: 'Pi Minimal-Core Fast Mode',
+    description: 'Shrink system prompt & tool schemas and batch edits with run_code_batch',
+    badge: 'Fast',
+    icon: <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />,
+  },
+  {
+    command: '/reload',
+    title: 'Hot-Reload Skills, Harness & MCP',
+    description: 'Reload skills, .localgravity/harness/, MCP configs, and permissions live without restarting',
+    badge: 'Hot Reload',
+    icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400 shrink-0" />,
+  },
+  {
     command: '/clear',
     title: 'Clear Conversation Thread',
     description: 'Immediately wipe messages in the current conversation thread',

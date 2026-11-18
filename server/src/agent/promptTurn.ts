@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { buildCompactRepoMap } from '../tools/repoMap.js';
 import { LspDiagnosticsManager } from '../tools/lspManager.js';
+import { selectScopedTools, buildLeanSystemDirective } from '../tools/toolScoper.js';
 
 export type TurnPhaseName =
   | 'queued'
@@ -189,8 +190,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       });
     };
 
-    const brainProviderCfg = tabby.getBrainProviderConfig();
-    const resolvedModelDisplayName = tabby.resolveDiskModelName(params.tier);
+    const brainProviderCfg = tabby.getBrainProviderConfig?.() || { provider: 'strata' as const };
+    const resolvedModelDisplayName = tabby.resolveDiskModelName?.(params.tier) || 'swift-1.5-iq2_xs';
 
     send({
       type: 'TURN_STARTED',
@@ -299,6 +300,51 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
+      // Fast-path for /reload command (hot-reload skills, Harness² components, MCP, and permissions)
+      if (params.prompt.trim().toLowerCase().startsWith('/reload')) {
+        const discoveredSkills = skills.discoverSkills?.() || [];
+        harness.ensureWorkspaceHarness(project.root_path);
+        const components = harness.listHarnessComponents(project.root_path);
+        const mcpServers = mcp.loadConfig?.() || [];
+        const permRules = tools.getPermissionEngine?.()?.reloadRules?.() || [];
+        const reloadPayload = {
+          reloaded: true,
+          skillsCount: discoveredSkills.length,
+          skills: discoveredSkills,
+          componentsCount: components.length,
+          mcpServersCount: mcpServers.length,
+          permissionRulesCount: permRules.length,
+          timestamp: Date.now(),
+        };
+        send({ type: 'HARNESS_RELOADED', payload: reloadPayload });
+        const reloadNote =
+          `🔄 **Harness Hot-Reloaded (/reload)**\n\n` +
+          `- **Skills:** ${discoveredSkills.length} discovered (${discoveredSkills.slice(0, 8).map((s) => `\`${s.name}\``).join(', ') || 'none'})\n` +
+          `- **Harness² Components:** ${components.length} active in \`.localgravity/harness/\`\n` +
+          `- **MCP Servers:** ${mcpServers.filter((s) => s.enabled).length} enabled / ${mcpServers.length} configured\n` +
+          `- **Permission Rules:** ${permRules.length} rules loaded`;
+        db.appendTokenDelta(assistantMsg.id, thread.id, reloadNote, Math.ceil(reloadNote.length / 4));
+        send({
+          type: 'TOKEN_STREAM',
+          payload: {
+            session_id: thread.id,
+            thread_id: thread.id,
+            message_id: assistantMsg.id,
+            chunk: reloadNote,
+            output_tokens: Math.ceil(reloadNote.length / 4),
+            is_finished: true,
+          },
+        });
+        db.finalizeStreamingMessage(assistantMsg.id);
+        const updatedThread = db.updateThread(thread.id, { status: 'idle' });
+        emitPhase('completed', 'Completed');
+        send({
+          type: 'TURN_COMPLETED',
+          payload: { threadId: thread.id, messageId: assistantMsg.id, thread: updatedThread, final_content: reloadNote },
+        });
+        return;
+      }
+
       const edgeBridge = EdgeBridgeManager.getInstance();
       const remoteClient = project.host_name
         ? edgeBridge.getClientByHost(project.host_name)
@@ -321,7 +367,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             `- Local Models Directory: "E:/Models/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS" (holds main GGUFs and mmproj projector)`;
 
       const systemDirective =
-        `You are LocalGravity, an autonomous AI engineering assistant running directly on the user's workstation.\n` +
+        slashInfo.command === '/lean'
+          ? buildLeanSystemDirective({
+              projectName: project.name,
+              projectRoot: project.root_path,
+              gitBranch: project.git_branch,
+              userHome,
+              engineLine: engineDirectiveLine + remoteHostNote,
+              skillsSection: skills.buildSkillsPromptSection?.() || '',
+              compiledHarness,
+            }) +
+            (slashInfo.modeDirective ? `\n\n${slashInfo.modeDirective}` : '') +
+            (project.custom_instructions ? `\nCustom Instructions: ${project.custom_instructions}` : '')
+          : `You are LocalGravity, an autonomous AI engineering assistant running directly on the user's workstation.\n` +
         `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
         remoteHostNote +
         `Workstation Paths:\n` +
@@ -350,7 +408,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `   - Vision Grounding: capture_screen, inspect_window\n` +
         `   - ComfyUI & Media Generation: comfyui (generate, list_workflows, inspect_workflow, status, start_server, free_vram, gemini_image, gemini_video)\n` +
         `=== COMFYUI, MOSS & GOOGLE API MEDIA GENERATION PROTOCOL ===\n` +
-        `- When the user asks to generate images with MOSS or run any ComfyUI workflow (e.g. Moss Image, MiniMax H3, Krea 2), ALWAYS call the native "comfyui" tool (e.g. comfyui({ action: "generate", workflow: "Moss Image.json", prompt: "..." })).\n` +
+        `- When the user asks to generate images with MOSS or run any ComfyUI workflow, ALWAYS call the native "comfyui" tool (e.g. comfyui({ action: "generate", workflow: "Moss Image.json", prompt: "..." })). Use "Moss Image.json" for MOSS, "H3 Image Easy Workflow.json" (or "h3") for MiniMax H3 STILL IMAGES, "Famegrid Krea 2 Spice V2 - Simplified.json" (or "krea") for Krea 2, and "MiniMax H3.json" ONLY when the user explicitly asks for video.\n` +
         `- Works in BOTH Strata mode and Google AI Studio API mode:\n` +
         `  * In Strata mode: "comfyui" enhances the prompt on Strata using any workflow enhancer instructions, offloads Strata from VRAM (0 MB), starts/uses ComfyUI on port 8188, strips dead Ollama nodes during UI->API conversion, saves outputs inline in chat, frees ComfyUI VRAM (POST /free), and reloads Strata back onto the GPU.\n` +
         `  * In Google API mode: "comfyui" enhances ComfyUI prompts via Gemini API (zero GPU cost) without waking Strata, runs ComfyUI cleanly, and frees ComfyUI VRAM without reloading Strata. You can also use comfyui({ action: "gemini_image", prompt: "..." }) (Nano Banana 2.1) or comfyui({ action: "gemini_video", prompt: "..." }) (Gemini Omni 1.2 Flash) to generate images/videos directly via Gemini API.\n` +
@@ -385,8 +443,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         `   - Step 3: MANDATORY BUILD CHECK: Run "run_terminal" with "npm --prefix client run build" (for UI) or "npm --prefix server run build" (for backend). Confirm compilation exits with code 0! If it errors, inspect the error and fix it.\n` +
         `   - Step 4: AUTONOMOUS RELEASE & PUBLISH: When you complete a requested feature or fix and the user wants a release/update, call the "publish_release" tool (e.g. bump="patch", notes="Added feature X to UI"). It automates Windows MSI building, macOS DMG signing, latest.json generation, Git push, and GitHub Release creation!\n` +
         `   - Step 5: ANNOUNCE: Once published, announce to the user: "Release vX.Y.Z is live on GitHub! You can now hit 'Check for Updates' in your macOS or Windows app to auto-install it right now!"\n\n` +
-        skills.buildSkillsPromptSection() + '\n\n' +
-        (mcp.getServerInstructionsBlock() ? `${mcp.getServerInstructionsBlock()}\n\n` : '') +
+        (skills.buildSkillsPromptSection?.() || '') + '\n\n' +
+        (mcp.getServerInstructionsBlock?.() ? `${mcp.getServerInstructionsBlock?.()}\n\n` : '') +
         (slashInfo.modeDirective ? `${slashInfo.modeDirective}\n\n` : '') +
         `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
         (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
@@ -397,8 +455,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       }
       if (/(?:^|\s)@git-diff(?=\s|$)/i.test(promptStr)) {
         try {
-          const stat = execSync('git diff --stat', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8' });
-          const patch = execSync('git diff', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8' }).slice(0, 6000);
+          const stat = execSync('git diff --stat', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8', windowsHide: true });
+          const patch = execSync('git diff', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8', windowsHide: true }).slice(0, 6000);
           expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n${stat}\n${patch || '(No unstaged changes)'}\n`;
         } catch (diffErr: any) {
           expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n(git diff unavailable: ${diffErr?.message || diffErr})\n`;
@@ -551,6 +609,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       let lastToolSignature = '';
       let repeatedSignatureCount = 0;
       let hitStuckLoop = false;
+      const usedToolsInTurn = new Set<string>();
       emitSubagentEvents = ['/goal', '/teamwork', '/swarm'].includes(slashInfo.command || '');
 
       // Broadcast active subagent start to Overview drawer only for explicit multi-step/agent slash modes
@@ -612,12 +671,16 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           slashInfo.command === '/swarm' || SwarmManager.getInstance().hasActiveSwarm(thread.id);
         const activeTools = isFinalStep
           ? undefined
-          : [
-              ...BUILTIN_TOOLS_SCHEMA,
-              ...(includeSwarmBoardTools ? SWARM_TOOLS_SCHEMA : []),
-              ...SKILL_TOOLS_SCHEMA,
-              ...mcp.exportOpenAiTools(),
-            ];
+          : selectScopedTools({
+              prompt: slashInfo.cleanPrompt || promptStr,
+              slashCommand: slashInfo.command,
+              forceLean: slashInfo.command === '/lean',
+              builtinTools: BUILTIN_TOOLS_SCHEMA,
+              skillTools: SKILL_TOOLS_SCHEMA,
+              mcpTools: mcp.exportOpenAiTools(),
+              swarmTools: includeSwarmBoardTools ? SWARM_TOOLS_SCHEMA : undefined,
+              previouslyUsedTools: usedToolsInTurn,
+            });
         if (isFinalStep && hasExecutedTools && chatMessages.length > 0) {
           chatMessages[0] = {
             ...chatMessages[0],
@@ -740,6 +803,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           onToolCallRequest: isFinalStep ? undefined : async (toolName, toolArgs) => {
             closeThinking();
             hasExecutedTools = true;
+            usedToolsInTurn.add(toolName);
             db.updateThread(thread!.id, { status: 'executing_tool' });
             const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
             const toolExec = db.createToolExecution({

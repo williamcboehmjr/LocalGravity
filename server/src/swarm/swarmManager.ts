@@ -466,7 +466,7 @@ export class SwarmManager {
       const mode: SwarmWorkspaceMode =
         args.workspace === 'share' || args.workspace === 'branch' ? args.workspace : 'inherit';
       const isGoogleProvider =
-        this.runtimeDeps?.tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+        this.runtimeDeps?.tabby?.getBrainProviderConfig?.()?.provider === 'google_ai_studio';
       const model = args.model
         ? String(args.model)
         : isGoogleProvider
@@ -540,7 +540,7 @@ export class SwarmManager {
     this.queuedWorkers.add(key);
 
     const isGoogleProvider =
-      this.runtimeDeps.tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+      this.runtimeDeps.tabby?.getBrainProviderConfig?.()?.provider === 'google_ai_studio';
 
     if (isGoogleProvider) {
       // Cloud Google AI Studio requests don't contend for local VRAM: run swarm workers concurrently
@@ -613,7 +613,7 @@ export class SwarmManager {
       ? 'medium'
       : 'high';
 
-    const isGoogleProvider = tabby.getBrainProviderConfig().provider === 'google_ai_studio';
+    const isGoogleProvider = tabby?.getBrainProviderConfig?.()?.provider === 'google_ai_studio';
     const googleRoute = isGoogleProvider
       ? tabby.getGoogleEngine().resolveSwarmWorkerModel(memberName, member.model)
       : null;

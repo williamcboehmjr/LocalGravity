@@ -11,6 +11,7 @@ import {
   Copy,
   Check,
   RotateCcw,
+  GitBranch,
   Eye,
   Target,
   Map,
@@ -1265,6 +1266,8 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     activeModelName,
     brainProvider,
     selectedGoogleModel,
+    branchFromMessage,
+    rewindToMessage,
   } = useSessionStore();
   const activeTurn = useSessionStore((s) => s.activeTurn);
   const turnActive = useSessionStore(selectIsTurnActive);
@@ -1742,6 +1745,28 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>Retry</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void branchFromMessage(msg.id)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-violet-300 transition-colors cursor-pointer"
+                      title="Branch conversation from this turn (Session Tree)"
+                    >
+                      <GitBranch className="w-3 h-3" />
+                      <span>Branch</span>
+                    </button>
+
+                    {index < messages.length - 1 && (
+                      <button
+                        type="button"
+                        onClick={() => void rewindToMessage(msg.id)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-amber-300 transition-colors cursor-pointer"
+                        title="Rewind thread & revert file changes after this turn"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Rewind</span>
                       </button>
                     )}
                   </div>

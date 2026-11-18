@@ -94,6 +94,7 @@ export class BuiltinToolExecutor {
       mcp: this.mcp,
       skills: this.skills,
       attachmentManager: this.attachmentManager,
+      permissions: this.permissions,
       resolveSafePath: (w, p) => this.resolveSafePath(w, p),
       executeTool: (t, a, c) => this.executeTool(t, a, c),
     };
@@ -1412,7 +1413,7 @@ export class BuiltinToolExecutor {
             try {
               const psScript = `Get-NetTCPConnection -State Listen | Select-Object -First 25 LocalAddress, LocalPort, OwningProcess | ConvertTo-Json`;
               const out = execSync(
-                `powershell.exe -NoProfile -NonInteractive -Command "${psScript}"`,
+                `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "${psScript}"`,
                 { timeout: 5000, windowsHide: true }
               )
                 .toString()
@@ -1443,7 +1444,7 @@ export class BuiltinToolExecutor {
               const target = filter || 'strata';
               const psScript = `Get-Process | Where-Object { $_.ProcessName -like "*${target}*" } | Select-Object Id, ProcessName, WorkingSet64 | ConvertTo-Json`;
               const out = execSync(
-                `powershell.exe -NoProfile -NonInteractive -Command "${psScript}"`,
+                `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "${psScript}"`,
                 { timeout: 5000, windowsHide: true }
               )
                 .toString()
@@ -1744,7 +1745,7 @@ Write-Output "$($bounds.Width)x$($bounds.Height)|$b64"
 
       const encodedPs = Buffer.from(psScript, 'utf16le').toString('base64');
       const out = execSync(
-        `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodedPs}`,
+        `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${encodedPs}`,
         { timeout: 5000, maxBuffer: 15 * 1024 * 1024, windowsHide: true }
       )
         .toString()
