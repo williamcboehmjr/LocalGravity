@@ -202,6 +202,66 @@ async function runTurnPipelineTests() {
   );
   assert.equal(colonPreambleResult.shouldContinue, true, 'Should catch "Let me use ..." colon-ending preamble');
 
+  // 4. Multi-window continuation test: step 32 of Window 1 must still keep tools active and roll into Window 2
+  const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-turn-window-'));
+  const db2 = new LocalGravityDB(path.join(tmpDir2, 'window.db'));
+  const events2: Array<{ type: string; payload: any }> = [];
+  let windowStepCalls = 0;
+  let sawStep32WithTools = false;
+  let sawWindow2Prompt = false;
+
+  const windowHandler = createPromptTurnHandler({
+    db: db2,
+    tabby: {
+      getTelemetry: () => ({ tokensPerSec: 50, activeTier: 'high' }),
+      streamChatCompletion: async (p: any) => {
+        windowStepCalls++;
+        if (windowStepCalls <= 32) {
+          if (windowStepCalls === 32 && Array.isArray(p.tools) && p.tools.length > 0) {
+            sawStep32WithTools = true;
+          }
+          await p.onToolCallRequest('read_file', { path: `f${windowStepCalls}.ts` });
+          return { content: '', thinkingContent: '', thinkingDurationMs: 1, thinkingTokens: 0, outputTokens: 1 };
+        }
+        sawWindow2Prompt = p.messages.some(
+          (m: any) => typeof m.content === 'string' && m.content.includes('Context Compacted (Window 2/4)')
+        );
+        return { content: 'Completed across Window 2.', thinkingContent: '', thinkingDurationMs: 1, thinkingTokens: 0, outputTokens: 5 };
+      },
+    } as any,
+    mcp: { exportOpenAiTools: () => [] } as any,
+    skills: { buildSkillsPromptSection: () => '' } as any,
+    tools: {
+      executeTool: async () => ({ exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1 }),
+    } as any,
+    harness: {
+      buildCompiledHarnessPrompt: () => '',
+      recordToolOutcomeAndMaybeRunPPC: async () => null,
+      listHarnessComponents: () => [],
+    } as any,
+    terminal: {} as any,
+    attachmentManager: { saveAttachment: async () => ({}) } as any,
+    broadcastSync: (ev) => events2.push(ev as any),
+    activeAbortControllers: new Map(),
+    activeTurns: new Map(),
+    repoRoot: tmpDir2,
+  });
+
+  await windowHandler({
+    threadId: 'thread-window-test',
+    prompt: 'Inspect 32 files and finish',
+    tier: 'high',
+    thinkingBudget: 'off',
+  });
+
+  assert.equal(sawStep32WithTools, true, 'Step 32 on Window 1 must still keep tools active');
+  assert.equal(sawWindow2Prompt, true, 'Completing step 32 with tools must compact and continue into Window 2');
+  const winComp = events2.find((e) => e.type === 'TURN_COMPLETED');
+  assert.equal(winComp?.payload.final_content, 'Completed across Window 2.');
+
+  db2.close();
+  try { fs.rmSync(tmpDir2, { recursive: true, force: true }); } catch {}
+
   console.log('✅ Phase 1 Turn Pipeline & Compaction Safety Unit Tests PASSED');
 }
 

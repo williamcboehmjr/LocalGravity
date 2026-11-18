@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
+import { StreamBufferManager, type InFlightStreamBuffer } from './streamBuffer.js';
+
+export type { InFlightStreamBuffer };
 
 export type ModelTier = 'low' | 'medium' | 'high';
 export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -116,23 +119,10 @@ export interface SwarmMessageRecord {
   created_at: number;
 }
 
-export interface InFlightStreamBuffer {
-  messageId: string;
-  threadId: string;
-  content: string;
-  thinkingContent: string;
-  thinkingDurationMs: number;
-  thinkingTokens: number;
-  outputTokens: number;
-  dirty: boolean;
-  isFinished: boolean;
-}
-
 export class LocalGravityDB {
   public db: Database.Database;
   public readonly dbPath: string;
-  private streamBuffers = new Map<string, InFlightStreamBuffer>();
-  private flushTimer: NodeJS.Timeout | null = null;
+  private streamManager: StreamBufferManager;
 
   constructor(dbPath?: string) {
     const resolvedPath =
@@ -149,7 +139,7 @@ export class LocalGravityDB {
     this.db.pragma('foreign_keys = ON');
 
     this.initSchema();
-    this.startStreamFlushLoop();
+    this.streamManager = new StreamBufferManager(this.db);
   }
 
   private initSchema(): void {
@@ -795,7 +785,7 @@ export class LocalGravityDB {
 
     return msgs.map((m) => {
       // Overlay any un-flushed in-flight buffer
-      const buf = this.streamBuffers.get(m.id);
+      const buf = this.streamManager.get(m.id);
       if (buf) {
         return {
           ...m,
@@ -864,17 +854,7 @@ export class LocalGravityDB {
 
   // ==================== 250ms STREAM REHYDRATION ENGINE ====================
   public beginStreamingMessage(messageId: string, threadId: string): void {
-    this.streamBuffers.set(messageId, {
-      messageId,
-      threadId,
-      content: '',
-      thinkingContent: '',
-      thinkingDurationMs: 0,
-      thinkingTokens: 0,
-      outputTokens: 0,
-      dirty: false,
-      isFinished: false,
-    });
+    this.streamManager.begin(messageId, threadId);
   }
 
   public appendThoughtDelta(
@@ -884,26 +864,7 @@ export class LocalGravityDB {
     durationMs: number,
     thinkingTokens: number
   ): InFlightStreamBuffer {
-    let buf = this.streamBuffers.get(messageId);
-    if (!buf) {
-      buf = {
-        messageId,
-        threadId,
-        content: '',
-        thinkingContent: '',
-        thinkingDurationMs: 0,
-        thinkingTokens: 0,
-        outputTokens: 0,
-        dirty: true,
-        isFinished: false,
-      };
-      this.streamBuffers.set(messageId, buf);
-    }
-    buf.thinkingContent += delta;
-    buf.thinkingDurationMs = durationMs;
-    buf.thinkingTokens = thinkingTokens;
-    buf.dirty = true;
-    return buf;
+    return this.streamManager.appendThoughtDelta(messageId, threadId, delta, durationMs, thinkingTokens);
   }
 
   public appendTokenDelta(
@@ -912,96 +873,23 @@ export class LocalGravityDB {
     delta: string,
     outputTokens: number
   ): InFlightStreamBuffer {
-    let buf = this.streamBuffers.get(messageId);
-    if (!buf) {
-      buf = {
-        messageId,
-        threadId,
-        content: '',
-        thinkingContent: '',
-        thinkingDurationMs: 0,
-        thinkingTokens: 0,
-        outputTokens: 0,
-        dirty: true,
-        isFinished: false,
-      };
-      this.streamBuffers.set(messageId, buf);
-    }
-    buf.content += delta;
-    buf.outputTokens = outputTokens;
-    buf.dirty = true;
-    return buf;
+    return this.streamManager.appendTokenDelta(messageId, threadId, delta, outputTokens);
   }
 
   public resetStreamingMessageContent(messageId: string, newContent = ''): void {
-    const buf = this.streamBuffers.get(messageId);
-    if (buf) {
-      buf.content = newContent;
-      buf.dirty = true;
-    }
-    this.db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(newContent, messageId);
+    this.streamManager.resetContent(messageId, newContent);
   }
 
   public finalizeStreamingMessage(messageId: string): void {
-    const buf = this.streamBuffers.get(messageId);
-    if (buf) {
-      buf.isFinished = true;
-      buf.dirty = true;
-      this.flushStreamBuffersNow();
-      this.streamBuffers.delete(messageId);
-    }
+    this.streamManager.finalize(messageId);
   }
 
   public getActiveStreamsForThread(threadId: string): InFlightStreamBuffer[] {
-    const active: InFlightStreamBuffer[] = [];
-    for (const buf of this.streamBuffers.values()) {
-      if (buf.threadId === threadId && !buf.isFinished) {
-        active.push({ ...buf });
-      }
-    }
-    return active;
+    return this.streamManager.getActiveForThread(threadId);
   }
 
   public flushStreamBuffersNow(): void {
-    const stmt = this.db.prepare(`
-      UPDATE messages SET
-        content = @content,
-        thinking_content = @thinkingContent,
-        thinking_duration_ms = @thinkingDurationMs,
-        thinking_tokens = @thinkingTokens,
-        output_tokens = @outputTokens
-      WHERE id = @messageId
-    `);
-
-    const tx = this.db.transaction(() => {
-      for (const buf of this.streamBuffers.values()) {
-        if (buf.dirty) {
-          stmt.run({
-            messageId: buf.messageId,
-            content: buf.content,
-            thinkingContent: buf.thinkingContent,
-            thinkingDurationMs: buf.thinkingDurationMs,
-            thinkingTokens: buf.thinkingTokens,
-            outputTokens: buf.outputTokens,
-          });
-          buf.dirty = false;
-        }
-      }
-    });
-
-    tx();
-  }
-
-  private startStreamFlushLoop(): void {
-    // Flush in-flight streaming tokens & thoughts to SQLite every 250ms
-    this.flushTimer = setInterval(() => {
-      try {
-        this.flushStreamBuffersNow();
-      } catch {
-        // Ignore transient lock errors
-      }
-    }, 250);
-    this.flushTimer.unref();
+    this.streamManager.flushNow();
   }
 
   // ==================== TOOL EXECUTIONS ====================
@@ -1448,11 +1336,7 @@ export class LocalGravityDB {
   }
 
   public close(): void {
-    if (this.flushTimer) {
-      clearInterval(this.flushTimer);
-      this.flushTimer = null;
-    }
-    this.flushStreamBuffersNow();
+    this.streamManager.dispose();
     this.db.close();
   }
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { ModelTier, ThinkingBudget, ModelStateStatus } from '../types/protocol';
 import { cleanHostAndPort } from '../utils/connectionTester';
+import { createComfySlice, type ComfySlice } from './slices/comfySlice';
 
 export type BrainProviderId = 'strata' | 'google_ai_studio';
 export type GoogleModelId =
@@ -291,7 +292,7 @@ const statusFromPhase = (phase: string, active: boolean): ThreadItem['status'] =
   return phase === 'executing_tools' || phase === 'preparing_tool_call' ? 'executing_tool' : 'thinking';
 };
 
-interface SessionState {
+interface SessionState extends ComfySlice {
   projects: ProjectItem[];
   activeProjectId: string;
   threads: ThreadItem[];
@@ -499,6 +500,7 @@ const getInitialBrainSettings = () => {
 const initialConn = getInitialBrainSettings();
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  ...createComfySlice(set, get),
   projects: [
     {
       id: 'proj-default',

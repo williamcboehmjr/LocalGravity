@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -24,6 +24,8 @@ import {
 import {
   useSessionStore,
   ToolCallItemData,
+  ChatMessage,
+  GoogleModelId,
   selectIsTurnActive,
   selectStatusLabel,
   getGoogleModelOption,
@@ -1252,6 +1254,361 @@ const AssistantMarkdownBlock: React.FC<{
   </div>
 );
 
+interface ChatMessageRowProps {
+  msg: ChatMessage;
+  retryPrompt?: string;
+  canRewind: boolean;
+  isCurrentlyGenerating: boolean;
+  thoughtDone: boolean;
+  streamingThought: string;
+  streamingElapsedMs?: number;
+  streamingTokens?: number;
+  turnStatusLabel?: string;
+  apiBaseUrl: string;
+  artifacts: ArtifactRecord[];
+  isCopied: boolean;
+  brainProvider: string;
+  selectedGoogleModel: GoogleModelId;
+  activeModelName?: string;
+  liveTokensPerSec: number;
+  onOpenFile: (href: string) => void;
+  onOpenSidecar: (tab: WorkbenchTab) => void;
+  onOpenInWorkbench: (tc: ToolCallItemData) => void;
+  onQuickSend?: (prompt: string) => void;
+  onCopyMessage: (msgId: string, content: string) => void;
+  onBranchMessage: (msgId: string) => void;
+  onRewindMessage: (msgId: string) => void;
+  onOpenArtifact: (artifact: ArtifactRecord) => void;
+}
+
+const ChatMessageRow = React.memo<ChatMessageRowProps>(({
+  msg,
+  retryPrompt,
+  canRewind,
+  isCurrentlyGenerating,
+  thoughtDone,
+  streamingThought,
+  streamingElapsedMs,
+  streamingTokens,
+  turnStatusLabel,
+  apiBaseUrl,
+  artifacts,
+  isCopied,
+  brainProvider,
+  selectedGoogleModel,
+  activeModelName,
+  liveTokensPerSec,
+  onOpenFile,
+  onOpenSidecar,
+  onOpenInWorkbench,
+  onQuickSend,
+  onCopyMessage,
+  onBranchMessage,
+  onRewindMessage,
+  onOpenArtifact,
+}) => {
+  if (msg.role === 'user') {
+    return (
+      <div className="w-full">
+        <div className="w-full bg-[#1C1D20] border border-[#2B2C30] rounded-2xl px-4 py-2.5 text-[14px] text-[#E8EAED] space-y-2 shadow-sm">
+          {/* File & Image Attachments */}
+          {((msg.images && msg.images.length > 0) || (msg.attachments && msg.attachments.length > 0)) && (
+            <div className="flex flex-wrap items-center gap-2.5 overflow-x-auto pb-1">
+              {/* Render images */}
+              {msg.attachments
+                ? msg.attachments
+                    .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')) || (a.savedPath && /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
+                    .map((att, i) => (
+                      <img
+                        key={i}
+                        src={att.url || att.base64DataUrl}
+                        alt={att.name || 'image'}
+                        className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34] shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() => att.url && window.open(att.url, '_blank')}
+                      />
+                    ))
+                : msg.images?.map((img, i) => (
+                    <img
+                      key={i}
+                      src={img}
+                      alt="attachment"
+                      className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34]"
+                    />
+                  ))}
+
+              {/* Render non-image files */}
+              {msg.attachments
+                ?.filter((a) => !a.isImage && (!a.type || !a.type.startsWith('image/')) && (!a.savedPath || !/\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
+                .map((att, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-[#2E2E32] bg-[#141518] hover:border-[#3E4046] transition-colors max-w-sm select-none"
+                  >
+                    <FileCode2 className="w-5 h-5 text-sky-400 shrink-0" />
+                    <div className="min-w-0 text-left">
+                      <div className="text-[13px] font-medium text-[#E8EAED] truncate" title={att.name}>
+                        {att.name}
+                      </div>
+                      <div className="text-[11px] text-[#9AA0A6] flex items-center gap-1.5 font-mono">
+                        <span>{att.sizeHuman || (att.size ? `${Math.round(att.size / 1024)} KB` : 'file')}</span>
+                        {att.savedPath && (
+                          <span className="text-emerald-400/80 truncate max-w-[140px]" title={att.savedPath}>
+                            • {shortenPath(att.savedPath)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+          <div className="whitespace-pre-wrap leading-[1.7]">{msg.content}</div>
+        </div>
+      </div>
+    );
+  }
+
+  const { thought: parsedThought, content } = parseMessageContent(
+    msg.content,
+    msg.thought,
+    isCurrentlyGenerating
+  );
+  const stepNotes = msg.stepNotes || [];
+
+  const activeThought = isCurrentlyGenerating
+    ? streamingThought || parsedThought
+    : msg.thought || parsedThought;
+  const activeElapsedMs = isCurrentlyGenerating ? streamingElapsedMs : msg.thoughtElapsedMs;
+  const activeTokens = isCurrentlyGenerating ? streamingTokens : msg.thoughtTokenCount;
+  const isStreaming = isCurrentlyGenerating && !thoughtDone;
+
+  const allTools = msg.toolCalls || [];
+  const toolCounts = msg.stepToolCounts || [];
+  const hasValidPartition = stepNotes.length > 0 && toolCounts.length === stepNotes.length;
+
+  const noteSegments: Array<{ tools: ToolCallItemData[]; note: string }> = [];
+  let trailingTools: ToolCallItemData[] = allTools;
+  if (stepNotes.length > 0) {
+    if (hasValidPartition) {
+      let cursor = 0;
+      for (let i = 0; i < stepNotes.length; i++) {
+        const end = Math.max(cursor, Math.min(allTools.length, toolCounts[i] ?? allTools.length));
+        noteSegments.push({ tools: allTools.slice(cursor, end), note: stepNotes[i] });
+        cursor = end;
+      }
+      trailingTools = allTools.slice(cursor);
+    } else {
+      noteSegments.push({ tools: allTools, note: stepNotes[0] });
+      for (let i = 1; i < stepNotes.length; i++) {
+        noteSegments.push({ tools: [], note: stepNotes[i] });
+      }
+      trailingTools = [];
+    }
+  }
+
+  const showThoughtInTrailing =
+    noteSegments.length === 0 ||
+    (isCurrentlyGenerating && isStreaming && trailingTools.length === 0);
+
+  const orchestratorPlan = extractOrchestratorPlan(activeThought || '');
+  const mcpImages = extractMcpImages(allTools, content || '', apiBaseUrl);
+  const askQuestions = extractAskQuestions(allTools);
+
+  return (
+    <div className="space-y-3.5 px-1">
+      {noteSegments.map((seg, segIdx) => (
+        <React.Fragment key={`seg-${segIdx}`}>
+          <StepTimeline
+            thought={!showThoughtInTrailing && segIdx === 0 ? activeThought || '' : ''}
+            thoughtElapsedMs={!showThoughtInTrailing && segIdx === 0 ? activeElapsedMs : undefined}
+            thoughtTokens={!showThoughtInTrailing && segIdx === 0 ? activeTokens : undefined}
+            thoughtStreaming={false}
+            toolCalls={seg.tools}
+            isActive={false}
+            onOpenInWorkbench={onOpenInWorkbench}
+          />
+          <AssistantMarkdownBlock
+            markdown={seg.note}
+            onOpenFile={onOpenFile}
+            onOpenSidecar={onOpenSidecar}
+          />
+        </React.Fragment>
+      ))}
+
+      {/* Active or final work segment */}
+      <StepTimeline
+        thought={showThoughtInTrailing ? activeThought || '' : ''}
+        thoughtElapsedMs={showThoughtInTrailing ? activeElapsedMs : undefined}
+        thoughtTokens={showThoughtInTrailing ? activeTokens : undefined}
+        thoughtStreaming={showThoughtInTrailing ? isStreaming : false}
+        toolCalls={trailingTools}
+        isActive={isCurrentlyGenerating}
+        statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
+        onOpenInWorkbench={onOpenInWorkbench}
+      />
+
+      {orchestratorPlan && (
+        <OrchestratorPlanCard
+          plannerName={orchestratorPlan.plannerName}
+          planBody={orchestratorPlan.planBody}
+        />
+      )}
+
+      {mcpImages.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
+          {mcpImages.map((img, i) => (
+            <div
+              key={`${img.url}-${i}`}
+              className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group"
+            >
+              <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
+                <img
+                  src={img.url}
+                  alt={img.label}
+                  className="w-full max-h-80 object-contain bg-[#0c0d0e] cursor-pointer hover:opacity-95 transition-opacity"
+                />
+              </a>
+              <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-[#9AA0A6] border-t border-[#242528]">
+                <span className="inline-flex items-center gap-1.5 truncate">
+                  <ImageIcon className="w-3 h-3 text-[#8AB4F8] shrink-0" />
+                  <span className="truncate font-mono">{img.label}</span>
+                </span>
+                <a
+                  href={img.url}
+                  download={img.label}
+                  className="inline-flex items-center gap-1 text-[#8AB4F8] hover:underline shrink-0"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>Save</span>
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {askQuestions.length > 0 && onQuickSend && (
+        <AskQuestionCard
+          questions={askQuestions}
+          onSubmitAnswers={(ans) => onQuickSend(ans)}
+        />
+      )}
+
+      {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
+      {content && (
+        <div className="space-y-3">
+          <AssistantMarkdownBlock
+            markdown={content}
+            onOpenFile={onOpenFile}
+            onOpenSidecar={onOpenSidecar}
+          />
+
+          {artifacts
+            .filter(
+              (a) =>
+                (a.userFacing || a.requestFeedback) &&
+                (content.includes(a.id) ||
+                  (a.title && content.includes(a.title)) ||
+                  (a.filePath && content.includes(a.filePath)))
+            )
+            .map((a) => (
+              <InlineArtifactCard
+                key={a.id}
+                artifact={a}
+                onOpen={() => onOpenArtifact(a)}
+              />
+            ))}
+        </div>
+      )}
+
+      {/* LocalGravity Assistant Message Footer Bar */}
+      {!isCurrentlyGenerating && content && (
+        <div className="flex items-center justify-between pt-1 text-[11.5px] text-[#6E6E73] select-none group">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onCopyMessage(msg.id, content)}
+              className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
+              title="Copy response"
+            >
+              {isCopied ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-400">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3" />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+
+            {onQuickSend && retryPrompt !== undefined && (
+              <button
+                type="button"
+                onClick={() => onQuickSend(retryPrompt)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
+                title="Retry / Regenerate response"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Retry</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => onBranchMessage(msg.id)}
+              className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-violet-300 transition-colors cursor-pointer"
+              title="Branch conversation from this turn (Session Tree)"
+            >
+              <GitBranch className="w-3 h-3" />
+              <span>Branch</span>
+            </button>
+
+            {canRewind && (
+              <button
+                type="button"
+                onClick={() => onRewindMessage(msg.id)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-amber-300 transition-colors cursor-pointer"
+                title="Rewind thread & revert file changes after this turn"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Rewind</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-[#5F6368]">
+            <span className="truncate max-w-[200px] sm:max-w-none">
+              {msg.modelName ||
+                (brainProvider === 'google_ai_studio'
+                  ? getGoogleModelOption(selectedGoogleModel).name
+                  : activeModelName
+                  ? `Swift 1.5 (${activeModelName})`
+                  : 'Swift 1.5 Flash-Next (Vision)')}
+            </span>
+            {Boolean(msg.outputTokens && msg.outputTokens > 0) && (
+              <>
+                <span>•</span>
+                <span>{msg.outputTokens} tok</span>
+              </>
+            )}
+            {Boolean((msg.tokensPerSec && msg.tokensPerSec > 0) || (isCurrentlyGenerating && liveTokensPerSec > 0)) && (
+              <>
+                <span>•</span>
+                <span className="text-[#388BFD] font-semibold">
+                  {(isCurrentlyGenerating ? liveTokensPerSec : (msg.tokensPerSec || liveTokensPerSec)).toFixed(1)} tok/s
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
 interface ChatFeedProps {
   onQuickSend?: (prompt: string) => void;
 }
@@ -1286,60 +1643,110 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     }
   }, [messages.length, currentStreamingThought, turnActive, turnStatusLabel]);
 
-  const openFileInEditor = async (href: string) => {
-    const { path: filePath } = fileUriToPath(href);
-    let content = '';
-    try {
-      const res = await fetch(`${apiBaseUrl}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
-      if (res.ok) {
-        const data = await res.json();
-        content = data.content ?? '';
-      }
-    } catch {}
-    setActiveFile(filePath, content);
-    setActiveTab('editor');
-    window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
-  };
+  const lastAssistantIdx = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return i;
+    }
+    return -1;
+  }, [messages]);
 
-  const handleOpenInWorkbench = (tc: ToolCallItemData) => {
-    const cmd = tc.command.toLowerCase();
-    let parsedPath = '';
-    const tryExtractPath = (rawJson?: string) => {
-      if (!rawJson) return '';
+  const openFileInEditor = useCallback(
+    async (href: string) => {
+      const { path: filePath } = fileUriToPath(href);
+      let content = '';
       try {
-        const parsed = JSON.parse(rawJson);
-        return String(parsed?.path || parsed?.Path || parsed?.target || parsed?.Target || '');
-      } catch {
-        return '';
-      }
-    };
-    parsedPath = tryExtractPath(tc.argumentsJson);
-    if (!parsedPath && tc.command) {
-      const m = tc.command.match(/^[a-zA-Z0-9_:-]+\(([\s\S]*)\)$/);
-      if (m?.[1]) parsedPath = tryExtractPath(m[1]);
-    }
-    const isFileTool =
-      cmd.includes('write_file') ||
-      cmd.includes('edit_file') ||
-      cmd.includes('apply_diff') ||
-      cmd.includes('patch_json') ||
-      cmd.includes('code_outline') ||
-      cmd.includes('read_file');
-    if (parsedPath && isFileTool) {
-      void openFileInEditor(parsedPath);
-      return;
-    }
-    if (isFileTool) {
+        const res = await fetch(`${apiBaseUrl}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
+        if (res.ok) {
+          const data = await res.json();
+          content = data.content ?? '';
+        }
+      } catch {}
+      setActiveFile(filePath, content);
       setActiveTab('editor');
-    } else if (cmd.includes('capture_screen') || cmd.includes('inspect')) {
-      setActiveTab('preview');
-    } else if (cmd.includes('swarm') || cmd.includes('post_message') || cmd.includes('read_board')) {
-      setActiveTab('swarm');
-    } else {
-      setActiveTab('terminal');
-    }
-    window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
-  };
+      window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
+    },
+    [apiBaseUrl, setActiveFile, setActiveTab]
+  );
+
+  const handleOpenInWorkbench = useCallback(
+    (tc: ToolCallItemData) => {
+      const cmd = tc.command.toLowerCase();
+      let parsedPath = '';
+      const tryExtractPath = (rawJson?: string) => {
+        if (!rawJson) return '';
+        try {
+          const parsed = JSON.parse(rawJson);
+          return String(parsed?.path || parsed?.Path || parsed?.target || parsed?.Target || '');
+        } catch {
+          return '';
+        }
+      };
+      parsedPath = tryExtractPath(tc.argumentsJson);
+      if (!parsedPath && tc.command) {
+        const m = tc.command.match(/^[a-zA-Z0-9_:-]+\(([\s\S]*)\)$/);
+        if (m?.[1]) parsedPath = tryExtractPath(m[1]);
+      }
+      const isFileTool =
+        cmd.includes('write_file') ||
+        cmd.includes('edit_file') ||
+        cmd.includes('apply_diff') ||
+        cmd.includes('patch_json') ||
+        cmd.includes('code_outline') ||
+        cmd.includes('read_file');
+      if (parsedPath && isFileTool) {
+        void openFileInEditor(parsedPath);
+        return;
+      }
+      if (isFileTool) {
+        setActiveTab('editor');
+      } else if (cmd.includes('capture_screen') || cmd.includes('inspect')) {
+        setActiveTab('preview');
+      } else if (cmd.includes('swarm') || cmd.includes('post_message') || cmd.includes('read_board')) {
+        setActiveTab('swarm');
+      } else {
+        setActiveTab('terminal');
+      }
+      window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
+    },
+    [openFileInEditor, setActiveTab]
+  );
+
+  const handleCopyMessage = useCallback((msgId: string, content: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedMsgId(msgId);
+    setTimeout(() => setCopiedMsgId(null), 1800);
+  }, []);
+
+  const handleBranchMessage = useCallback(
+    (msgId: string) => {
+      void branchFromMessage(msgId);
+    },
+    [branchFromMessage]
+  );
+
+  const handleRewindMessage = useCallback(
+    (msgId: string) => {
+      void rewindToMessage(msgId);
+    },
+    [rewindToMessage]
+  );
+
+  const handleOpenArtifact = useCallback(
+    (a: ArtifactRecord) => {
+      setActiveArtifactId(a.id);
+      setActiveArtifactDoc(
+        a.type === 'plan'
+          ? 'plan.md'
+          : a.type === 'walkthrough'
+          ? 'walkthrough.md'
+          : a.type === 'task'
+          ? 'task.md'
+          : a.id
+      );
+      setActiveTab('plan');
+    },
+    [setActiveArtifactId, setActiveArtifactDoc, setActiveTab]
+  );
 
   return (
     <div
@@ -1473,332 +1880,46 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
         )}
 
         {messages.map((msg, index) => {
-          const lastAssistantIdx = (() => {
-            for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant') return i;
-            return -1;
-          })();
           const isCurrentTurnMsg = activeTurn?.messageId
             ? msg.id === activeTurn.messageId
             : index === lastAssistantIdx && msg.role === 'assistant';
           const isCurrentlyGenerating = isCurrentTurnMsg && turnActive;
-          const thoughtDone = activeTurn?.thinkingFinished ?? isThinkingFinished;
-
-          const { thought: parsedThought, content } = parseMessageContent(
-            msg.content,
-            msg.thought,
-            isCurrentlyGenerating
-          );
-          const stepNotes = msg.stepNotes || [];
-
-          const activeThought = isCurrentlyGenerating
-            ? currentStreamingThought || parsedThought
-            : msg.thought || parsedThought;
-          const activeElapsedMs = isCurrentlyGenerating ? currentThoughtElapsedMs : msg.thoughtElapsedMs;
-          const activeTokens = isCurrentlyGenerating ? currentThoughtTokens : msg.thoughtTokenCount;
-          const isStreaming = isCurrentlyGenerating && !thoughtDone;
-
-          if (msg.role === 'user') {
-            return (
-              <div key={msg.id} className="w-full">
-                <div className="w-full bg-[#1C1D20] border border-[#2B2C30] rounded-2xl px-4 py-2.5 text-[14px] text-[#E8EAED] space-y-2 shadow-sm">
-                  {/* File & Image Attachments */}
-                  {((msg.images && msg.images.length > 0) || (msg.attachments && msg.attachments.length > 0)) && (
-                    <div className="flex flex-wrap items-center gap-2.5 overflow-x-auto pb-1">
-                      {/* Render images */}
-                      {msg.attachments
-                        ? msg.attachments
-                            .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')) || (a.savedPath && /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
-                            .map((att, i) => (
-                              <img
-                                key={i}
-                                src={att.url || att.base64DataUrl}
-                                alt={att.name || 'image'}
-                                className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34] shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
-                                onClick={() => att.url && window.open(att.url, '_blank')}
-                              />
-                            ))
-                        : msg.images?.map((img, i) => (
-                            <img
-                              key={i}
-                              src={img}
-                              alt="attachment"
-                              className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34]"
-                            />
-                          ))}
-
-                      {/* Render non-image files */}
-                      {msg.attachments
-                        ?.filter((a) => !a.isImage && (!a.type || !a.type.startsWith('image/')) && (!a.savedPath || !/\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
-                        .map((att, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-[#2E2E32] bg-[#141518] hover:border-[#3E4046] transition-colors max-w-sm select-none"
-                          >
-                            <FileCode2 className="w-5 h-5 text-sky-400 shrink-0" />
-                            <div className="min-w-0 text-left">
-                              <div className="text-[13px] font-medium text-[#E8EAED] truncate" title={att.name}>
-                                {att.name}
-                              </div>
-                              <div className="text-[11px] text-[#9AA0A6] flex items-center gap-1.5 font-mono">
-                                <span>{att.sizeHuman || (att.size ? `${Math.round(att.size / 1024)} KB` : 'file')}</span>
-                                {att.savedPath && (
-                                  <span className="text-emerald-400/80 truncate max-w-[140px]" title={att.savedPath}>
-                                    • {shortenPath(att.savedPath)}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                  <div className="whitespace-pre-wrap leading-[1.7]">{msg.content}</div>
-                </div>
-              </div>
-            );
-          }
-
-          const allTools = msg.toolCalls || [];
-          const toolCounts = msg.stepToolCounts || [];
-          const hasValidPartition = stepNotes.length > 0 && toolCounts.length === stepNotes.length;
-
-          const noteSegments: Array<{ tools: ToolCallItemData[]; note: string }> = [];
-          let trailingTools: ToolCallItemData[] = allTools;
-          if (stepNotes.length > 0) {
-            if (hasValidPartition) {
-              let cursor = 0;
-              for (let i = 0; i < stepNotes.length; i++) {
-                const end = Math.max(cursor, Math.min(allTools.length, toolCounts[i] ?? allTools.length));
-                noteSegments.push({ tools: allTools.slice(cursor, end), note: stepNotes[i] });
-                cursor = end;
-              }
-              trailingTools = allTools.slice(cursor);
-            } else {
-              noteSegments.push({ tools: allTools, note: stepNotes[0] });
-              for (let i = 1; i < stepNotes.length; i++) {
-                noteSegments.push({ tools: [], note: stepNotes[i] });
-              }
-              trailingTools = [];
-            }
-          }
-
-          const showThoughtInTrailing =
-            noteSegments.length === 0 ||
-            (isCurrentlyGenerating && isStreaming && trailingTools.length === 0);
-
-          const orchestratorPlan = extractOrchestratorPlan(activeThought || '');
-          const mcpImages = extractMcpImages(allTools, content || '', apiBaseUrl);
-          const askQuestions = extractAskQuestions(allTools);
+          const thoughtDone = isCurrentlyGenerating
+            ? (activeTurn?.thinkingFinished ?? isThinkingFinished)
+            : true;
+          const retryPrompt =
+            onQuickSend && index > 0 && messages[index - 1]?.role === 'user'
+              ? messages[index - 1].content
+              : undefined;
 
           return (
-            <div key={msg.id} className="space-y-3.5 px-1">
-              {noteSegments.map((seg, segIdx) => (
-                <React.Fragment key={`seg-${segIdx}`}>
-                  <StepTimeline
-                    thought={!showThoughtInTrailing && segIdx === 0 ? activeThought || '' : ''}
-                    thoughtElapsedMs={!showThoughtInTrailing && segIdx === 0 ? activeElapsedMs : undefined}
-                    thoughtTokens={!showThoughtInTrailing && segIdx === 0 ? activeTokens : undefined}
-                    thoughtStreaming={false}
-                    toolCalls={seg.tools}
-                    isActive={false}
-                    onOpenInWorkbench={handleOpenInWorkbench}
-                  />
-                  <AssistantMarkdownBlock
-                    markdown={seg.note}
-                    onOpenFile={openFileInEditor}
-                    onOpenSidecar={setActiveTab}
-                  />
-                </React.Fragment>
-              ))}
-
-              {/* Active or final work segment */}
-              <StepTimeline
-                thought={showThoughtInTrailing ? activeThought || '' : ''}
-                thoughtElapsedMs={showThoughtInTrailing ? activeElapsedMs : undefined}
-                thoughtTokens={showThoughtInTrailing ? activeTokens : undefined}
-                thoughtStreaming={showThoughtInTrailing ? isStreaming : false}
-                toolCalls={trailingTools}
-                isActive={isCurrentlyGenerating}
-                statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
-                onOpenInWorkbench={handleOpenInWorkbench}
-              />
-
-              {orchestratorPlan && (
-                <OrchestratorPlanCard
-                  plannerName={orchestratorPlan.plannerName}
-                  planBody={orchestratorPlan.planBody}
-                />
-              )}
-
-              {mcpImages.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
-                  {mcpImages.map((img, i) => (
-                    <div
-                      key={`${img.url}-${i}`}
-                      className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group"
-                    >
-                      <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
-                        <img
-                          src={img.url}
-                          alt={img.label}
-                          className="w-full max-h-80 object-contain bg-[#0c0d0e] cursor-pointer hover:opacity-95 transition-opacity"
-                        />
-                      </a>
-                      <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-[#9AA0A6] border-t border-[#242528]">
-                        <span className="inline-flex items-center gap-1.5 truncate">
-                          <ImageIcon className="w-3 h-3 text-[#8AB4F8] shrink-0" />
-                          <span className="truncate font-mono">{img.label}</span>
-                        </span>
-                        <a
-                          href={img.url}
-                          download={img.label}
-                          className="inline-flex items-center gap-1 text-[#8AB4F8] hover:underline shrink-0"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>Save</span>
-                        </a>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {askQuestions.length > 0 && onQuickSend && (
-                <AskQuestionCard
-                  questions={askQuestions}
-                  onSubmitAnswers={(ans) => onQuickSend(ans)}
-                />
-              )}
-
-              {/* Clean Final Markdown Assistant Output (+ <agent-embed> & Artifact Cards) */}
-              {content && (
-                <div className="space-y-3">
-                  <AssistantMarkdownBlock
-                    markdown={content}
-                    onOpenFile={openFileInEditor}
-                    onOpenSidecar={setActiveTab}
-                  />
-
-                  {artifacts
-                    .filter(
-                      (a) =>
-                        (a.userFacing || a.requestFeedback) &&
-                        (content.includes(a.id) ||
-                          (a.title && content.includes(a.title)) ||
-                          (a.filePath && content.includes(a.filePath)))
-                    )
-                    .map((a) => (
-                      <InlineArtifactCard
-                        key={a.id}
-                        artifact={a}
-                        onOpen={() => {
-                          setActiveArtifactId(a.id);
-                          setActiveArtifactDoc(
-                            a.type === 'plan'
-                              ? 'plan.md'
-                              : a.type === 'walkthrough'
-                              ? 'walkthrough.md'
-                              : a.type === 'task'
-                              ? 'task.md'
-                              : a.id
-                          );
-                          setActiveTab('plan');
-                        }}
-                      />
-                    ))}
-                </div>
-              )}
-
-              {/* LocalGravity Assistant Message Footer Bar */}
-              {!isCurrentlyGenerating && content && (
-                <div className="flex items-center justify-between pt-1 text-[11.5px] text-[#6E6E73] select-none group">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(content);
-                        setCopiedMsgId(msg.id);
-                        setTimeout(() => setCopiedMsgId(null), 1800);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
-                      title="Copy response"
-                    >
-                      {copiedMsgId === msg.id ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-400" />
-                          <span className="text-emerald-400">Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3" />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
-
-                    {onQuickSend && index > 0 && messages[index - 1]?.role === 'user' && (
-                      <button
-                        type="button"
-                        onClick={() => onQuickSend(messages[index - 1].content)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-[#E8EAED] transition-colors cursor-pointer"
-                        title="Retry / Regenerate response"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>Retry</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => void branchFromMessage(msg.id)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-violet-300 transition-colors cursor-pointer"
-                      title="Branch conversation from this turn (Session Tree)"
-                    >
-                      <GitBranch className="w-3 h-3" />
-                      <span>Branch</span>
-                    </button>
-
-                    {index < messages.length - 1 && (
-                      <button
-                        type="button"
-                        onClick={() => void rewindToMessage(msg.id)}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-[#1C1D20] text-[#80868B] hover:text-amber-300 transition-colors cursor-pointer"
-                        title="Rewind thread & revert file changes after this turn"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>Rewind</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-[#5F6368]">
-                    <span className="truncate max-w-[200px] sm:max-w-none">
-                      {msg.modelName ||
-                        (brainProvider === 'google_ai_studio'
-                          ? getGoogleModelOption(selectedGoogleModel).name
-                          : activeModelName
-                          ? `Swift 1.5 (${activeModelName})`
-                          : 'Swift 1.5 Flash-Next (Vision)')}
-                    </span>
-                    {Boolean(msg.outputTokens && msg.outputTokens > 0) && (
-                      <>
-                        <span>•</span>
-                        <span>{msg.outputTokens} tok</span>
-                      </>
-                    )}
-                    {Boolean((msg.tokensPerSec && msg.tokensPerSec > 0) || (isCurrentlyGenerating && tokensPerSec > 0)) && (
-                      <>
-                        <span>•</span>
-                        <span className="text-[#388BFD] font-semibold">
-                          {(isCurrentlyGenerating ? tokensPerSec : (msg.tokensPerSec || tokensPerSec)).toFixed(1)} tok/s
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-
-            </div>
+            <ChatMessageRow
+              key={msg.id}
+              msg={msg}
+              retryPrompt={retryPrompt}
+              canRewind={index < messages.length - 1}
+              isCurrentlyGenerating={isCurrentlyGenerating}
+              thoughtDone={thoughtDone}
+              streamingThought={isCurrentlyGenerating ? currentStreamingThought : ''}
+              streamingElapsedMs={isCurrentlyGenerating ? currentThoughtElapsedMs : undefined}
+              streamingTokens={isCurrentlyGenerating ? currentThoughtTokens : undefined}
+              turnStatusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
+              apiBaseUrl={apiBaseUrl}
+              artifacts={artifacts}
+              isCopied={copiedMsgId === msg.id}
+              brainProvider={brainProvider}
+              selectedGoogleModel={selectedGoogleModel}
+              activeModelName={activeModelName}
+              liveTokensPerSec={isCurrentlyGenerating ? tokensPerSec : 0}
+              onOpenFile={openFileInEditor}
+              onOpenSidecar={setActiveTab}
+              onOpenInWorkbench={handleOpenInWorkbench}
+              onQuickSend={onQuickSend}
+              onCopyMessage={handleCopyMessage}
+              onBranchMessage={handleBranchMessage}
+              onRewindMessage={handleRewindMessage}
+              onOpenArtifact={handleOpenArtifact}
+            />
           );
         })}
       </div>

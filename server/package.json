@@ -1,13 +1,15 @@
 {
   "name": "localgravity-fastify-daemon",
-  "version": "2.3.22",
+  "version": "2.3.23",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "test": "tsx src/selfTest.ts"
+    "test:unit": "tsc && node dist/tests/runAll.js",
+    "test:self": "tsx src/selfTest.ts",
+    "test": "npm run test:unit"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Image as ImageIcon,
-  X,
-  FileText,
   Zap,
   Square,
   Plus,
@@ -29,6 +27,7 @@ import {
   Wrench,
   ShieldCheck,
   Network,
+  Palette,
 } from 'lucide-react';
 import {
   useSessionStore,
@@ -43,6 +42,8 @@ import { useArtifactStore } from '../../store/useArtifactStore';
 import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { ModelTier, ThinkingBudget, GoogleThinkingLevel } from '../../types/protocol';
 import { MessageQueueList } from './MessageQueueList';
+import { ComfyStudioPopover } from './ComfyStudioPopover';
+import { AttachmentStrip } from './AttachmentStrip';
 
 interface PromptBarProps {
   onSend: (
@@ -206,6 +207,13 @@ export const ANTIGRAVITY_SLASH_COMMANDS: SlashCommandItem[] = [
     description: 'Reload skills, .localgravity/harness/, MCP configs, and permissions live without restarting',
     badge: 'Hot Reload',
     icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400 shrink-0" />,
+  },
+  {
+    command: '/comfy',
+    title: 'ComfyUI Studio Fast Turn',
+    description: 'Generate with 0-VRAM fast companion & selected workflow without GPU swap',
+    badge: 'Studio',
+    icon: <Palette className="w-3.5 h-3.5 text-fuchsia-400 shrink-0" />,
   },
   {
     command: '/clear',
@@ -705,51 +713,16 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       )}
 
       {/* Attached Files & Screenshots Tray */}
-      {attachments.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1.5 select-none scrollbar-thin">
-          {attachments.map((att, idx) => (
-            <div
-              key={idx}
-              className="relative group shrink-0 rounded-lg overflow-hidden border border-[#2E2E32] bg-[#1E1F23] flex items-center shadow-sm"
-            >
-              {att.isImage ? (
-                <div className="w-14 h-14 relative">
-                  <img src={att.base64DataUrl} alt={att.name} className="w-full h-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachments(attachments.filter((_, i) => i !== idx));
-                      setImages(images.filter((img) => img !== att.base64DataUrl));
-                    }}
-                    className="absolute top-1 right-1 p-0.5 rounded-full bg-black/80 hover:bg-rose-600 text-white transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 px-3 py-2 pr-7 max-w-[220px]">
-                  <FileText className="w-4 h-4 text-sky-400 shrink-0" />
-                  <div className="min-w-0 text-left">
-                    <div className="text-[12px] font-medium text-[#E8EAED] truncate" title={att.name}>
-                      {att.name}
-                    </div>
-                    <div className="text-[10px] text-[#9AA0A6]">
-                      {att.sizeHuman || formatFileSize(att.size)}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAttachments(attachments.filter((_, i) => i !== idx))}
-                    className="absolute top-2 right-1.5 p-0.5 rounded-full bg-transparent hover:bg-[#3C4044] text-[#9AA0A6] hover:text-white transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <AttachmentStrip
+        attachments={attachments}
+        formatFileSize={formatFileSize}
+        onRemoveAttachment={(idx, base64DataUrl) => {
+          setAttachments(attachments.filter((_, i) => i !== idx));
+          if (base64DataUrl) {
+            setImages(images.filter((img) => img !== base64DataUrl));
+          }
+        }}
+      />
 
       {/* Multi-line Prompt Input */}
       <textarea
@@ -919,6 +892,14 @@ export const PromptBar: React.FC<PromptBarProps> = ({
               </div>
             )}
           </div>
+
+          <ComfyStudioPopover
+            onCloseOtherMenus={() => {
+              setShowModelMenu(false);
+              setShowBudgetMenu(false);
+              setShowAttachMenu(false);
+            }}
+          />
 
           {/* Thinking Effort Dropdown (hidden for Google and Strata Orchestrators; shown with valid levels for single models) */}
           {!((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low'))) && (() => {

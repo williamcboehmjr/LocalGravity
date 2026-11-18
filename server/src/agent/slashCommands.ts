@@ -11,7 +11,7 @@ export interface SlashCommandParseResult {
 }
 
 const KNOWN_SLASH_COMMANDS =
-  'goal|plan|boost|grill-me|teamwork|restart|browser|learn|schedule|vision|swarm|lean|reload';
+  'goal|plan|boost|grill-me|teamwork|restart|browser|learn|schedule|vision|swarm|lean|reload|comfy';
 
 export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandParseResult {
   const trimmed = rawPrompt.trim();
@@ -195,6 +195,18 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         maxToolSteps: 5,
         maxAutoContinues: 0,
         subagentRole: 'Harness Reloader',
+      };
+    case 'comfy':
+      return {
+        command: '/comfy',
+        cleanPrompt: body || 'Generate an image using the active ComfyUI Studio workflow.',
+        modeDirective:
+          '=== SLASH COMMAND ACTIVE: /comfy (FAST COMFYUI STUDIO MODE) ===\n' +
+          'You are in lean 1-tool ComfyUI Studio mode. Immediately call the `comfyui` tool with the requested prompt (and active studio workflow unless overridden). Keep prose concise and include the generated markdown image link(s).',
+        maxToolSteps: 8,
+        maxAutoContinues: 2,
+        forceThinkingBudget: 'off',
+        subagentRole: 'ComfyUI Studio',
       };
     default:
       return {

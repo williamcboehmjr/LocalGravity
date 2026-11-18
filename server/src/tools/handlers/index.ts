@@ -1,6 +1,4 @@
-// Builtin tool registry: maps toolName -> migrated handler.
-// The executor's executeTool() checks this map first (Strangler-Fig); unmigrated
-// tools still fall through to the legacy switch until each is moved here.
+// Complete builtin tool handler registry (Strangler-Fig migration finished).
 
 import type { BuiltinToolHandler } from './types.js';
 
@@ -18,8 +16,18 @@ import * as comfyui from './comfyui.js';
 import * as runCodeBatch from './runCodeBatch.js';
 import * as reloadHarness from './reloadHarness.js';
 import { swarmTool, postMessageTool, readBoardTool, swarmWaitTool } from './swarmTools.js';
+import { FS_TOOL_HANDLERS } from './fsTools.js';
+import { SEARCH_TOOL_HANDLERS } from './searchTools.js';
+import { WEB_TOOL_HANDLERS } from './webTools.js';
+import { SYSTEM_TOOL_HANDLERS } from './systemTools.js';
+import { VISION_TOOL_HANDLERS } from './visionTools.js';
 
 export const HANDLER_REGISTRY: Record<string, BuiltinToolHandler> = {
+  ...FS_TOOL_HANDLERS,
+  ...SEARCH_TOOL_HANDLERS,
+  ...WEB_TOOL_HANDLERS,
+  ...SYSTEM_TOOL_HANDLERS,
+  ...VISION_TOOL_HANDLERS,
   [restartBrain.name]: restartBrain.execute,
   [readSystemLogs.name]: readSystemLogs.execute,
   [listSkills.name]: listSkills.execute,

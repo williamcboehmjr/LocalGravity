@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { GitCompare, RotateCcw, CheckCircle2, FileCode2 } from 'lucide-react';
 import { useArtifactStore, FileCheckpointItem } from '../../store/useArtifactStore';
 import { useSessionStore } from '../../store/useSessionStore';
-import { MonacoDiffViewer } from '../center-canvas/MonacoDiffViewer';
+
+const MonacoDiffViewer = React.lazy(() =>
+  import('../center-canvas/MonacoDiffViewer').then((m) => ({ default: m.MonacoDiffViewer }))
+);
 
 /** Review / Files Changed tab using checkpoints + inline MonacoDiffViewer + 1-click revert. */
 export const ChangesTab: React.FC = () => {
@@ -126,12 +129,20 @@ export const ChangesTab: React.FC = () => {
           </div>
 
           {selected && (
-            <MonacoDiffViewer
-              originalContent={selected.previous_content_blob ?? ''}
-              modifiedContent={selected.new_content_blob}
-              filePath={selected.file_path}
-              onReject={() => handleRevert(selected)}
-            />
+            <Suspense
+              fallback={
+                <div className="p-4 rounded-lg border border-[#26272B] bg-[#17181B] text-xs text-[#9AA0A6]">
+                  Loading diff viewer...
+                </div>
+              }
+            >
+              <MonacoDiffViewer
+                originalContent={selected.previous_content_blob ?? ''}
+                modifiedContent={selected.new_content_blob}
+                filePath={selected.file_path}
+                onReject={() => handleRevert(selected)}
+              />
+            </Suspense>
           )}
         </div>
       )}

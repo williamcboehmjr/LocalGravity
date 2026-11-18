@@ -1,5 +1,4 @@
 // Handler contract for the builtin tool registry (Strangler-Fig refactor of BuiltinToolExecutor).
-// Each migrated case becomes a standalone module exporting { name, execute }.
 
 import type { LocalGravityDB, FileCheckpointRecord } from '../../db/database.js';
 import type { SharedTerminalManager } from '../../terminal/terminalManager.js';
@@ -7,9 +6,8 @@ import type { McpClientManager } from '../../mcp/mcpManager.js';
 import type { SkillManager } from '../../skills/skillManager.js';
 import type { AttachmentManager } from '../../files/attachmentManager.js';
 import type { PermissionEngine } from '../permissionEngine.js';
+import type { LspDiagnosticsManager } from '../lspManager.js';
 
-// Re-declared here to avoid a circular import with builtinTools.ts. These structural
-// types must stay in sync with the originals exported from ../builtinTools.js.
 export interface ToolExecutionContext {
   threadId: string;
   messageId: string;
@@ -32,8 +30,6 @@ export interface BuiltinToolResult {
   screenshotBase64?: string;
 }
 
-// The executor surface handed to every handler. Handlers call back into the shared
-// instance for helpers (resolveSafePath), recursion (executeTool), and manager deps.
 export interface ToolExec {
   db: LocalGravityDB;
   terminal: SharedTerminalManager;
@@ -41,6 +37,7 @@ export interface ToolExec {
   skills?: SkillManager;
   attachmentManager?: AttachmentManager;
   permissions?: PermissionEngine;
+  lsp?: LspDiagnosticsManager;
 
   resolveSafePath(workspaceRoot: string, inputPath?: string): string;
   executeTool(
@@ -53,5 +50,13 @@ export interface ToolExec {
 export type BuiltinToolHandler = (
   args: Record<string, any>,
   ctx: ToolExecutionContext,
-  exec: ToolExec,
+  exec: ToolExec
 ) => Promise<BuiltinToolResult>;
+
+export function truncateSafeOutput(output: string, maxChars = 16000): string {
+  if (!output || output.length <= maxChars) return output;
+  const headChars = Math.floor(maxChars * 0.7);
+  const tailChars = maxChars - headChars;
+  const omitted = output.length - (headChars + tailChars);
+  return `${output.slice(0, headChars)}\n\n... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context window] ...\n\n${output.slice(-tailChars)}`;
+}

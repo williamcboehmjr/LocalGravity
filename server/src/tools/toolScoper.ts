@@ -47,6 +47,7 @@ export interface SelectScopedToolsOptions {
   prompt: string;
   slashCommand?: string | null;
   forceLean?: boolean;
+  forceComfyStudio?: boolean;
   builtinTools: any[];
   skillTools: any[];
   mcpTools: any[];
@@ -77,6 +78,14 @@ export function selectScopedTools(opts: SelectScopedToolsOptions): any[] {
   const previouslyUsed = new Set<string>(opts.previouslyUsedTools || []);
 
   const allBuiltinAndSkill = [...opts.builtinTools, ...opts.skillTools];
+
+  // Ultra-lean single-tool mode for ComfyUI Studio turns
+  if (opts.forceComfyStudio || slashCommand === '/comfy') {
+    const comfyOnly = opts.builtinTools.filter((t) => getToolName(t) === 'comfyui');
+    if (comfyOnly.length > 0) {
+      return comfyOnly;
+    }
+  }
 
   if (opts.forceLean || slashCommand === '/lean') {
     const allowed = new Set<string>(PI_CORE_TOOL_NAMES);
@@ -143,11 +152,20 @@ export function selectScopedTools(opts: SelectScopedToolsOptions): any[] {
   }
 
   const scopedBuiltin = allBuiltinAndSkill.filter((t) => allowed.has(getToolName(t)));
+  const hasNativeComfy = scopedBuiltin.some((t) => getToolName(t) === 'comfyui');
+  const explicitComfyMcpMention = /\bcomfy[-_]mcp\b|@comfy/i.test(prompt);
+  const filteredMcp = hasNativeComfy && !explicitComfyMcpMention
+    ? opts.mcpTools.filter((t) => {
+        const n = getToolName(t).toLowerCase();
+        return !(n.includes('comfy') && /(run_workflow|generate_image|run_template)$/.test(n));
+      })
+    : opts.mcpTools;
+
   return dedupeSchemasByName([
     ...scopedBuiltin,
     ...opts.skillTools,
     ...(opts.swarmTools || []),
-    ...opts.mcpTools,
+    ...filteredMcp,
   ]);
 }
 

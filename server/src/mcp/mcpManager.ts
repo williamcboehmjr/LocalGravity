@@ -459,6 +459,7 @@ export class McpClientManager {
     if (needsGpuHandoff) {
       const effectiveArgs = { ...toolArgs, wait: true };
       const sidecar = LlamaMoESidecar.getInstance();
+      const prevProfile = sidecar.getActiveProfile();
       const wasStrataActive = await sidecar.isHealthy();
       let isGoogleProvider = false;
       try {
@@ -468,7 +469,7 @@ export class McpClientManager {
           isGoogleProvider = parsed?.provider === 'google_ai_studio';
         }
       } catch {}
-      if (wasStrataActive || !isGoogleProvider) {
+      if (wasStrataActive) {
         await sidecar.offloadFromGpu('comfy_mcp');
       }
       try {
@@ -487,8 +488,8 @@ export class McpClientManager {
             signal: AbortSignal.timeout(5000),
           });
         } catch {}
-        if (!isGoogleProvider || wasStrataActive) {
-          await sidecar.ensureRunning('swift-1.5-iq2_xs');
+        if (!isGoogleProvider && wasStrataActive) {
+          await sidecar.ensureRunning(prevProfile);
         }
       }
     }

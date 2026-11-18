@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import {
   ListTodo,
   PanelLeft,
@@ -25,25 +25,16 @@ import {
   QueuedMessage,
   selectIsTurnActive,
   selectStatusLabel,
-  isPhaseProtocolActive,
-  resetTurnProtocolState,
-  applyDpiScaleToDom,
   getGoogleModelOption,
-  getSavedLastLocation,
 } from './store/useSessionStore';
 import { useArtifactStore } from './store/useArtifactStore';
-import { useTelemetryStore } from './store/useTelemetryStore';
 import { SessionList } from './components/left-rail/SessionList';
 import { SkillsDrawer } from './components/left-rail/SkillsDrawer';
 import { NodeStatusBadge } from './components/left-rail/NodeStatusBadge';
 import { ReconnectBadge } from './components/ReconnectBadge';
-import { SettingsModal } from './components/left-rail/SettingsModal';
 import { MobileRemoteModal } from './components/left-rail/MobileRemoteModal';
-import { AutomationsModal } from './components/left-rail/AutomationsModal';
 import { ChatFeed } from './components/center-canvas/ChatFeed';
 import { PromptBar } from './components/center-canvas/PromptBar';
-import { WorkbenchEditor } from './components/right-canvas/WorkbenchEditor';
-import { IntegratedTerminal } from './components/right-canvas/IntegratedTerminal';
 import { VisionPreviewTab } from './components/right-canvas/VisionPreviewTab';
 import { HarnessWorkbenchTab } from './components/right-canvas/HarnessWorkbenchTab';
 import { TaskChecklist } from './components/right-canvas/TaskChecklist';
@@ -59,18 +50,21 @@ import { ModelTier, ThinkingBudget } from './types/protocol';
 import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
 import { checkForAppUpdates, UpdateInfo } from './services/updaterService';
 import { DpiScaleControl } from './components/center-canvas/DpiScaleControl';
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
+import { useBrainSocket, getOrCreateEdgeClientId } from './hooks/useBrainSocket';
 
-const getOrCreateEdgeClientId = (): string => {
-  try {
-    const existing = localStorage.getItem('lg_edge_client_id');
-    if (existing) return existing;
-    const created = `edge-${crypto.randomUUID()}`;
-    localStorage.setItem('lg_edge_client_id', created);
-    return created;
-  } catch {
-    return `edge-${Date.now()}`;
-  }
-};
+const SettingsModal = React.lazy(() =>
+  import('./components/left-rail/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+);
+const AutomationsModal = React.lazy(() =>
+  import('./components/left-rail/AutomationsModal').then((m) => ({ default: m.AutomationsModal }))
+);
+const WorkbenchEditor = React.lazy(() =>
+  import('./components/right-canvas/WorkbenchEditor').then((m) => ({ default: m.WorkbenchEditor }))
+);
+const IntegratedTerminal = React.lazy(() =>
+  import('./components/right-canvas/IntegratedTerminal').then((m) => ({ default: m.IntegratedTerminal }))
+);
 
 export const App: React.FC = () => {
   const {
@@ -84,39 +78,26 @@ export const App: React.FC = () => {
     brainPort,
     isConnected,
     setBrainConnection,
-    setIsConnected,
     selectedTier,
-    setSelectedTier,
     thinkingBudget,
     messages,
     addMessage,
     updateLastAssistantMessage,
-    updateLastAssistantTool,
     finalizeAssistantMessage,
-    commitAssistantStepNote,
-    upsertSubagentTask,
     appendStreamingThought,
     isGenerating,
     activeTurn,
-    setIsGenerating,
-    applyTurnPhase,
     startPendingTurn,
-    applyLegacyTurnStart,
-    applyLegacyTurnEnd,
     syncGenerating,
     setSwarmState,
-    applySwarmEvent,
-    setBackgroundTasks,
     subagentTasks,
     backgroundTasks,
     setSelectedSubagentId,
-    setModelState,
     autoNameSessionFromPrompt,
     messageQueue,
     enqueueMessage,
     dequeueMessage,
     removeQueuedMessage,
-    setProjects,
     setThreads,
     hydrateMessagesFromServer,
     clearMessages,
@@ -134,19 +115,9 @@ export const App: React.FC = () => {
   const {
     activeTab,
     setActiveTab,
-    setTaskMarkdown,
-    setPlanMarkdown,
-    setWalkthroughMarkdown,
-    setActiveArtifactDoc,
-    setActiveArtifactId,
-    upsertArtifact,
-    setArtifacts,
     parsedTasks,
     setCheckpoints,
-    setLatestVisionCapture,
   } = useArtifactStore();
-
-  const { setTelemetry, setMcpServers } = useTelemetryStore();
 
   const [leftRailWidth, setLeftRailWidth] = useState(250);
   const [rightDrawerWidth, setRightDrawerWidth] = useState(340);
@@ -200,26 +171,6 @@ export const App: React.FC = () => {
   const [showSkillsDrawer, setShowSkillsDrawer] = useState(false);
   const [isActivityBarExpanded, setIsActivityBarExpanded] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'workbench' | 'tasks'>('chat');
-  const [reconnectCountdown, setReconnectCountdown] = useState<number>(0);
-  const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
-  const [reconnectKey, setReconnectKey] = useState<number>(0);
-
-  // LocalGravity 6-Pillar Live Sync State
-  const [timerCountdown, setTimerCountdown] = useState<number>(0);
-  const [timerTotal, setTimerTotal] = useState<number>(0);
-  const [timerLabel, setTimerLabel] = useState<string>('Timer');
-  const [lastCompaction, setLastCompaction] = useState<{
-    previousTokens: number;
-    compactedTokens: number;
-  } | null>(null);
-  const [adaptiveCotLabel, setAdaptiveCotLabel] = useState<string>('');
-
-
-
-  const handleManualReconnect = useCallback(() => {
-    setReconnectCountdown(0);
-    setReconnectKey((k) => k + 1);
-  }, []);
 
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
@@ -238,30 +189,10 @@ export const App: React.FC = () => {
   }, []);
 
   // Global Keyboard Shortcuts for DPI / UI Zoom (+, -, 0)
-  useEffect(() => {
-    applyDpiScaleToDom(dpiScale);
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === '=' || e.key === '+') {
-          e.preventDefault();
-          zoomIn();
-        } else if (e.key === '-') {
-          e.preventDefault();
-          zoomOut();
-        } else if (e.key === '0') {
-          e.preventDefault();
-          resetZoom();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [dpiScale, zoomIn, zoomOut, resetZoom]);
+  useGlobalShortcuts({ dpiScale, zoomIn, zoomOut, resetZoom });
 
   const isTurnActive = selectIsTurnActive({ activeTurn, isGenerating });
   const activeStatusLabel = selectStatusLabel({ activeTurn });
-  const wsRef = useRef<WebSocket | null>(null);
   const pendingInterruptRef = useRef<QueuedMessage | null>(null);
 
   // Initialize decoupled OS AppData state when running inside Tauri Desktop
@@ -295,684 +226,24 @@ export const App: React.FC = () => {
       .catch(() => {});
   }, []);
 
-  // Connect and multiplex state over `/ws/sync` (depends strictly on hostUrl)
-  useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: any = null;
-    let isDisposed = false;
-
-    const effectiveHost = hostUrl;
-
-    const connect = () => {
-      if (isDisposed) return;
-
-      try {
-        const cleanHost = effectiveHost.replace(/^http/, 'ws').replace('localhost', '127.0.0.1');
-        const url = `${cleanHost}/ws/sync`;
-        ws = new WebSocket(url);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (isDisposed) {
-            try {
-              ws?.close();
-            } catch {}
-            return;
-          }
-          setIsConnected(true);
-          setReconnectAttempt(0);
-          setReconnectCountdown(0);
-          // Register this Tauri desktop host with Central Brain for Remote Host Bridge execution
-          if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-            import('@tauri-apps/api/core')
-              .then(({ invoke }) => invoke<{ hostname: string; platform: string; home_dir: string }>('get_edge_identity'))
-              .then((identity) => {
-                useSessionStore.getState().setLocalHostName(identity.hostname);
-                if (!isDisposed && ws && ws.readyState === WebSocket.OPEN) {
-                  ws.send(
-                    JSON.stringify({
-                      type: 'EDGE_REGISTER',
-                      payload: {
-                        client_id: getOrCreateEdgeClientId(),
-                        hostname: identity.hostname,
-                        platform: identity.platform,
-                        home_dir: identity.home_dir,
-                      },
-                    })
-                  );
-                }
-              })
-              .catch(() => {});
-          }
-          // Note: The server automatically sends full initial SYNC_STATE on `/ws/sync` connect.
-          // Do not send fake placeholder IDs (`thread-default`) which would overwrite server state.
-        };
-
-        ws.onclose = () => {
-          if (isDisposed) return;
-          setIsConnected(false);
-          setReconnectAttempt((prev) => prev + 1);
-          setReconnectCountdown(3);
-          if ((brainHost === '127.0.0.1' || brainHost === 'localhost') && brainPort !== '3390') {
-            fetch('http://127.0.0.1:3390/health', { signal: AbortSignal.timeout(1200) })
-              .then((r) => {
-                if (!isDisposed && r.ok) setBrainConnection('127.0.0.1', '3390');
-              })
-              .catch(() => {});
-          }
-        };
-
-        ws.onerror = () => {
-          if (isDisposed) return;
-          setIsConnected(false);
-        };
-
-        ws.onmessage = (event) => {
-          if (isDisposed) return;
-          try {
-            const data = JSON.parse(event.data);
-            const { type, payload } = data;
-            const store = useSessionStore.getState();
-            const activeThreadId = store.sessionId;
-            const evtThreadId: string | undefined =
-              payload?.thread_id || payload?.threadId || payload?.session_id;
-            const isForActiveThread = !evtThreadId || evtThreadId === activeThreadId;
-            const evtTurnId: string | undefined = payload?.turn_id || payload?.turnId;
-            const evtMessageId: string | undefined = payload?.message_id || payload?.messageId;
-            const curTurn = store.activeTurn;
-            const isStaleTurnEvent = Boolean(
-              (evtTurnId &&
-                curTurn?.turnId &&
-                !curTurn.turnId.startsWith('pending-') &&
-                curTurn.turnId !== evtTurnId) ||
-                (evtMessageId &&
-                  curTurn?.isActive &&
-                  curTurn.messageId &&
-                  curTurn.messageId !== evtMessageId)
-            );
-
-            if (type === 'EDGE_TOOL_REQUEST') {
-              const reqId = payload?.request_id;
-              const toolName = payload?.tool_name;
-              const toolArgs = payload?.args || {};
-              const wsRoot = payload?.workspace_root || useSessionStore.getState().workspacePath || '.';
-              if (reqId && toolName && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-                import('@tauri-apps/api/core')
-                  .then(({ invoke }) =>
-                    invoke<{ stdout: string; stderr: string; exit_code: number; duration_ms: number }>(
-                      'execute_edge_tool',
-                      {
-                        toolName,
-                        args: toolArgs,
-                        workspaceRoot: wsRoot,
-                      }
-                    )
-                  )
-                  .then((res) => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(
-                        JSON.stringify({
-                          type: 'EDGE_TOOL_RESULT',
-                          payload: {
-                            request_id: reqId,
-                            stdout: res.stdout,
-                            stderr: res.stderr,
-                            exit_code: res.exit_code,
-                            duration_ms: res.duration_ms,
-                          },
-                        })
-                      );
-                    }
-                  })
-                  .catch((err) => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(
-                        JSON.stringify({
-                          type: 'EDGE_TOOL_RESULT',
-                          payload: {
-                            request_id: reqId,
-                            stdout: '',
-                            stderr: `Tauri edge tool error: ${err?.message || String(err)}`,
-                            exit_code: 1,
-                            duration_ms: 0,
-                          },
-                        })
-                      );
-                    }
-                  });
-              }
-              return;
-            }
-
-            if (type === 'EDGE_HOSTS_UPDATE') {
-              useSessionStore.getState().setHostPresence(payload?.brainHost, payload?.edgeHosts);
-              return;
-            }
-
-            if (type === 'PROJECT_DELETED' && payload?.projectId) {
-              const store = useSessionStore.getState();
-              const remaining = store.projects.filter((p) => p.id !== payload.projectId);
-              const nextActive =
-                store.activeProjectId === payload.projectId
-                  ? (remaining[0]?.id ?? undefined)
-                  : store.activeProjectId ?? undefined;
-              store.setProjects(remaining, nextActive);
-              return;
-            }
-
-            if (type === 'SYNC_STATE') {
-              if (payload.brainHost || payload.edgeHosts) {
-                useSessionStore.getState().setHostPresence(payload.brainHost, payload.edgeHosts);
-              }
-              const savedLoc = getSavedLastLocation();
-              const inMemProjectId =
-                store.activeProjectId && store.activeProjectId !== 'proj-default'
-                  ? store.activeProjectId
-                  : null;
-              const preferredProjectId =
-                (inMemProjectId && payload.projects?.some((p: any) => p.id === inMemProjectId)
-                  ? inMemProjectId
-                  : null) ||
-                (savedLoc.projectId && payload.projects?.some((p: any) => p.id === savedLoc.projectId)
-                  ? savedLoc.projectId
-                  : null) ||
-                payload.activeProject?.id;
-
-              const inMemThreadId =
-                store.sessionId && store.sessionId !== 'thread-default' ? store.sessionId : null;
-              const preferredThreadId = inMemThreadId || savedLoc.threadId || payload.activeThreadId;
-
-              const switchedToSavedProject = Boolean(
-                preferredProjectId &&
-                  payload.activeProject?.id &&
-                  preferredProjectId !== payload.activeProject.id
-              );
-
-              if (payload.projects?.length > 0) {
-                setProjects(payload.projects, preferredProjectId);
-              }
-
-              if (switchedToSavedProject && preferredProjectId) {
-                const base = useSessionStore.getState().apiBaseUrl;
-                fetch(`${base}/api/threads?project_id=${encodeURIComponent(preferredProjectId)}`)
-                  .then((r) => (r.ok ? r.json() : null))
-                  .then((projData) => {
-                    const list = projData?.threads || [];
-                    const targetTid =
-                      (preferredThreadId && list.some((t: any) => t.id === preferredThreadId)
-                        ? preferredThreadId
-                        : list[0]?.id) || '';
-                    if (list.length > 0) {
-                      setThreads(list, targetTid);
-                    }
-                    if (targetTid) {
-                      handleSelectThread(targetTid, { keepMobileDrawer: true });
-                    }
-                  })
-                  .catch(() => {});
-              } else {
-                const resolvedPreferredThread =
-                  (preferredThreadId &&
-                  Array.isArray(payload.threads) &&
-                  payload.threads.some((t: any) => t.id === preferredThreadId)
-                    ? preferredThreadId
-                    : payload.activeThreadId) || undefined;
-
-                if (payload.threads) {
-                  setThreads(payload.threads, resolvedPreferredThread);
-                }
-
-                if (resolvedPreferredThread && resolvedPreferredThread !== payload.activeThreadId) {
-                  handleSelectThread(resolvedPreferredThread, { keepMobileDrawer: true });
-                } else {
-                  const resolvedThreadId = useSessionStore.getState().sessionId;
-                  const activeThreadObj = Array.isArray(payload.threads)
-                    ? payload.threads.find((t: any) => t.id === resolvedThreadId)
-                    : null;
-                  const matchingStreams = Array.isArray(payload.activeStreams)
-                    ? payload.activeStreams.filter(
-                        (s: any) => !s?.thread_id || s.thread_id === resolvedThreadId
-                      )
-                    : [];
-                  if (payload.messages) {
-                    hydrateMessagesFromServer(
-                      payload.messages,
-                      matchingStreams,
-                      activeThreadObj?.status,
-                      payload.activeTurn
-                    );
-                  }
-                  const isServerThreadBusy =
-                    activeThreadObj?.status === 'thinking' || activeThreadObj?.status === 'executing_tool';
-                  const hasActiveStream = matchingStreams.length > 0 || isServerThreadBusy;
-                  if (
-                    payload.activeTurn &&
-                    (!payload.activeTurn.thread_id || payload.activeTurn.thread_id === resolvedThreadId)
-                  ) {
-                    applyTurnPhase(payload.activeTurn);
-                    if (!payload.activeTurn.is_active) setAdaptiveCotLabel('');
-                  } else {
-                    syncGenerating(hasActiveStream);
-                    if (!hasActiveStream) setAdaptiveCotLabel('');
-                  }
-                }
-              }
-              if (payload.checkpoints) {
-                setCheckpoints(payload.checkpoints);
-              }
-              if (Array.isArray(payload.artifacts)) {
-                setArtifacts(payload.artifacts);
-              }
-              if (payload.mcpServers) {
-                setMcpServers(payload.mcpServers);
-              }
-              if (payload.brainProvider) {
-                useSessionStore.getState().setBrainProviderState(payload.brainProvider);
-              }
-              if (Array.isArray(payload.backgroundTasks)) {
-                setBackgroundTasks(payload.backgroundTasks);
-              }
-              if (payload.swarm !== undefined) {
-                setSwarmState(payload.swarm || null);
-              } else {
-                setSwarmState(null);
-              }
-              if (payload.tabby || payload.telemetry) {
-                setTelemetry({
-                  vramUsedGb: payload.telemetry?.vramUsedGb ?? 14.8,
-                  vramTotalGb: payload.telemetry?.vramTotalGb ?? 16.0,
-                  vramPercent: payload.telemetry?.vramPercent ?? 92,
-                  hostRamUsedGb: payload.telemetry?.hostRamUsedGb ?? 24.0,
-                  hostRamTotalGb: payload.telemetry?.hostRamTotalGb ?? 128.0,
-                  hostRamPercent: payload.telemetry?.hostRamPercent ?? 19,
-                  gpuUtilization: payload.telemetry?.gpuUtilization ?? 12,
-                  cpuUtilization: payload.telemetry?.cpuUtilization ?? 8,
-                  activeTier: payload.tabby?.activeTier || 'high',
-                  activeModel: payload.tabby?.activeModel || 'qwen3.8-flash-next-iq3_s',
-                  tokensPerSec: payload.tabby?.tokensPerSec ?? 74.2,
-                  lastSwapDurationMs: payload.tabby?.lastSwapDurationMs ?? 840,
-                  sysramCache: payload.tabby?.sysramCache,
-                  daemonPort: payload.ports?.daemonPort ?? 3390,
-                  tabbyPort: payload.ports?.tabbyPort ?? 8080,
-                  lanUrl: payload.ports?.lanUrl ?? window.location.origin,
-                });
-              }
-            } else if (type === 'BRAIN_PROVIDER_UPDATED') {
-              useSessionStore.getState().setBrainProviderState(payload || {});
-            } else if (type === 'MODEL_STATE') {
-              setModelState(payload.status, payload.active_model, payload.status_text);
-              if (payload.active_tier) setSelectedTier(payload.active_tier);
-              setTelemetry({
-                activeTier: payload.active_tier,
-                activeModel: payload.active_model,
-                ...(payload.tokens_per_sec ? { tokensPerSec: payload.tokens_per_sec } : {}),
-                ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
-                ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
-              });
-            } else if (type === 'TURN_PHASE') {
-              applyTurnPhase(payload);
-              if (isForActiveThread && !payload?.is_active) {
-                setAdaptiveCotLabel('');
-              }
-            } else if (type === 'TURN_STARTED') {
-              if (!isForActiveThread) {
-                store.setThreadStatus(evtThreadId!, 'thinking');
-                return;
-              }
-              applyLegacyTurnStart(payload);
-            } else if (type === 'THOUGHT_STREAM') {
-              if (!isForActiveThread) {
-                store.setThreadStatus(evtThreadId!, 'thinking');
-                return;
-              }
-              if (isStaleTurnEvent) return;
-              if (!isPhaseProtocolActive()) setIsGenerating(true);
-              if (payload.tokens_per_sec) {
-                setTelemetry({ tokensPerSec: payload.tokens_per_sec });
-              }
-              appendStreamingThought(
-                payload.chunk,
-                payload.elapsed_ms,
-                payload.token_count,
-                payload.is_finished
-              );
-            } else if (type === 'TOKEN_STREAM') {
-              if (!isForActiveThread) return;
-              if (isStaleTurnEvent) return;
-              if (payload.tokens_per_sec) {
-                setTelemetry({ tokensPerSec: payload.tokens_per_sec });
-              }
-              if (payload.chunk) {
-                updateLastAssistantMessage(
-                  payload.chunk,
-                  payload.output_tokens,
-                  payload.tokens_per_sec,
-                  payload.message_id
-                );
-              }
-              if (payload.is_finished) {
-                finalizeAssistantMessage(payload.message_id);
-                if (!isPhaseProtocolActive()) {
-                  setIsGenerating(false);
-                }
-                setAdaptiveCotLabel('');
-              } else if (!isPhaseProtocolActive()) {
-                setIsGenerating(true);
-              }
-            } else if (type === 'TURN_COMPLETED' || type === 'TURN_ABORTED' || type === 'TURN_ERROR') {
-              const phase =
-                type === 'TURN_ABORTED' ? 'aborted' : type === 'TURN_ERROR' ? 'error' : 'completed';
-              if (!isForActiveThread) {
-                store.setThreadStatus(evtThreadId!, phase === 'error' ? 'error' : 'idle');
-                return;
-              }
-              applyLegacyTurnEnd(payload, phase);
-              if (!isStaleTurnEvent) setAdaptiveCotLabel('');
-            } else if (type === 'STEP_NOTE_COMMITTED') {
-              if (!isForActiveThread || isStaleTurnEvent) return;
-              if (!isPhaseProtocolActive()) setIsGenerating(true);
-              commitAssistantStepNote(payload.note, payload.committed_content, payload.message_id);
-            } else if (type === 'SUBAGENT_EVENT') {
-              if (!isForActiveThread) return;
-              if (!isPhaseProtocolActive()) {
-                if (payload?.status === 'running') {
-                  setIsGenerating(true);
-                } else if (payload?.status === 'completed' || payload?.status === 'error') {
-                  if (!store.activeTurn?.isActive) setIsGenerating(false);
-                }
-              }
-              upsertSubagentTask(payload);
-            } else if (type === 'TOOL_EVENT') {
-              if (!isForActiveThread) {
-                store.setThreadStatus(
-                  evtThreadId!,
-                  payload?.status === 'running' ? 'executing_tool' : 'thinking'
-                );
-                return;
-              }
-              if (isStaleTurnEvent) return;
-              if (!isPhaseProtocolActive() && payload?.status === 'running') {
-                setIsGenerating(true);
-              }
-              updateLastAssistantTool(payload.command, payload.output, payload.status, {
-                id: payload.tool_execution_id,
-                toolName: payload.tool_name,
-                durationMs: payload.duration_ms,
-                exitCode: payload.exit_code,
-                messageId: payload.message_id,
-              });
-            } else if (type === 'TOOL_STREAM') {
-              if (!isForActiveThread || isStaleTurnEvent) return;
-              if (!isPhaseProtocolActive()) setIsGenerating(true);
-              if (payload?.chunk) {
-                updateLastAssistantTool(
-                  payload.tool_name || '',
-                  payload.chunk,
-                  'running',
-                  {
-                    id: payload.tool_execution_id,
-                    appendOutput: true,
-                    messageId: payload.message_id,
-                  }
-                );
-              }
-            } else if (type === 'CHECKPOINT_CREATED') {
-              if (!isForActiveThread) return;
-              if (payload.checkpoint) {
-                const latestCheckpoints = useArtifactStore.getState().checkpoints;
-                setCheckpoints([payload.checkpoint, ...latestCheckpoints]);
-              }
-            } else if (type === 'VISION_CAPTURE') {
-              if (payload?.base64DataUrl) {
-                setLatestVisionCapture(payload);
-              }
-            } else if (type === 'ARTIFACT_SYNC') {
-              const syncId = payload.id || payload.artifact_name || 'art-' + Date.now();
-              const syncType =
-                payload.type ||
-                (payload.artifact_name === 'walkthrough.md'
-                  ? 'walkthrough'
-                  : payload.artifact_name === 'task.md'
-                  ? 'task'
-                  : payload.artifact_name?.endsWith('.html')
-                  ? 'html'
-                  : 'plan');
-              if (payload.id || payload.requestFeedback !== undefined || syncType === 'html') {
-                upsertArtifact({
-                  id: syncId,
-                  threadId: evtThreadId || activeThreadId,
-                  title: payload.title || payload.artifact_name,
-                  type: syncType,
-                  content: payload.content || '',
-                  requestFeedback: Boolean(payload.requestFeedback),
-                  userFacing: payload.userFacing,
-                  updatedAt: Date.now(),
-                });
-              }
-              if (payload.artifact_name === 'task.md' || syncType === 'task') {
-                setTaskMarkdown(payload.content);
-              } else if (payload.artifact_name === 'walkthrough.md' || syncType === 'walkthrough') {
-                setWalkthroughMarkdown(payload.content);
-                setActiveArtifactDoc('walkthrough.md');
-                if (payload.id) setActiveArtifactId(syncId);
-                setActiveTab('plan');
-                setShowRightDrawer(true);
-              } else if (syncType === 'html') {
-                setActiveArtifactId(syncId);
-                setActiveArtifactDoc(syncId);
-                setActiveTab('plan');
-                setShowRightDrawer(true);
-              } else if (
-                payload.artifact_name === 'implementation_plan.md' ||
-                payload.artifact_name === 'plan.md' ||
-                syncType === 'plan'
-              ) {
-                setPlanMarkdown(payload.content);
-                setActiveArtifactDoc('plan.md');
-                if (payload.id) setActiveArtifactId(syncId);
-                setActiveTab('plan');
-                setShowRightDrawer(true);
-              }
-            } else if (type === 'ARTIFACT_UPDATED') {
-              const art = payload?.artifact;
-              if (art) {
-                const artId = art.id || art.title || 'art-' + Date.now();
-                upsertArtifact({
-                  id: artId,
-                  threadId: art.threadId || art.thread_id || evtThreadId || activeThreadId,
-                  title: art.title,
-                  type: art.type,
-                  content: art.content || '',
-                  summary: art.summary,
-                  filePath: art.filePath || art.file_path,
-                  requestFeedback: Boolean(art.requestFeedback),
-                  userFacing: art.userFacing,
-                  updatedAt: art.updatedAt || Date.now(),
-                });
-                if (art.type === 'plan') {
-                  setPlanMarkdown(art.content);
-                  setActiveArtifactId(artId);
-                  setActiveArtifactDoc('plan.md');
-                  setActiveTab('plan');
-                  setShowRightDrawer(true);
-                } else if (art.type === 'walkthrough') {
-                  setWalkthroughMarkdown(art.content);
-                  setActiveArtifactId(artId);
-                  setActiveArtifactDoc('walkthrough.md');
-                  setActiveTab('plan');
-                  setShowRightDrawer(true);
-                } else if (art.type === 'html') {
-                  setActiveArtifactId(artId);
-                  setActiveArtifactDoc(artId);
-                  setActiveTab('plan');
-                  setShowRightDrawer(true);
-                } else if (art.type === 'task') {
-                  setTaskMarkdown(art.content);
-                }
-              }
-            } else if (type === 'COUNTDOWN') {
-              const rem = Number(payload?.secondsRemaining || 0);
-              const tot = Number(payload?.totalSeconds || rem || 10);
-              setTimerCountdown(rem);
-              setTimerTotal(tot);
-              setTimerLabel(payload?.label || 'Timer');
-            } else if (type === 'TIMER_FIRED') {
-              setTimerCountdown(0);
-              if (payload?.prompt) {
-                addMessage({
-                  id: 'sys-timer-' + Date.now(),
-                  role: 'system',
-                  content: `⏰ **Scheduled Timer Fired:** ${payload.prompt}`,
-                  timestamp: Date.now(),
-                });
-              }
-            } else if (
-              type === 'SWARM_STATE' ||
-              type === 'SWARM_MESSAGE' ||
-              type === 'SWARM_MEMBER_UPDATED'
-            ) {
-              if (!isForActiveThread) return;
-              applySwarmEvent(type, payload);
-            } else if (type === 'BACKGROUND_TASK_UPDATED') {
-              if (Array.isArray(payload?.allTasks)) {
-                setBackgroundTasks(payload.allTasks);
-              }
-            } else if (type === 'CONTEXT_COMPACTED') {
-              setLastCompaction({
-                previousTokens: payload?.previousTokens || 0,
-                compactedTokens: payload?.compactedTokens || 0,
-              });
-            } else if (type === 'ADAPTIVE_COT_STATE') {
-              if (!isForActiveThread) return;
-              if (!isPhaseProtocolActive()) setIsGenerating(true);
-              setAdaptiveCotLabel(payload?.modeLabel || '');
-            } else if (type === 'TELEMETRY') {
-              setTelemetry({
-                vramUsedGb: payload.vram_used_gb,
-                vramTotalGb: payload.vram_total_gb,
-                vramPercent: payload.vram_percent,
-                hostRamUsedGb: payload.host_ram_used_gb,
-                hostRamTotalGb: payload.host_ram_total_gb,
-                gpuUtilization: payload.gpu_utilization_percent,
-                cpuUtilization: payload.cpu_utilization_percent,
-                ...(payload.tokens_per_sec ? { tokensPerSec: payload.tokens_per_sec } : {}),
-                ...(payload.swap_duration_ms ? { lastSwapDurationMs: payload.swap_duration_ms } : {}),
-                ...(payload.sysram_cache ? { sysramCache: payload.sysram_cache } : {}),
-              });
-            }
-          } catch (e) {
-            console.error('Failed to parse incoming WebSocket message', e);
-          }
-        };
-      } catch {
-        if (!isDisposed) {
-          setIsConnected(false);
-          setReconnectAttempt((prev) => prev + 1);
-          setReconnectCountdown(3);
-        }
-      }
-    };
-
-    connect();
-
-    return () => {
-      isDisposed = true;
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (ws) {
-        ws.onopen = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        ws.onmessage = null;
-        try {
-          ws.close();
-        } catch {}
-      }
-    };
-  }, [hostUrl, reconnectKey]);
-
-  // Reset turn-protocol tracking when switching backend hosts
-  useEffect(() => {
-    resetTurnProtocolState();
-  }, [hostUrl]);
-
-  // Reconnection countdown timer (ticks every second when disconnected)
-  const isCountingDown = !isConnected && reconnectCountdown > 0;
-  useEffect(() => {
-    if (isConnected) {
-      setReconnectCountdown(0);
-      setReconnectAttempt(0);
-      return;
-    }
-
-    if (!isCountingDown) return;
-
-    const timer = setInterval(() => {
-      setReconnectCountdown((curr) => (curr <= 1 ? 0 : curr - 1));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isConnected, isCountingDown]);
-
-  const prevReconnectCountdownRef = useRef(0);
-  useEffect(() => {
-    if (!isConnected && prevReconnectCountdownRef.current === 1 && reconnectCountdown === 0) {
-      handleManualReconnect();
-    }
-    prevReconnectCountdownRef.current = reconnectCountdown;
-  }, [isConnected, reconnectCountdown, handleManualReconnect]);
-
-  // Scheduled Timer live countdown effect
-  const hasActiveTimer = timerCountdown > 0;
-  useEffect(() => {
-    if (!hasActiveTimer) return;
-    const t = setInterval(() => {
-      setTimerCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-    return () => clearInterval(t);
-  }, [hasActiveTimer]);
-
-
-
-  // Proactive HTTP health probe when disconnected: detects server recovery & auto-discovers port
-  useEffect(() => {
-    if (isConnected) return;
-    let isDisposed = false;
-
-    const probe = async () => {
-      const candidatePorts = [brainPort, '3390', '3391', '3392', '3393'].filter(
-        (v, i, a) => a.indexOf(v) === i
-      );
-
-      for (const p of candidatePorts) {
-        if (isDisposed) return;
-        try {
-          const res = await fetch(`http://${brainHost}:${p}/health`, {
-            method: 'GET',
-            signal: AbortSignal.timeout(900),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data?.status === 'ok') {
-              if (p !== brainPort) {
-                setBrainConnection(brainHost, p);
-              } else {
-                handleManualReconnect();
-              }
-              return;
-            }
-          }
-        } catch {}
-      }
-    };
-
-    const interval = setInterval(probe, 1500);
-    probe();
-
-    return () => {
-      isDisposed = true;
-      clearInterval(interval);
-    };
-  }, [isConnected, brainHost, brainPort, handleManualReconnect, setBrainConnection]);
+  const {
+    wsRef,
+    reconnectCountdown,
+    reconnectAttempt,
+    handleManualReconnect,
+    timerCountdown,
+    timerTotal,
+    timerLabel,
+    lastCompaction,
+    adaptiveCotLabel,
+  } = useBrainSocket({
+    hostUrl,
+    brainHost,
+    brainPort,
+    isConnected,
+    onSelectThread: (tid, opts) => handleSelectThread(tid, opts),
+    onOpenRightDrawer: () => setShowRightDrawer(true),
+  });
 
   const handleSendPrompt = (
     text: string,
@@ -1793,7 +1064,13 @@ export const App: React.FC = () => {
 
           {mobileTab === 'workbench' && (
             <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#131314] overflow-hidden">
-              <WorkbenchEditor />
+              <Suspense
+                fallback={
+                  <div className="p-4 text-xs text-[#9AA0A6]">Loading workbench editor...</div>
+                }
+              >
+                <WorkbenchEditor />
+              </Suspense>
             </div>
           )}
 
@@ -1879,8 +1156,20 @@ export const App: React.FC = () => {
                 {/* Active Workbench View Card */}
                 <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#18181B] border border-[#26262A] rounded-xl shadow-md">
                   {activeTab === 'changes' && <ChangesTab />}
-                  {activeTab === 'editor' && <WorkbenchEditor />}
-                  {activeTab === 'terminal' && <IntegratedTerminal />}
+                  {activeTab === 'editor' && (
+                    <Suspense
+                      fallback={<div className="p-4 text-xs text-[#9AA0A6]">Loading editor...</div>}
+                    >
+                      <WorkbenchEditor />
+                    </Suspense>
+                  )}
+                  {activeTab === 'terminal' && (
+                    <Suspense
+                      fallback={<div className="p-4 text-xs text-[#9AA0A6]">Loading terminal...</div>}
+                    >
+                      <IntegratedTerminal />
+                    </Suspense>
+                  )}
                   {activeTab === 'extensions' && <ExtensionsTab />}
                   {activeTab === 'preview' && <VisionPreviewTab />}
                   {activeTab === 'harness' && <HarnessWorkbenchTab />}
@@ -1899,13 +1188,21 @@ export const App: React.FC = () => {
       </div>
 
       {/* Modals */}
-      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      {isSettingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+        </Suspense>
+      )}
       <MobileRemoteModal isOpen={isRemoteOpen} onClose={() => setIsRemoteOpen(false)} />
-      <AutomationsModal
-        isOpen={isAutomationsOpen}
-        onClose={() => setIsAutomationsOpen(false)}
-        onRunAutomationNow={(prompt, tier) => handleSendPrompt(prompt, undefined, tier)}
-      />
+      {isAutomationsOpen && (
+        <Suspense fallback={null}>
+          <AutomationsModal
+            isOpen={isAutomationsOpen}
+            onClose={() => setIsAutomationsOpen(false)}
+            onRunAutomationNow={(prompt, tier) => handleSendPrompt(prompt, undefined, tier)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

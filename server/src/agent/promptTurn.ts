@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import type { LocalGravityDB, ModelTier, ThinkingBudget } from '../db/database.js';
 import type { TabbyEngine } from '../tabby/tabbyEngine.js';
 import { deduplicateRepeatedSequences, isStrataOrchestratorTier } from '../tabby/tabbyEngine.js';
@@ -6,24 +8,21 @@ import type { SkillManager } from '../skills/skillManager.js';
 import type { SharedTerminalManager } from '../terminal/terminalManager.js';
 import type { BuiltinToolExecutor } from '../tools/builtinTools.js';
 import type { Harness2Manager } from '../harness/harnessManager.js';
-import { pruneChatMessages } from '../utils/messagePruning.js';
+import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
 import { autoCompactMessages } from '../utils/autoCompactor.js';
 import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from './adaptiveCot.js';
 import { detectPrematureStop } from './prematureStop.js';
 import { parseAntigravitySlashCommand } from './slashCommands.js';
-import os from 'node:os';
-import path from 'node:path';
+import { buildTurnSystemDirective } from './systemPrompt.js';
+import { buildChatHistoryMessages } from './messageBuilder.js';
+import { TurnPhaseEmitter } from './turnStateMachine.js';
 import { BUILTIN_TOOLS_SCHEMA } from '../tools/builtinTools.js';
 import { SWARM_TOOLS_SCHEMA } from '../tools/builtinToolsSchema.js';
 import { SwarmManager } from '../swarm/swarmManager.js';
 import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 import { SKILL_TOOLS_SCHEMA } from '../skills/skillManager.js';
-import type { AttachmentManager, SavedAttachment } from '../files/attachmentManager.js';
-import fs from 'node:fs';
-import { execSync } from 'node:child_process';
-import { buildCompactRepoMap } from '../tools/repoMap.js';
-import { LspDiagnosticsManager } from '../tools/lspManager.js';
-import { selectScopedTools, buildLeanSystemDirective } from '../tools/toolScoper.js';
+import { selectScopedTools } from '../tools/toolScoper.js';
+import { ComfyCompanionManager } from '../tools/handlers/comfyui/comfyCompanion.js';
 
 export type TurnPhaseName =
   | 'queued'
@@ -69,8 +68,16 @@ export interface PromptTurnDeps {
   repoRoot: string;
 }
 
+function isAbortLikeError(err: any): boolean {
+  return (
+    err?.name === 'AbortError' ||
+    err?.code === 'ABORT_ERR' ||
+    Boolean(err?.message?.toLowerCase().includes('abort'))
+  );
+}
+
 export function createPromptTurnHandler(deps: PromptTurnDeps) {
-  const { db, tabby, mcp, skills, tools, harness, terminal, attachmentManager, broadcastSync, activeAbortControllers, activeTurns, repoRoot } = deps;
+  const { db, tabby, mcp, skills, tools, harness, attachmentManager, broadcastSync, activeAbortControllers, activeTurns, repoRoot } = deps;
 
   return async function handlePromptTurn(params: {
     threadId: string;
@@ -100,17 +107,18 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     const project = db.getProject(thread.project_id) || db.ensureDefaultProject(repoRoot);
     const compiledHarness = harness.buildCompiledHarnessPrompt(project.root_path);
 
-    // 1. ARM THE TURN FIRST: persist messages, register the stream buffer, mark the thread active and
-    //    register the abort controller BEFORE any slow work (attachment saving) so SYNC_STATE / Stop
-    //    always see an active turn.
     const savedAttachments: SavedAttachment[] = [];
-    const slashInfo = parseAntigravitySlashCommand(params.prompt);
+    const slashInfo = parseAntigravitySlashCommand(promptStr);
     const effectiveThinkingBudget: ThinkingBudget = slashInfo.forceThinkingBudget || params.thinkingBudget;
+
+    const studioCfg = ComfyCompanionManager.getInstance().getConfig();
+    const isComfyStudioTurn =
+      slashInfo.command === '/comfy' || (studioCfg.studioMode && !slashInfo.command);
 
     const userMsg = db.createMessage({
       thread_id: thread.id,
       role: 'user',
-      content: params.prompt,
+      content: promptStr,
       attachments: [],
     });
     const assistantMsg = db.createMessage({
@@ -121,14 +129,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     });
     db.beginStreamingMessage(assistantMsg.id, thread.id);
     db.updateThread(thread.id, {
-      status: params.thinkingBudget === 'off' ? 'executing_tool' : 'thinking',
+      status: effectiveThinkingBudget === 'off' ? 'executing_tool' : 'thinking',
       active_model_tier: params.tier,
       active_thinking_budget: params.thinkingBudget,
     });
     const abortController = new AbortController();
     activeAbortControllers.set(thread.id, abortController);
 
-    // Every broadcast carries thread_id + message_id so clients can filter stale events.
     const send = (event: Record<string, any>) =>
       broadcastSync({
         ...event,
@@ -140,58 +147,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
 
-    // Canonical server-driven turn phase state machine.
-    let phaseSeq = 0;
-    let turnStep = 0;
-    let turnMaxSteps = slashInfo.maxToolSteps;
-    let thinkingFinished = false;
-    let lastPhase: TurnPhaseName | null = null;
-    let lastPhaseLabel = '';
-    let terminalPhaseSent = false;
-    const emitPhase = (
-      phase: TurnPhaseName,
-      statusLabel: string,
-      extra: { active_tool_id?: string; error?: string } = {}
-    ) => {
-      const isActive = !(phase === 'completed' || phase === 'aborted' || phase === 'error');
-      if (!isActive) {
-        if (terminalPhaseSent) return;
-        terminalPhaseSent = true;
-      } else if (terminalPhaseSent) {
-        return;
-      }
-      if (phase === lastPhase && statusLabel === lastPhaseLabel && !extra.active_tool_id) return;
-      lastPhase = phase;
-      lastPhaseLabel = statusLabel;
-      const payload: ActiveTurnSnapshot = {
-        seq: ++phaseSeq,
-        thread_id: thread!.id,
-        threadId: thread!.id,
-        turn_id: assistantMsg.id,
-        message_id: assistantMsg.id,
-        phase,
-        is_active: isActive,
-        step: turnStep,
-        max_steps: turnMaxSteps,
-        status_label: statusLabel,
-        thinking_finished: thinkingFinished,
-        ...(extra.active_tool_id ? { active_tool_id: extra.active_tool_id } : {}),
-        ...(extra.error ? { error: extra.error } : {}),
-        timestamp: Date.now(),
-      };
-      if (isActive) {
-        activeTurns?.set(thread!.id, payload);
-      } else if (activeTurns?.get(thread!.id)?.turn_id === assistantMsg.id) {
-        activeTurns.delete(thread!.id);
-      }
-      send({
-        type: 'TURN_PHASE',
-        payload,
-      });
-    };
+    const phaseEmitter = new TurnPhaseEmitter({
+      threadId: thread.id,
+      turnId: assistantMsg.id,
+      initialMaxSteps: slashInfo.maxToolSteps,
+      activeTurns,
+      send,
+    });
+    const emitPhase = phaseEmitter.emit.bind(phaseEmitter);
 
     const brainProviderCfg = tabby.getBrainProviderConfig?.() || { provider: 'strata' as const };
-    const resolvedModelDisplayName = tabby.resolveDiskModelName?.(params.tier) || 'swift-1.5-iq2_xs';
+    const resolvedModelDisplayName = isComfyStudioTurn
+      ? `ComfyUI Studio (${studioCfg.defaultWorkflow})`
+      : tabby.resolveDiskModelName?.(params.tier) || 'swift-1.5-iq2_xs';
 
     send({
       type: 'TURN_STARTED',
@@ -206,13 +174,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       },
     });
     emitPhase('queued', 'Starting turn...');
+
     const subagentId = `subagent-${assistantMsg.id.slice(0, 8)}`;
     let emitSubagentEvents = false;
     let turnOutcome: 'completed' | 'aborted' | 'error' = 'completed';
     let turnErrorMsg = '';
+    let turnStep = 0;
 
     try {
-      // Save and ground incoming attachments of any type (images, documents, archives, databases, code)
       if (Array.isArray(params.attachments) && params.attachments.length > 0) {
         for (const rawAtt of params.attachments) {
           try {
@@ -237,36 +206,33 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             console.error('[PromptTurn] Error saving attachment:', attErr);
           }
         }
-        const attToPersist = savedAttachments.length > 0 ? savedAttachments : (params.attachments || []);
+        const attToPersist = savedAttachments.length > 0 ? savedAttachments : params.attachments || [];
         db.updateMessageAttachments(userMsg.id, attToPersist);
         userMsg.attachments = JSON.stringify(attToPersist);
       }
+
       const history = db.listMessages(thread.id);
-      const userHome = os.homedir().replace(/\\/g, '/');
-      const downloadsDir = path.join(os.homedir(), 'Downloads').replace(/\\/g, '/');
-      const desktopDir = path.join(os.homedir(), 'Desktop').replace(/\\/g, '/');
-      const documentsDir = path.join(os.homedir(), 'Documents').replace(/\\/g, '/');
 
-      // Parse LocalGravity Slash Commands (/goal, /plan, /boost, /grill-me, /teamwork, /browser, /learn, /compact, /schedule)
-      // LocalGravity Slash Commands are parsed at the top of the turn (slashInfo / effectiveThinkingBudget).
-
-      // Special fast-path for /compact command
-      if (params.prompt.trim().toLowerCase().startsWith('/compact')) {
+      // Fast-path for /compact
+      if (promptStr.trim().toLowerCase().startsWith('/compact')) {
         const msgCount = history.length;
         const mockMsgs = history.map((m) => ({
           role: m.role,
           content:
             m.content +
             (Array.isArray(m.tool_executions) && m.tool_executions.length > 0
-              ? "\n" + m.tool_executions.map((t) => `[Tool ${t.tool_name}]: ${(t.stdout_stream || t.stderr_stream || "").slice(0, 600)}`).join("\n")
-              : ""),
+              ? '\n' +
+                m.tool_executions
+                  .map((t) => `[Tool ${t.tool_name}]: ${(t.stdout_stream || t.stderr_stream || '').slice(0, 600)}`)
+                  .join('\n')
+              : ''),
         }));
         const cRes = autoCompactMessages(mockMsgs, 100, 4);
         const prunedCount = db.compactThreadMessages(thread.id, 6, cRes.summary);
         const summaryNote =
           `✅ **Context Compacted (/compact)**\n\n` +
           `Compacted **${msgCount}** historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens, pruned ${prunedCount} older turns into Working Memory).\n` +
-          `Older intermediate tool outputs and verbose turns have been distilled into a compact Working Memory Snapshot so the full **${params.tier.toUpperCase()}** context window is fresh and ready.`;
+          `Older intermediate tool outputs and verbose turns have been distilled into a compact Working Memory Snapshot.`;
         send({
           type: 'CONTEXT_COMPACTED',
           payload: {
@@ -300,8 +266,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
-      // Fast-path for /reload command (hot-reload skills, Harness² components, MCP, and permissions)
-      if (params.prompt.trim().toLowerCase().startsWith('/reload')) {
+      // Fast-path for /reload
+      if (promptStr.trim().toLowerCase().startsWith('/reload')) {
         const discoveredSkills = skills.discoverSkills?.() || [];
         harness.ensureWorkspaceHarness(project.root_path);
         const components = harness.listHarnessComponents(project.root_path);
@@ -350,244 +316,41 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         ? edgeBridge.getClientByHost(project.host_name)
         : edgeBridge.getRemoteClientForThread(thread.id);
       const remoteHostNote = remoteClient
-        ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools in this turn execute natively on the connected client host "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}). Any local paths or run_terminal commands (including Python, Node, PowerShell, etc.) run directly on "${remoteClient.hostname}".` +
-          (remoteClient.platform.toLowerCase().includes('android')
-            ? `\n[ANDROID HOST NOTE]: Shared storage (~ and default workspace root) is "/storage/emulated/0" ("/sdcard"), containing DCIM, Pictures, Download, Documents, etc. The true Android OS version is already reported above via getprop ro.build.version.release (do not confuse "uname -r" GKI kernel branch names like "android15" with the Android OS release).`
-            : '') +
-          `\n`
+        ? `\n[REMOTE HOST BRIDGE ACTIVE]: File and terminal tools execute on "${remoteClient.hostname}" (${remoteClient.platform}${remoteClient.homeDir ? `, home: "${remoteClient.homeDir}"` : ''}).\n`
         : project.host_name && edgeBridge.isRemoteHost(project.host_name)
-          ? `\n[REMOTE HOST OFFLINE]: This project belongs to "${project.host_name}", which is currently offline. Do not attempt local file or terminal operations on the Central Brain host.\n`
+          ? `\n[REMOTE HOST OFFLINE]: This project belongs to "${project.host_name}", which is currently offline.\n`
           : '';
 
-      const engineDirectiveLine =
-        brainProviderCfg.provider === 'google_ai_studio'
-          ? `- Active Brain Inference Provider: Google AI Studio API (${resolvedModelDisplayName}) — orchestrated by LocalGravity Central Brain without local Strata GPU.`
-          : `- Strata Engine: Active on port 8080 serving "Swift 1.5 Flash-Next" (IQ2_XS + Vision) with 65,536 context, spec=6, and multimodal vision projector mmproj-Qwen3.8-Flash-Next-BF16.gguf! Input modalities: ["text", "image"].\n` +
-            `- Strata Root: "${path.join(process.env.LOCALAPPDATA || path.join(userHome, 'AppData', 'Local'), 'Strata').replace(/\\/g, '/')}" (engine binaries in components/engine/, launch profiles in install/, serve/server.py)\n` +
-            `- Local Models Directory: "E:/Models/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS" (holds main GGUFs and mmproj projector)`;
+      const expandedSystemDirective = buildTurnSystemDirective({
+        projectName: project.name,
+        projectRoot: project.root_path,
+        gitBranch: project.git_branch,
+        customInstructions: project.custom_instructions,
+        remoteHostNote,
+        slashCommand: slashInfo.command,
+        modeDirective: slashInfo.modeDirective,
+        compiledHarness,
+        skillsSection: skills.buildSkillsPromptSection?.() || '',
+        mcpInstructions: mcp.getServerInstructionsBlock?.() || '',
+        brainProvider: brainProviderCfg.provider,
+        resolvedModelDisplayName,
+        isComfyStudio: isComfyStudioTurn,
+        comfyDefaultWorkflow: studioCfg.defaultWorkflow,
+        comfyCompanionBrain: studioCfg.companionBrain,
+        promptStr,
+      });
 
-      const systemDirective =
-        slashInfo.command === '/lean'
-          ? buildLeanSystemDirective({
-              projectName: project.name,
-              projectRoot: project.root_path,
-              gitBranch: project.git_branch,
-              userHome,
-              engineLine: engineDirectiveLine + remoteHostNote,
-              skillsSection: skills.buildSkillsPromptSection?.() || '',
-              compiledHarness,
-            }) +
-            (slashInfo.modeDirective ? `\n\n${slashInfo.modeDirective}` : '') +
-            (project.custom_instructions ? `\nCustom Instructions: ${project.custom_instructions}` : '')
-          : `You are LocalGravity, an autonomous AI engineering assistant running directly on the user's workstation.\n` +
-        `Active Workspace: ${project.name} (${project.root_path}) [branch: ${project.git_branch}]\n` +
-        remoteHostNote +
-        `Workstation Paths:\n` +
-        `- User Folders: Home="${userHome}", Downloads="${downloadsDir}", Desktop="${desktopDir}", Documents="${documentsDir}"\n` +
-        `${engineDirectiveLine}\n\n` +
-        `=== UNRESTRICTED SYSTEM ACCESS & AUTONOMOUS TOOL SUITE ===
-=== WEB SEARCH MANDATE: NEVER BE SHY ABOUT SEARCHING ===
-1. SEARCH THE WEB FIRST: Never be shy about searching! The live internet is your fastest and most reliable path whenever you do not know something, are not 100% certain of exact details, need current documentation, or encounter an unfamiliar problem.
-2. EMPIRICAL KNOWLEDGE OVER GUESSING: If asked about any question, command, API, library, menu item, price, error code, or topic you aren't completely certain about, IMMEDIATELY call "search_web". A fast search eliminates hallucinations and gives you exact, authoritative real-world facts in under a second.
-3. NO ARTIFICIAL BOUNDARIES: You have full, unrestricted live web access via search_web. Never apologize, never claim lack of real-time info, and never claim you cannot browse. Call "search_web" proactively on any turn!
-=== AUTONOMOUS SEARCH & DOCUMENT INVESTIGATION MANDATE ===
-1. PROACTIVE WEB SEARCH: Do not hesitate to call "search_web"! When the user asks about how to scan, convert, extract, or parse unfamiliar file types, or when an error or missing tool is encountered, IMMEDIATELY call "search_web" to find the best CLI, Python package, or technique. As an elite coding agent, you ALWAYS search first rather than guessing or claiming inability.
-2. SCANNED DOCUMENTS & PDF MENUS: When a PDF contains scanned photos or images (like a drink menu, receipt, or screenshot), standard text extraction will be empty or incomplete because the text is in pixels. ALWAYS call "inspect_document" to extract the embedded raster images to disk. Once extracted, you or Strata Vision can analyze every drink, price, and word on the image!
-3. EMPIRICAL FIRST: Proactively investigate using search_web, find_files, inspect_document, and run_terminal before reporting back to the user.\n` +
-        `1. FULL WORKSTATION ACCESS: You have complete, unrestricted access to the entire computer and local filesystem. NEVER claim lack of permission.\n` +
-        `2. MULTIMODAL VISION IS FULLY ACTIVE: Strata has the vision projector loaded right now. You CAN analyze images, screenshots, and visual inputs. NEVER claim vision is missing or that you lack a vision tower!\n` +
-        `3. VISION VERIFICATION: When the user asks about vision, fixing vision, or testing vision, IMMEDIATELY call inspect_models(action="test_vision") or manage_strata(action="test_vision") to demonstrate live multimodal perception on port 8080.
-4. SELF-RESTART: When asked to restart, reload, or recycle LocalGravity after code edits or configuration changes, call the "restart_brain" tool. The Windows Tray supervisor will immediately reboot the Central Brain in 500ms.
-5. AUTONOMOUS DIAGNOSTICS: To inspect system, engine, or supervisor logs, use "read_system_logs" (target="strata" or "tray") to diagnose issues empirically without guessing.
-6. RICH TOOL BELT: You have 22 native workstation tools:
-   - Models & Engine: inspect_models (query Strata health/models, active launch config, test vision live, or restart Strata), manage_strata, restart_brain, read_system_logs, inspect_system (Nvidia GPU VRAM/temp, listening ports, process finder)\n` +
-        `   - Models & Engine: inspect_models (query Strata health/models, active launch config, test vision live, or restart Strata), inspect_system (Nvidia GPU VRAM/temp, listening ports, process finder)\n` +
-        `   - Code & Navigation: code_outline (rapid symbol map), read_file (full context), write_file, apply_diff, search_codebase, find_files (wildcard file finder)\n` +
-        `   - Web & Models: search_web (live DuckDuckGo), search_models (Hugging Face Hub & repo tree), download_file (streaming file/model downloader), browser_inspect\n` +
-        `   - Configuration & System: patch_json (safe deep JSON updater), manage_files (stat, copy, move, delete), http_request (REST API client), run_terminal (interactive shell)\n` +
-        `   - Vision Grounding: capture_screen, inspect_window\n` +
-        `   - ComfyUI & Media Generation: comfyui (generate, list_workflows, inspect_workflow, status, start_server, free_vram, gemini_image, gemini_video)\n` +
-        `=== COMFYUI, MOSS & GOOGLE API MEDIA GENERATION PROTOCOL ===\n` +
-        `- When the user asks to generate images with MOSS or run any ComfyUI workflow, ALWAYS call the native "comfyui" tool (e.g. comfyui({ action: "generate", workflow: "Moss Image.json", prompt: "..." })). Use "Moss Image.json" for MOSS, "H3 Image Easy Workflow.json" (or "h3") for MiniMax H3 STILL IMAGES, "Famegrid Krea 2 Spice V2 - Simplified.json" (or "krea") for Krea 2, and "MiniMax H3.json" ONLY when the user explicitly asks for video.\n` +
-        `- Works in BOTH Strata mode and Google AI Studio API mode:\n` +
-        `  * In Strata mode: "comfyui" enhances the prompt on Strata using any workflow enhancer instructions, offloads Strata from VRAM (0 MB), starts/uses ComfyUI on port 8188, strips dead Ollama nodes during UI->API conversion, saves outputs inline in chat, frees ComfyUI VRAM (POST /free), and reloads Strata back onto the GPU.\n` +
-        `  * In Google API mode: "comfyui" enhances ComfyUI prompts via Gemini API (zero GPU cost) without waking Strata, runs ComfyUI cleanly, and frees ComfyUI VRAM without reloading Strata. You can also use comfyui({ action: "gemini_image", prompt: "..." }) (Nano Banana 2.1) or comfyui({ action: "gemini_video", prompt: "..." }) (Gemini Omni 1.2 Flash) to generate images/videos directly via Gemini API.\n` +
-        `- Do NOT download duplicate checkpoints, VAEs, or text encoders — the user's models already live on E:\\Github\\Models (mapped via ComfyUI-Easy-Install extra_model_paths.yaml) and workflows live in C:\\Users\\Sue\\Documents\\GitHub\\ComfyUI\\ComfyUI-Easy-Install\\ComfyUI\\user\\default\\workflows.\n` +
-        `4. EMPIRICAL VERIFICATION BEFORE CLAIMING: Before claiming any file, model, or vision feature is missing or broken, ALWAYS run inspect_models, find_files, or manage_files to check actual disk state and engine status. NEVER guess or hallucinate.\n` +
-        `5. AUTONOMOUS INVESTIGATION: When asked to fix, configure, or enhance local models, vision, tools, or workstation services, DO NOT stall, ask for repo names, or ask the user for technical inputs that you can discover yourself. Autonomously research missing files or errors, inspect local configs, apply necessary edits or downloads, and verify end-to-end before delivering your response.\n` +
-        `6. EXECUTE END-TO-END WITHOUT ASKING PERMISSION: When the user's prompt already asks you to fix, implement, build, finish, or release something, DO NOT stop midway to ask "Want me to implement this?", "Should I proceed?", or "Would you like me to fix it?". Execute the full workflow autonomously, verify builds/tests, and only then present your concise final summary.\n\n` +
-        `=== NATIVE COUNTDOWN TIMERS, BACKGROUND TASKS, SUBAGENTS & ARTIFACTS (v2.2) ===\n` +
-    `- SCHEDULED TIMERS: When the user asks to test or set a timer or countdown, IMMEDIATELY call the "schedule" tool (e.g. schedule(durationSeconds=15, prompt="Timer test complete!", title="Test Timer")). NEVER try to spin up a Python HTTP server or write HTML to test a timer — the "schedule" tool automatically renders a live animated SVG countdown ring in the top header bar over WebSocket!\n` +
-    `- BACKGROUND TASKS: Use "manage_task" (action="start" | "list" | "status" | "kill") to run or inspect long-running background commands.\n` +
-    `- SUBAGENTS: Use "invoke_subagent" to delegate codebase research or file scanning to an isolated subagent worker.\n` +
-    `- ARTIFACTS: Use "write_artifact" (type="plan" | "walkthrough" | "report") to publish structured markdown directly into the Right Rail Artifacts drawer.\n\n` +
-    `=== AUTONOMOUS SELF-BUILDING & SELF-EVOLUTION PLAYBOOK ===\n` +
-        `You are LocalGravity: an autonomous self-evolving AI engineering platform. You have FULL permission, capability, and tools to build new features, enhance UI/UX, fix bugs, and publish releases directly to GitHub so the user can hit "Check for Updates" to install your new features immediately!\n\n` +
-        `1. THE LAW OF SELF-PRESERVATION (ZERO ENGINE DISRUPTION):\n` +
-        `   - NEVER call "manage_strata" with restart or terminate ports 8080/3390 while writing or testing code. Strata is your active inference brain. Restarting it dumps 33GB of VRAM and halts your thought process. Only use manage_strata if the user explicitly asks to restart the engine.\n\n` +
-        `2. ARCHITECTURE MAP (WHERE FEATURES LIVE):\n` +
-        `   - Frontend / GUI / UX ("client/src/"):\n` +
-        `     * "client/src/components/center-canvas/PromptBar.tsx" -> Prompt input, model selectors, action buttons, thinking toggles.\n` +
-        `     * "client/src/components/left-rail/NodeStatusBadge.tsx" -> Header status pills, VRAM badge, connection status, latency, auto-reconnect timers.\n` +
-        `     * "client/src/components/left-rail/SettingsModal.tsx" -> Settings modal, updates, endpoints, keyboard shortcuts.\n` +
-        `     * "client/src/components/center-canvas/ChatCanvas.tsx" -> Message feed, chat turns, code blocks, diff views.\n` +
-        `     * "client/src/App.tsx" -> Main layout, connection recovery, global state wiring.\n` +
-        `     * Vite HMR: When you edit any file in "client/src/", Vite hot-reloads it instantly in the user's browser without restarting the server!\n` +
-        `   - Backend / Central Brain ("server/src/"):\n` +
-        `     * "server/src/tools/" -> Native workstation tools and tool registry.\n` +
-        `     * "server/src/agent/promptTurn.ts" -> Agent turns, system prompts, tool loop execution.\n` +
-        `     * "server/src/index.ts" -> Fastify routes, WebSocket multiplexer, telemetry.\n\n` +
-        `3. THE 4-STEP SELF-BUILD PROTOCOL:\n` +
-        `   - Step 1: Read the target component using "read_file" to inspect existing props, JSX, and imports.\n` +
-        `   - Step 2: Make the precise edit using "write_file" or "apply_diff".\n` +
-        `   - Step 3: MANDATORY BUILD CHECK: Run "run_terminal" with "npm --prefix client run build" (for UI) or "npm --prefix server run build" (for backend). Confirm compilation exits with code 0! If it errors, inspect the error and fix it.\n` +
-        `   - Step 4: AUTONOMOUS RELEASE & PUBLISH: When you complete a requested feature or fix and the user wants a release/update, call the "publish_release" tool (e.g. bump="patch", notes="Added feature X to UI"). It automates Windows MSI building, macOS DMG signing, latest.json generation, Git push, and GitHub Release creation!\n` +
-        `   - Step 5: ANNOUNCE: Once published, announce to the user: "Release vX.Y.Z is live on GitHub! You can now hit 'Check for Updates' in your macOS or Windows app to auto-install it right now!"\n\n` +
-        (skills.buildSkillsPromptSection?.() || '') + '\n\n' +
-        (mcp.getServerInstructionsBlock?.() ? `${mcp.getServerInstructionsBlock?.()}\n\n` : '') +
-        (slashInfo.modeDirective ? `${slashInfo.modeDirective}\n\n` : '') +
-        `=== HARNESS² 8-COMPONENT CONTEXT ===\n${compiledHarness}\n` +
-        (project.custom_instructions ? `Custom Instructions: ${project.custom_instructions}\n` : '');
-
-      let expandedSystemDirective = systemDirective;
-      if (/(?:^|\s)@repo-map(?=\s|$)/i.test(promptStr)) {
-        expandedSystemDirective += `\n\n=== COMPACT WORKSPACE REPO MAP (@repo-map) ===\n${buildCompactRepoMap(project.root_path)}\n`;
-      }
-      if (/(?:^|\s)@git-diff(?=\s|$)/i.test(promptStr)) {
-        try {
-          const stat = execSync('git diff --stat', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8', windowsHide: true });
-          const patch = execSync('git diff', { cwd: project.root_path, timeout: 4000, encoding: 'utf-8', windowsHide: true }).slice(0, 6000);
-          expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n${stat}\n${patch || '(No unstaged changes)'}\n`;
-        } catch (diffErr: any) {
-          expandedSystemDirective += `\n\n=== LIVE GIT DIFF (@git-diff) ===\n(git diff unavailable: ${diffErr?.message || diffErr})\n`;
-        }
-      }
-      if (/(?:^|\s)@problems(?=\s|$)/i.test(promptStr)) {
-        const wsProblems = new LspDiagnosticsManager().getWorkspaceDiagnostics(project.root_path);
-        const probText =
-          wsProblems.length === 0
-            ? 'No syntax/parse problems detected in workspace.'
-            : JSON.stringify(wsProblems, null, 2);
-        expandedSystemDirective += `\n\n=== WORKSPACE DIAGNOSTICS (@problems) ===\n${probText}\n`;
-      }
-
-      const historyMessages = history
-        .filter((m) => m.id !== assistantMsg.id)
-        .slice(-14)
-        .map((m, idx, arr) => {
-          const rawContent =
-            idx === arr.length - 1 && m.role === 'user' && slashInfo.command ? slashInfo.cleanPrompt : m.content;
-          let attachments: any[] = [];
-          if (m.attachments) {
-            try {
-              attachments = typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments;
-            } catch {}
-          }
-          if (idx === arr.length - 1 && (!attachments || attachments.length === 0) && savedAttachments.length > 0) {
-            attachments = savedAttachments;
-          }
-
-          if (m.role === 'user' && Array.isArray(attachments) && attachments.length > 0) {
-            // Build rich workstation file grounding section
-            let fileGrounding = '\n\n=== ATTACHED WORKSTATION FILES & METADATA ===\n';
-            attachments.forEach((att: any, fIdx: number) => {
-              const fNum = fIdx + 1;
-              const fName = att.name || `file_${fNum}`;
-              const fPath = (att.savedPath || '').replace(/\\/g, '/');
-              const fSize = att.sizeHuman || (att.size ? `${att.size} bytes` : 'unknown size');
-              const fType = att.type || 'unknown type';
-              const fSha = att.sha256 ? ` (SHA-256: ${att.sha256})` : '';
-              const meta = att.metadata || {};
-
-              fileGrounding += `[File ${fNum}] ${fName}\n`;
-              if (fPath) fileGrounding += `- Workstation Local Path: "${fPath}"\n`;
-              fileGrounding += `- Size: ${fSize}${fSha}\n`;
-              fileGrounding += `- MIME Type: ${fType}\n`;
-              if (meta.width && meta.height) {
-                fileGrounding += `- Dimensions: ${meta.width} x ${meta.height} px\n`;
-              }
-              if (meta.exif && Object.keys(meta.exif).length > 0) {
-                fileGrounding += `- EXIF Camera/Capture Metadata: ${JSON.stringify(meta.exif)}\n`;
-              }
-              if (meta.lineCount !== undefined) {
-                fileGrounding += `- Text Lines: ${meta.lineCount}, Characters: ${meta.characterCount}\n`;
-              }
-              if (meta.previewSnippet) {
-                fileGrounding += `- Text Preview Snippet:\n[PREVIEW START]\n` + String(meta.previewSnippet || "").slice(0, 400) + `\n[PREVIEW END]\n`;
-              }
-              fileGrounding += `(Saved on workstation disk. You can read, inspect with inspect_file_metadata, or execute tools on this file directly.)\n\n`;
-            });
-
-            const fullUserText = (rawContent || 'Please analyze the attached files.').trim() + fileGrounding;
-
-            // Multimodal vision parts (for Strata port 8080)
-            const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
-              { type: 'text', text: fullUserText },
-            ];
-
-            for (const att of attachments) {
-              // Also check for embedded images extracted from PDFs (e.g. photos of drink menus)
-              if (att.metadata?.extractedImages && Array.isArray(att.metadata.extractedImages)) {
-                for (const emb of att.metadata.extractedImages) {
-                  const embUrl = emb.url || (emb.savedPath && fs.existsSync(emb.savedPath)
-                    ? `data:image/jpeg;base64,${fs.readFileSync(emb.savedPath).toString('base64')}`
-                    : undefined);
-                  if (embUrl) {
-                    contentParts.push({
-                      type: 'image_url',
-                      image_url: { url: embUrl },
-                    });
-                  }
-                }
-              }
-
-              const isImg =
-                att.isImage ||
-                (typeof att === 'string' && att.startsWith('data:image/')) ||
-                (typeof att?.type === 'string' && att.type.startsWith('image/'));
-
-              if (isImg) {
-                let imgUrl = typeof att === 'string' ? att : att.base64DataUrl || att.dataUrl;
-                if (!imgUrl && att.savedPath && fs.existsSync(att.savedPath)) {
-                  try {
-                    const buf = fs.readFileSync(att.savedPath);
-                    const ext = (path.extname(att.savedPath) || '.jpg').toLowerCase();
-                    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-                    imgUrl = `data:${mime};base64,${buf.toString('base64')}`;
-                  } catch {}
-                }
-                if (typeof imgUrl === 'string' && (imgUrl.startsWith('data:image/') || imgUrl.startsWith('http://') || imgUrl.startsWith('https://'))) {
-                  contentParts.push({
-                    type: 'image_url',
-                    image_url: { url: imgUrl },
-                  });
-                }
-              }
-            }
-
-            if (contentParts.length > 1) {
-              return {
-                role: m.role,
-                content: contentParts,
-              };
-            }
-            return {
-              role: m.role,
-              content: fullUserText,
-            };
-          }
-
-          return {
-            role: m.role,
-            content: rawContent,
-          };
-        });
+      const historyMessages = buildChatHistoryMessages({
+        history,
+        assistantMsgId: assistantMsg.id,
+        savedAttachments,
+        slashCommand: slashInfo.command,
+        slashCleanPrompt: slashInfo.cleanPrompt,
+        limit: isComfyStudioTurn ? 6 : 14,
+      });
 
       const chatMessages: Array<{ role: string; content: any; tool_calls?: any[]; tool_call_id?: string; name?: string }> = [
-        {
-          role: 'system',
-          content: expandedSystemDirective,
-        },
+        { role: 'system', content: expandedSystemDirective },
         ...historyMessages,
       ];
 
@@ -603,8 +366,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       let committedFinalContent = '';
       const collectedStepNotes: string[] = [];
       let lastStepHadToolError = false;
-      const MAX_STEP_WINDOWS = 4; // Up to 4 × MAX_TOOL_STEPS (128 steps) via automatic context compaction
+      const MAX_STEP_WINDOWS = 4;
       let stepWindowCount = 0;
+      let hitWindowCap = false;
       let consecutiveErrorSteps = 0;
       let lastToolSignature = '';
       let repeatedSignatureCount = 0;
@@ -612,7 +376,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const usedToolsInTurn = new Set<string>();
       emitSubagentEvents = ['/goal', '/teamwork', '/swarm'].includes(slashInfo.command || '');
 
-      // Broadcast active subagent start to Overview drawer only for explicit multi-step/agent slash modes
       if (emitSubagentEvents) {
         send({
           type: 'SUBAGENT_EVENT',
@@ -635,16 +398,29 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         });
       }
 
+      const runInferenceStep = async (infParams: Parameters<TabbyEngine['streamChatCompletion']>[0]) => {
+        if (isComfyStudioTurn && typeof tabby.getGoogleEngine === 'function') {
+          return await ComfyCompanionManager.getInstance().streamStudioTurn(
+            infParams,
+            tabby.getGoogleEngine(),
+            (p) => tabby.streamChatCompletion(p)
+          );
+        }
+        return await tabby.streamChatCompletion(infParams);
+      };
+
       while (step < MAX_TOOL_STEPS) {
         step++;
         turnStep = step;
-        turnMaxSteps = MAX_TOOL_STEPS;
-        thinkingFinished = false;
+        const isLastWindow = stepWindowCount + 1 >= MAX_STEP_WINDOWS;
+        const isFinalStep = isLastWindow && step === MAX_TOOL_STEPS;
+        phaseEmitter.setStepState(step, MAX_TOOL_STEPS, false);
+
         let stepThinkingClosed = false;
         const closeThinking = () => {
           if (stepThinkingClosed) return;
           stepThinkingClosed = true;
-          thinkingFinished = true;
+          phaseEmitter.setThinkingFinished(true);
           send({
             type: 'THOUGHT_STREAM',
             payload: {
@@ -656,7 +432,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             },
           });
         };
-        const isFinalStep = step === MAX_TOOL_STEPS;
+
         const executedToolsThisStep: Array<{
           id: string;
           toolName: string;
@@ -666,7 +442,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           hadError?: boolean;
         }> = [];
 
-        // On the final step, omit tools so the model must provide its final text synthesis
         const includeSwarmBoardTools =
           slashInfo.command === '/swarm' || SwarmManager.getInstance().hasActiveSwarm(thread.id);
         const activeTools = isFinalStep
@@ -675,12 +450,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               prompt: slashInfo.cleanPrompt || promptStr,
               slashCommand: slashInfo.command,
               forceLean: slashInfo.command === '/lean',
+              forceComfyStudio: isComfyStudioTurn,
               builtinTools: BUILTIN_TOOLS_SCHEMA,
               skillTools: SKILL_TOOLS_SCHEMA,
               mcpTools: mcp.exportOpenAiTools(),
               swarmTools: includeSwarmBoardTools ? SWARM_TOOLS_SCHEMA : undefined,
               previouslyUsedTools: usedToolsInTurn,
             });
+
         if (isFinalStep && hasExecutedTools && chatMessages.length > 0) {
           chatMessages[0] = {
             ...chatMessages[0],
@@ -691,7 +468,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
 
         const isLocalOrchestrator =
-          brainProviderCfg.provider !== 'google_ai_studio' && isStrataOrchestratorTier(params.tier);
+          !isComfyStudioTurn &&
+          brainProviderCfg.provider !== 'google_ai_studio' &&
+          isStrataOrchestratorTier(params.tier);
         const orchestratorStep = isLocalOrchestrator
           ? computeOrchestratorStepConfig(params.tier, step, lastStepHadToolError)
           : null;
@@ -702,13 +481,15 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             threadId: thread!.id,
             stepIndex: step,
             budget: effectiveThinkingBudget,
-            reasoningEffort: orchestratorStep
-              ? orchestratorStep.reasoningEffort
-              : adaptiveCot.reasoningEffort,
+            reasoningEffort: orchestratorStep ? orchestratorStep.reasoningEffort : adaptiveCot.reasoningEffort,
             reasoningBudgetTokens: orchestratorStep
               ? orchestratorStep.reasoningBudgetTokens
               : adaptiveCot.reasoningBudgetTokens,
-            modeLabel: orchestratorStep ? orchestratorStep.modeLabel : adaptiveCot.modeLabel,
+            modeLabel: isComfyStudioTurn
+              ? `ComfyUI Studio • ${studioCfg.companionBrain}`
+              : orchestratorStep
+                ? orchestratorStep.modeLabel
+                : adaptiveCot.modeLabel,
             timestamp: Date.now(),
           },
         });
@@ -747,7 +528,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           'prefilling',
           step === 1 ? 'Processing prompt...' : `Evaluating tool outputs (Step ${step}/${MAX_TOOL_STEPS})...`
         );
-        const result = await tabby.streamChatCompletion({
+        const result = await runInferenceStep({
           tier: params.tier,
           thinkingBudget: effectiveThinkingBudget,
           stepIndex: step,
@@ -759,11 +540,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             closeThinking();
             emitPhase('preparing_tool_call', toolName ? `Preparing tool call: ${toolName}...` : 'Preparing tool call...');
           },
-          onThoughtDelta: (delta, elapsedMs, tokenCount) => {
+          onThoughtDelta: (delta, elapsedMs) => {
             emitPhase('thinking', `Thinking (Step ${step}/${MAX_TOOL_STEPS})...`);
             cumulativeThinkingTokens += Math.max(1, Math.ceil(delta.length / 4));
             lastThinkingMs = elapsedMs;
-            const liveTokPerSec = tabby.getTelemetry().tokensPerSec || Number((cumulativeThinkingTokens / Math.max(0.08, elapsedMs / 1000)).toFixed(1));
+            const liveTokPerSec =
+              tabby.getTelemetry().tokensPerSec ||
+              Number((cumulativeThinkingTokens / Math.max(0.08, elapsedMs / 1000)).toFixed(1));
             db.appendThoughtDelta(assistantMsg.id, thread!.id, delta, elapsedMs, cumulativeThinkingTokens);
             send({
               type: 'THOUGHT_STREAM',
@@ -779,14 +562,16 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
           },
-          onTokenDelta: (delta, tokenCount, measuredTokPerSec) => {
+          onTokenDelta: (delta, _tokenCount, measuredTokPerSec) => {
             closeThinking();
             if (isFinalStep && hasExecutedTools) emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
             else emitPhase('streaming_prose', 'Writing response...');
             cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
-            const liveTokPerSec = measuredTokPerSec || tabby.getTelemetry().tokensPerSec || Number((cumulativeOutputTokens / Math.max(0.08, (Date.now() - turnStartMs) / 1000)).toFixed(1));
+            const liveTokPerSec =
+              measuredTokPerSec ||
+              tabby.getTelemetry().tokensPerSec ||
+              Number((cumulativeOutputTokens / Math.max(0.08, (Date.now() - turnStartMs) / 1000)).toFixed(1));
             db.appendTokenDelta(assistantMsg.id, thread!.id, delta, cumulativeOutputTokens);
-            // If this is step > 1 and no thoughts arrived yet, mark thinking as finished once text tokens start
             send({
               type: 'TOKEN_STREAM',
               payload: {
@@ -800,191 +585,189 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
           },
-          onToolCallRequest: isFinalStep ? undefined : async (toolName, toolArgs) => {
-            closeThinking();
-            hasExecutedTools = true;
-            usedToolsInTurn.add(toolName);
-            db.updateThread(thread!.id, { status: 'executing_tool' });
-            const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
-            const toolExec = db.createToolExecution({
-              message_id: assistantMsg.id,
-              thread_id: thread!.id,
-              tool_name: toolName,
-              mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
-              arguments_json: JSON.stringify(toolArgs),
-            });
-
-            emitPhase('executing_tools', `Running ${toolName}...`, { active_tool_id: toolExec.id });
-            send({
-              type: 'TOOL_EVENT',
-              payload: {
-                session_id: thread!.id,
-                thread_id: thread!.id,
-                message_id: assistantMsg.id,
-                tool_execution_id: toolExec.id,
-                tool_name: toolName,
-                command: cmdFormatted,
-                arguments: toolArgs,
-                output: '',
-                status: 'running',
-              },
-            });
-
-            if (emitSubagentEvents) {
-              send({
-                type: 'SUBAGENT_EVENT',
-                payload: {
-                  id: subagentId,
-                  thread_id: thread!.id,
+          onToolCallRequest: isFinalStep
+            ? undefined
+            : async (toolName, toolArgs) => {
+                closeThinking();
+                hasExecutedTools = true;
+                usedToolsInTurn.add(toolName);
+                db.updateThread(thread!.id, { status: 'executing_tool' });
+                const cmdFormatted = `${toolName}(${JSON.stringify(toolArgs)})`;
+                const toolExec = db.createToolExecution({
                   message_id: assistantMsg.id,
-                  role: slashInfo.subagentRole,
-                  command: slashInfo.command || 'autonomous',
-                  status: 'running',
-                  step,
-                  maxSteps: MAX_TOOL_STEPS,
-                  summary: `Step ${step}: ${toolName}(${ toolArgs.path || toolArgs.command || toolArgs.url || '' })`.slice(0, 90),
-                  timestamp: Date.now(),
-                },
-              });
-            }
+                  thread_id: thread!.id,
+                  tool_name: toolName,
+                  mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
+                  arguments_json: JSON.stringify(toolArgs),
+                });
 
-            try {
-              const execResult = await tools.executeTool(toolName, toolArgs, {
-                abortSignal: abortController.signal,
-                threadId: thread!.id,
-                messageId: assistantMsg.id,
-                workspaceRoot: project.root_path,
-                projectHost: project.host_name || undefined,
-                onStdoutChunk: (chunk) => {
-                  send({
-                    type: 'TOOL_STREAM',
-                    payload: {
-                      thread_id: thread!.id,
-                      message_id: assistantMsg.id,
-                      tool_execution_id: toolExec.id,
-                      stream: 'stdout',
-                      chunk,
-                    },
-                  });
-                },
-                onStderrChunk: (chunk) => {
-                  send({
-                    type: 'TOOL_STREAM',
-                    payload: {
-                      thread_id: thread!.id,
-                      message_id: assistantMsg.id,
-                      tool_execution_id: toolExec.id,
-                      stream: 'stderr',
-                      chunk,
-                    },
-                  });
-                },
-                onFileCheckpointCreated: (checkpoint) => {
-                  send({
-                    type: 'CHECKPOINT_CREATED',
-                    payload: { thread_id: thread!.id, checkpoint },
-                  });
-                },
-                onScreenCaptured: (base64Image, windowTitle) => {
-                  send({
-                    type: 'VISION_CAPTURE',
-                    payload: {
-                      base64DataUrl: base64Image,
-                      activeWindowTitle: windowTitle,
-                    },
-                  });
-                },
-              });
-
-              // Check Harness² Recursive Propose-Probe-Compose Loop on Tool Failure
-              const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
-                workspaceRoot: project.root_path,
-                toolName,
-                command: cmdFormatted,
-                exitCode: execResult.exitCode,
-                stdout: execResult.stdout,
-                stderr: execResult.stderr,
-              });
-
-              if (ppcCycle) {
+                emitPhase('executing_tools', `Running ${toolName}...`, { active_tool_id: toolExec.id });
                 send({
-                  type: 'HARNESS_PPC_COMPLETED',
+                  type: 'TOOL_EVENT',
                   payload: {
-                    cycle: ppcCycle,
-                    components: harness.listHarnessComponents(project.root_path),
+                    session_id: thread!.id,
+                    thread_id: thread!.id,
+                    message_id: assistantMsg.id,
+                    tool_execution_id: toolExec.id,
+                    tool_name: toolName,
+                    command: cmdFormatted,
+                    arguments: toolArgs,
+                    output: '',
+                    status: 'running',
                   },
                 });
-              }
 
-              const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
-              db.updateToolExecution(toolExec.id, {
-                stdout_stream: execResult.stdout,
-                stderr_stream: execResult.stderr,
-                exit_code: execResult.exitCode,
-                status: finalStatus,
-                duration_ms: execResult.durationMs,
-              });
+                if (emitSubagentEvents) {
+                  send({
+                    type: 'SUBAGENT_EVENT',
+                    payload: {
+                      id: subagentId,
+                      thread_id: thread!.id,
+                      message_id: assistantMsg.id,
+                      role: slashInfo.subagentRole,
+                      command: slashInfo.command || 'autonomous',
+                      status: 'running',
+                      step,
+                      maxSteps: MAX_TOOL_STEPS,
+                      summary: `Step ${step}: ${toolName}(${toolArgs.path || toolArgs.command || toolArgs.url || ''})`.slice(0, 90),
+                      timestamp: Date.now(),
+                    },
+                  });
+                }
 
-              send({
-                type: 'TOOL_EVENT',
-                payload: {
-                  session_id: thread!.id,
-                  thread_id: thread!.id,
-                  message_id: assistantMsg.id,
-                  tool_execution_id: toolExec.id,
-                  tool_name: toolName,
-                  command: cmdFormatted,
-                  arguments: toolArgs,
-                  output: execResult.stdout || execResult.stderr,
-                  exit_code: execResult.exitCode,
-                  duration_ms: execResult.durationMs,
-                  status: finalStatus,
-                },
-              });
+                try {
+                  const execResult = await tools.executeTool(toolName, toolArgs, {
+                    abortSignal: abortController.signal,
+                    threadId: thread!.id,
+                    messageId: assistantMsg.id,
+                    workspaceRoot: project.root_path,
+                    projectHost: project.host_name || undefined,
+                    onStdoutChunk: (chunk) => {
+                      send({
+                        type: 'TOOL_STREAM',
+                        payload: {
+                          thread_id: thread!.id,
+                          message_id: assistantMsg.id,
+                          tool_execution_id: toolExec.id,
+                          stream: 'stdout',
+                          chunk,
+                        },
+                      });
+                    },
+                    onStderrChunk: (chunk) => {
+                      send({
+                        type: 'TOOL_STREAM',
+                        payload: {
+                          thread_id: thread!.id,
+                          message_id: assistantMsg.id,
+                          tool_execution_id: toolExec.id,
+                          stream: 'stderr',
+                          chunk,
+                        },
+                      });
+                    },
+                    onFileCheckpointCreated: (checkpoint) => {
+                      send({
+                        type: 'CHECKPOINT_CREATED',
+                        payload: { thread_id: thread!.id, checkpoint },
+                      });
+                    },
+                    onScreenCaptured: (base64Image, windowTitle) => {
+                      send({
+                        type: 'VISION_CAPTURE',
+                        payload: { base64DataUrl: base64Image, activeWindowTitle: windowTitle },
+                      });
+                    },
+                  });
 
-              if (abortController.signal.aborted) return;
-              executedToolsThisStep.push({
-                id: toolExec.id,
-                toolName,
-                arguments: toolArgs,
-                output: execResult.stdout || execResult.stderr || 'Success (no output)',
-                screenshotBase64: execResult.screenshotBase64,
-                hadError: finalStatus === 'error',
-              });
-            } catch (toolErr: any) {
-              const errStr = toolErr?.message || String(toolErr);
-              db.updateToolExecution(toolExec.id, {
-                stdout_stream: '',
-                stderr_stream: `Tool execution failed: ${errStr}`,
-                exit_code: 1,
-                status: 'error',
-                duration_ms: 0,
-              });
-              send({
-                type: 'TOOL_EVENT',
-                payload: {
-                  session_id: thread!.id,
-                  thread_id: thread!.id,
-                  message_id: assistantMsg.id,
-                  tool_execution_id: toolExec.id,
-                  tool_name: toolName,
-                  command: cmdFormatted,
-                  arguments: toolArgs,
-                  output: `Tool execution failed: ${errStr}`,
-                  exit_code: 1,
-                  duration_ms: 0,
-                  status: 'error',
-                },
-              });
-              executedToolsThisStep.push({
-                id: toolExec.id,
-                toolName,
-                arguments: toolArgs,
-                output: `Tool error: ${errStr}`,
-                hadError: true,
-              });
-            }
-          },
+                  const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
+                    workspaceRoot: project.root_path,
+                    toolName,
+                    command: cmdFormatted,
+                    exitCode: execResult.exitCode,
+                    stdout: execResult.stdout,
+                    stderr: execResult.stderr,
+                  });
+
+                  if (ppcCycle) {
+                    send({
+                      type: 'HARNESS_PPC_COMPLETED',
+                      payload: {
+                        cycle: ppcCycle,
+                        components: harness.listHarnessComponents(project.root_path),
+                      },
+                    });
+                  }
+
+                  const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
+                  db.updateToolExecution(toolExec.id, {
+                    stdout_stream: execResult.stdout,
+                    stderr_stream: execResult.stderr,
+                    exit_code: execResult.exitCode,
+                    status: finalStatus,
+                    duration_ms: execResult.durationMs,
+                  });
+
+                  send({
+                    type: 'TOOL_EVENT',
+                    payload: {
+                      session_id: thread!.id,
+                      thread_id: thread!.id,
+                      message_id: assistantMsg.id,
+                      tool_execution_id: toolExec.id,
+                      tool_name: toolName,
+                      command: cmdFormatted,
+                      arguments: toolArgs,
+                      output: execResult.stdout || execResult.stderr,
+                      exit_code: execResult.exitCode,
+                      duration_ms: execResult.durationMs,
+                      status: finalStatus,
+                    },
+                  });
+
+                  if (abortController.signal.aborted) return;
+                  executedToolsThisStep.push({
+                    id: toolExec.id,
+                    toolName,
+                    arguments: toolArgs,
+                    output: execResult.stdout || execResult.stderr || 'Success (no output)',
+                    screenshotBase64: execResult.screenshotBase64,
+                    hadError: finalStatus === 'error',
+                  });
+                } catch (toolErr: any) {
+                  const errStr = toolErr?.message || String(toolErr);
+                  db.updateToolExecution(toolExec.id, {
+                    stdout_stream: '',
+                    stderr_stream: `Tool execution failed: ${errStr}`,
+                    exit_code: 1,
+                    status: 'error',
+                    duration_ms: 0,
+                  });
+                  send({
+                    type: 'TOOL_EVENT',
+                    payload: {
+                      session_id: thread!.id,
+                      thread_id: thread!.id,
+                      message_id: assistantMsg.id,
+                      tool_execution_id: toolExec.id,
+                      tool_name: toolName,
+                      command: cmdFormatted,
+                      arguments: toolArgs,
+                      output: `Tool execution failed: ${errStr}`,
+                      exit_code: 1,
+                      duration_ms: 0,
+                      status: 'error',
+                    },
+                  });
+                  executedToolsThisStep.push({
+                    id: toolExec.id,
+                    toolName,
+                    arguments: toolArgs,
+                    output: `Tool error: ${errStr}`,
+                    hadError: true,
+                  });
+                }
+              },
         });
 
         if (abortController.signal.aborted) {
@@ -993,23 +776,21 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
         const stepText = deduplicateRepeatedSequences((result.content || '').trim());
 
-        // Check if no tools were executed in this step
         if (executedToolsThisStep.length === 0) {
-          // Did the model stop prematurely with an unfulfilled intention ("Let me read...", empty output, etc.)?
           if (!isFinalStep) {
             const autoCheck = detectPrematureStop(
               stepText,
               hasExecutedTools,
               autoContinueCount,
               MAX_AUTO_CONTINUES,
-              params.prompt
+              promptStr,
+              Array.from(usedToolsInTurn)
             );
             if (autoCheck.shouldContinue) {
               autoContinueCount++;
               if (stepText) {
                 collectedStepNotes.push(stepText);
               }
-              // Move the transient status note into the collapsible activity log and keep main message buffer clean
               db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
               send({
                 type: 'STEP_NOTE_COMMITTED',
@@ -1041,7 +822,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 });
               }
               lastStepHadToolError = false;
-
               chatMessages.push({
                 role: 'assistant',
                 content: stepText || 'Proceeding to next action.',
@@ -1054,16 +834,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             }
           }
 
-          // Model genuinely completed its final response!
           committedFinalContent = committedFinalContent
             ? `${committedFinalContent}\n\n${stepText}`
             : stepText;
           break;
         }
 
-        // Tools were executed in this step!
-        // Always commit intermediate step prose as a step segment boundary so the client can render
-        // Antigravity's interleaved Working -> Prose -> Working -> Prose layout cleanly.
         if (stepText) {
           collectedStepNotes.push(stepText);
           db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
@@ -1081,7 +857,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           });
         }
 
-        // Track whether any tool in this step errored so orchestrator tiers can re-enable thinking on recovery
         lastStepHadToolError = executedToolsThisStep.some((t) => Boolean(t.hadError));
         if (executedToolsThisStep.length > 0 && executedToolsThisStep.every((t) => Boolean(t.hadError))) {
           consecutiveErrorSteps++;
@@ -1098,7 +873,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           repeatedSignatureCount = 1;
         }
 
-        // Feed tool outputs back to the model for next turn reasoning
         db.updateThread(thread.id, { status: 'thinking' });
 
         const toolCallsArray = executedToolsThisStep.map((t) => ({
@@ -1133,22 +907,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                 },
                 {
                   type: 'image_url',
-                  image_url: {
-                    url: t.screenshotBase64,
-                  },
+                  image_url: { url: t.screenshotBase64 },
                 },
               ],
             });
           }
         }
 
-        // If a 32-step window finished mid-task, auto-compact and continue unless stuck in a failing loop
         if (!abortController.signal.aborted && step >= MAX_TOOL_STEPS) {
           if (consecutiveErrorSteps >= 4 || repeatedSignatureCount >= 4) {
             hitStuckLoop = true;
             break;
           }
-          if (stepWindowCount + 1 < MAX_STEP_WINDOWS) {
+          if (!isLastWindow) {
             stepWindowCount++;
             const windowCompact = autoCompactMessages(chatMessages, 100, 6);
             if (windowCompact.didCompact) {
@@ -1169,8 +940,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               role: 'user',
               content:
                 `[System Auto-Continue • Context Compacted (Window ${stepWindowCount + 1}/${MAX_STEP_WINDOWS})]: ` +
-                `Earlier tool outputs were distilled to keep inference fast. Continue executing the remaining steps to complete the user's request. ` +
-                `Only pause and ask the user if you are genuinely blocked on missing information or a decision you cannot resolve.`,
+                `Earlier tool outputs were distilled to keep inference fast. Continue executing the remaining steps to complete the user's request.`,
             });
             emitPhase(
               'thinking',
@@ -1178,13 +948,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             );
             step = 0;
             continue;
+          } else {
+            hitWindowCap = true;
           }
         }
       }
 
-      // If the loop exited because of a stuck retry loop or the outer window cap, strip any trailing
-      // raw <tool_call> XML and explain clearly instead of stopping silently.
-      if (!abortController.signal.aborted && (hitStuckLoop || (step >= MAX_TOOL_STEPS && hasExecutedTools))) {
+      if (!abortController.signal.aborted && (hitStuckLoop || (hitWindowCap && hasExecutedTools))) {
         const limitNotice = hitStuckLoop
           ? `\n\n---\n*Paused because the last few tool calls kept repeating or failing. Let me know how you'd like me to proceed or adjust the approach.*`
           : `\n\n---\n*Paused after ${MAX_STEP_WINDOWS} compacted ${MAX_TOOL_STEPS}-step windows (${MAX_STEP_WINDOWS * MAX_TOOL_STEPS} total steps). Send a follow-up message or use \`/goal\` to keep going.*`;
@@ -1206,7 +976,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         });
       }
 
-      // Early exit if aborted during tool execution or token generation
       if (abortController.signal.aborted) {
         turnOutcome = 'aborted';
         db.finalizeRunningToolExecutions(assistantMsg.id);
@@ -1231,7 +1000,6 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return;
       }
 
-      // If /plan was used, automatically sync the generated plan to the Plan Workbench
       if (slashInfo.command === '/plan' && committedFinalContent.trim().length > 40) {
         send({
           type: 'ARTIFACT_SYNC',
@@ -1244,13 +1012,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         });
       }
 
-      // Fallback / synthesis if loop ended with empty user-facing prose
       if (!committedFinalContent.trim()) {
-        // Prefer promoting the last substantial step note if available
         const substantialNote = [...collectedStepNotes].reverse().find((n) => n.trim().length >= 40);
         let fallbackText = substantialNote || '';
 
-        // If tools ran but we have no substantial prose yet, run a 1-step tool-free synthesis
         if (!fallbackText && hasExecutedTools && !abortController.signal.aborted) {
           emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
           try {
@@ -1262,7 +1027,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   'Please summarize the results and provide your complete, clear final answer for the user based on the tool outputs above. Do not call any tools.',
               },
             ];
-            const synthResult = await tabby.streamChatCompletion({
+            const synthResult = await runInferenceStep({
               tier: params.tier,
               thinkingBudget: effectiveThinkingBudget,
               stepIndex: step + 1,
@@ -1293,7 +1058,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               committedFinalContent = synthClean;
             }
           } catch (synthErr) {
-            console.error('[PromptTurn] Final synthesis step failed:', synthErr);
+            if (!isAbortLikeError(synthErr)) {
+              console.error('[PromptTurn] Final synthesis step failed:', synthErr);
+            }
           }
         }
 
@@ -1327,7 +1094,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       db.finalizeStreamingMessage(assistantMsg.id);
       const updatedThread = db.updateThread(thread.id, { status: 'idle' });
 
-      thinkingFinished = true;
+      phaseEmitter.setThinkingFinished(true);
       send({
         type: 'THOUGHT_STREAM',
         payload: {
@@ -1369,11 +1136,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         },
       });
     } catch (err: any) {
-      if (
-        abortController.signal.aborted ||
-        err?.name === 'AbortError' ||
-        err?.message?.toLowerCase().includes('abort')
-      ) {
+      if (abortController.signal.aborted || isAbortLikeError(err)) {
         turnOutcome = 'aborted';
         db.finalizeRunningToolExecutions(assistantMsg.id);
         db.finalizeStreamingMessage(assistantMsg.id);
@@ -1422,13 +1185,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             command: slashInfo.command || 'autonomous',
             status: turnOutcome === 'error' ? 'error' : 'completed',
             step: turnStep,
-            maxSteps: turnMaxSteps,
+            maxSteps: slashInfo.maxToolSteps,
             summary:
               turnOutcome === 'error'
                 ? `Failed: ${turnErrorMsg.slice(0, 120)}`
                 : turnOutcome === 'aborted'
-                ? `Stopped at step ${turnStep}`
-                : `Completed in ${turnStep} step${turnStep === 1 ? '' : 's'}`,
+                  ? `Stopped at step ${turnStep}`
+                  : `Completed in ${turnStep} step${turnStep === 1 ? '' : 's'}`,
             timestamp: Date.now(),
           },
         });
@@ -1442,4 +1205,3 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     }
   };
 }
-

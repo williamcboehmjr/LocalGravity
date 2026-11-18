@@ -3,6 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import YAML from 'yaml';
 import { LlamaMoESidecar } from './llamaSidecar.js';
+import { getPathsConfig } from '../core/pathsConfig.js';
+import type { InferenceBackend } from '../core/inferenceBackend.js';
 import { ModelTier, ThinkingBudget } from '../db/database.js';
 import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from '../agent/adaptiveCot.js';
 import { SwarmTurnScheduler, type GpuTurnPriority } from '../swarm/swarmScheduler.js';
@@ -36,7 +38,8 @@ import {
 } from './modelSpecs.js';
 
 
-export class TabbyEngine {
+export class TabbyEngine implements InferenceBackend {
+  public readonly id = 'tabby-strata';
   private repoRoot: string;
   private tabbyBaseUrl: string;
   private tabbyPort: number;
@@ -59,21 +62,14 @@ export class TabbyEngine {
     this.repoRoot = options.repoRoot;
     this.googleEngine = new GoogleAiEngine(this.repoRoot);
     this.tabbyPort = options.tabbyPort;
-    this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || 'http://127.0.0.1:8080';
+    this.tabbyBaseUrl = options.tabbyBaseUrl || process.env.LOCALGRAVITY_TABBY_URL || getPathsConfig(this.repoRoot).strataUrl;
     this.apiKey = options.apiKey || process.env.TABBY_API_KEY || 'localgravity-tabby-secret';
     this.adminKey = (options as any).adminKey || process.env.TABBY_ADMIN_KEY || 'localgravity-admin-secret';
     if (options.idleTimeoutMinutes !== undefined) {
       this.idleTimeoutMs = options.idleTimeoutMinutes * 60 * 1000;
     }
 
-    this.modelsRootDirs = [
-      ...(process.env.TABBY_MODELS_DIR ? [process.env.TABBY_MODELS_DIR] : []),
-      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Strata', 'models'),
-      'E:\\Github\\Models',
-      path.join(this.repoRoot, 'models'),
-      path.join(os.homedir(), 'Documents', 'GitHub', 'tabbyAPI', 'models'),
-      'E:\\Github\\tabbyAPI\\models',
-    ];
+    this.modelsRootDirs = getPathsConfig(this.repoRoot).modelsDirs;
 
     this.sysramCache = {
       low: {
@@ -124,6 +120,10 @@ export class TabbyEngine {
 
   public getGoogleEngine(): GoogleAiEngine {
     return this.googleEngine;
+  }
+
+  public getDisplayName(tier: ModelTier = this.activeTier): string {
+    return this.resolveDiskModelName(tier);
   }
 
   public getBrainProviderConfig(): BrainProviderConfig {

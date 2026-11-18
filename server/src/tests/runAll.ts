@@ -17,6 +17,8 @@ const tests = [
   'edgeBridge.test.js',
   'googleAiEngine.test.js',
   'piHarnessUpgrades.test.js',
+  'prematureStop.test.js',
+  'comfyuiReliability.test.js',
 ];
 
 console.log('==============================================================');

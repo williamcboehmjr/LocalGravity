@@ -1,6 +1,7 @@
 import { ChildProcess, spawn, execSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { getPathsConfig } from '../core/pathsConfig.js';
 
 export type GpuEngineState = 'active' | 'standby' | 'waking';
 export type StrataProfileId = 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl';
@@ -49,11 +50,7 @@ export class LlamaMoESidecar {
   }
 
   private getInstallDir(): string {
-    return path.join(
-      process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local',
-      'Strata',
-      'install'
-    );
+    return getPathsConfig().strataInstallDir;
   }
 
   public resolveProfileConfig(requestedProfile: StrataProfileId): {
@@ -179,9 +176,20 @@ export class LlamaMoESidecar {
     this.state = 'waking';
     this.appendLog(`[LlamaMoE] Waking Strata GPU Inference Engine (${targetProfile})...`);
 
+    // Ensure warm ComfyUI models are evicted before Strata allocates 15 GB of GPU VRAM
+    try {
+      await fetch(`${getPathsConfig().comfyUrl}/free`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+        signal: AbortSignal.timeout(3000),
+      });
+    } catch {}
+
+    const strataRoot = getPathsConfig().strataDir;
     const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
     const appControlDir = path.join(localAppData, 'Programs', 'Strata', 'control');
-    const strataTerminalRoot = path.join(localAppData, 'Strata', 'terminal');
+    const strataTerminalRoot = path.join(strataRoot, 'terminal');
     const terminalDir = fs.existsSync(path.join(appControlDir, 'serve', 'server.py'))
       ? appControlDir
       : fs.existsSync(path.join(strataTerminalRoot, 'current'))
