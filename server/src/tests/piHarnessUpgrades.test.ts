@@ -9,6 +9,8 @@ import { parseAntigravitySlashCommand } from '../agent/slashCommands.js';
 import { LocalGravityDB } from '../db/database.js';
 import { BuiltinToolExecutor } from '../tools/builtinTools.js';
 import { McpClientManager } from '../mcp/mcpManager.js';
+import { resolveDefaultShell } from '../terminal/terminalManager.js';
+import { queryHostHardwareTelemetry } from '../utils/telemetry.js';
 import { autoCompactMessages } from '../utils/autoCompactor.js';
 import type { PrunableMessage } from '../utils/messagePruning.js';
 
@@ -249,7 +251,14 @@ async function runPiHarnessUpgradeTests() {
       'Re-compaction must carry forward Files Modified ledger'
     );
 
-    console.log('✅ Pi Harness Upgrades Unit Tests PASSED (All 6 test groups GREEN)');
+    // 7. Cross-platform shell & Linux/ARM64 telemetry checks
+    const defaultShell = resolveDefaultShell();
+    assert.ok(defaultShell && typeof defaultShell.bin === 'string' && defaultShell.bin.length > 0);
+    const hwTelemetry = queryHostHardwareTelemetry('high');
+    assert.ok(Number.isFinite(hwTelemetry.hostRamTotalGb) && hwTelemetry.hostRamTotalGb > 0);
+    assert.ok(Number.isFinite(hwTelemetry.vramTotalGb) && hwTelemetry.vramTotalGb > 0);
+
+    console.log('✅ Pi Harness & Linux ARM64 Upgrades Unit Tests PASSED (All 7 test groups GREEN)');
   } finally {
     try {
       db?.close();

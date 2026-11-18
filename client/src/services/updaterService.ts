@@ -34,7 +34,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.21';
+  let currentVersion = '2.3.22';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
@@ -46,6 +46,13 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isMac =
     typeof navigator !== 'undefined' &&
     /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
+  const isLinux =
+    typeof navigator !== 'undefined' &&
+    /linux/i.test(navigator.userAgent || navigator.platform || '') &&
+    !isAndroid;
+  const isArm64 =
+    typeof navigator !== 'undefined' &&
+    /aarch64|arm64/i.test(navigator.userAgent || navigator.platform || '');
 
   // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)
   // Note: On macOS, Tauri v2 updater requires tar.gz bundles. If release uses DMG, native check may return an update
@@ -94,11 +101,19 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           ? 'android-aarch64'
           : isMac
           ? 'darwin-aarch64'
+          : isLinux && isArm64
+          ? 'linux-aarch64'
+          : isLinux
+          ? 'linux-x86_64'
           : 'windows-x86_64';
         const fallbackFile = isAndroid
           ? `LocalGravity_${latestTag}_arm64.apk`
           : isMac
           ? `LocalGravity_${latestTag}_aarch64.dmg`
+          : isLinux && isArm64
+          ? `LocalGravity_${latestTag}_arm64.deb`
+          : isLinux
+          ? `LocalGravity_${latestTag}_amd64.AppImage`
           : `LocalGravity_${latestTag}_x64_en-US.msi`;
         const platform = manifest.platforms?.[platformKey];
         return {

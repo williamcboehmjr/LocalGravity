@@ -23,6 +23,26 @@ pub struct RunResult {
 
 pub struct CommandRunner;
 
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+pub fn resolve_unix_shell() -> String {
+    if let Ok(shell) = std::env::var("SHELL") {
+        let trimmed = shell.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+            return trimmed.to_string();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let candidates = ["/bin/zsh", "/bin/bash", "/bin/sh"];
+    #[cfg(not(target_os = "macos"))]
+    let candidates = ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/bin/sh"];
+    for c in candidates {
+        if std::path::Path::new(c).exists() {
+            return c.to_string();
+        }
+    }
+    "/bin/sh".to_string()
+}
+
 impl CommandRunner {
     pub async fn execute_stream(
         cmd_string: &str,
@@ -49,7 +69,7 @@ impl CommandRunner {
 
         #[cfg(not(any(target_os = "windows", target_os = "android")))]
         let mut cmd = {
-            let mut c = Command::new("/bin/zsh");
+            let mut c = Command::new(resolve_unix_shell());
             c.args(["-c", cmd_string]);
             c
         };

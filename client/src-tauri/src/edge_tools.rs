@@ -71,7 +71,7 @@ pub fn get_identity() -> EdgeIdentity {
         }
     };
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "android")))]
-    let platform = "linux".to_string();
+    let platform = format!("linux ({})", std::env::consts::ARCH);
 
     #[cfg(target_os = "android")]
     let home_dir = "/storage/emulated/0".to_string();
@@ -500,7 +500,7 @@ pub async fn execute(tool_name: &str, args: Value, workspace_root: &str) -> Edge
             };
             #[cfg(not(any(target_os = "windows", target_os = "android")))]
             let mut cmd = {
-                let mut c = Command::new("/bin/zsh");
+                let mut c = Command::new(crate::runner::resolve_unix_shell());
                 c.args(["-c", cmd_str]);
                 c
             };

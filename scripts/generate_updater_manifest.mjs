@@ -55,6 +55,10 @@ const manifest = {
       signature: winSignature,
       url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_amd64.AppImage`,
     },
+    'linux-aarch64': {
+      signature: winSignature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_arm64.deb`,
+    },
     'android-aarch64': {
       signature: '',
       url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${version}/LocalGravity_${clientPkg.version}_arm64.apk`,

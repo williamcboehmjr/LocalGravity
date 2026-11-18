@@ -8,7 +8,18 @@ export interface TerminalOutputListener {
 
 export function resolveDefaultShell(): { bin: string; isPwsh: boolean } {
   if (os.platform() !== 'win32') {
-    return { bin: process.env.SHELL || '/bin/zsh', isPwsh: false };
+    const envShell = process.env.SHELL?.trim();
+    if (envShell && fs.existsSync(envShell)) {
+      return { bin: envShell, isPwsh: false };
+    }
+    const candidates =
+      os.platform() === 'darwin'
+        ? ['/bin/zsh', '/bin/bash', '/bin/sh']
+        : ['/bin/bash', '/usr/bin/bash', '/bin/zsh', '/bin/sh'];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return { bin: c, isPwsh: false };
+    }
+    return { bin: '/bin/sh', isPwsh: false };
   }
   const candidates = [
     'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
@@ -103,7 +114,11 @@ export class SharedTerminalManager {
     this.cwd = newCwd;
     if (this.shellProc && !this.shellProc.killed) {
       const escaped = newCwd.replace(/"/g, '\\"');
-      this.shellProc.stdin.write(`Set-Location "${escaped}"\r\n`);
+      if (os.platform() === 'win32') {
+        this.shellProc.stdin.write(`Set-Location "${escaped}"\r\n`);
+      } else {
+        this.shellProc.stdin.write(`cd "${escaped}"\n`);
+      }
     }
   }
 

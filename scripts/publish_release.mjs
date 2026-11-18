@@ -214,6 +214,14 @@ async function main() {
         signature: macSignature,
         url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_aarch64.dmg`,
       },
+      'linux-x86_64': {
+        signature: winSignature,
+        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_amd64.AppImage`,
+      },
+      'linux-aarch64': {
+        signature: winSignature,
+        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_arm64.deb`,
+      },
       'android-aarch64': {
         signature: '',
         url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_arm64.apk`,

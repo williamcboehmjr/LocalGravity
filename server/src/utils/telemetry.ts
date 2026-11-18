@@ -41,7 +41,11 @@ export function queryHostHardwareTelemetry(activeTier: ModelTier): HostHardwareT
       }
     }
   } catch {
-    // Use estimated tier VRAM on systems where nvidia-smi isn't in PATH
+    // On Linux (e.g. ARM64 unified-memory SBCs / Jetson / Pi / Asahi) without nvidia-smi, report unified host memory
+    if (os.platform() === 'linux') {
+      vramTotalGb = totalMemGb;
+      vramUsedGb = usedMemGb;
+    }
   }
 
   return {
