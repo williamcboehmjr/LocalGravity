@@ -21,6 +21,9 @@ export interface PathsConfig {
   modelsDirs: string[];
   litertLmExe: string | null;
   llamaServerExe: string | null;
+  ollamaUrl: string;
+  ollamaExe: string | null;
+  ollamaModelsDir: string;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -147,6 +150,23 @@ export function getPathsConfig(repoRootOverride?: string): PathsConfig {
     overrides.llamaServerExe ||
     (fs.existsSync(wingetLlamaServer) ? wingetLlamaServer : findExecutableOnPath(process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'));
 
+  const ollamaUrl = String(
+    process.env.LOCALGRAVITY_OLLAMA_URL || overrides.ollamaUrl || 'http://127.0.0.1:11434'
+  ).replace(/\/+$/, '');
+  const ollamaCandidatePaths =
+    process.platform === 'win32'
+      ? [path.join(localAppData, 'Programs', 'Ollama', 'ollama.exe')]
+      : ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/usr/bin/ollama'];
+  const existingOllamaExe = ollamaCandidatePaths.find((p) => fs.existsSync(p)) || null;
+  const ollamaExe =
+    process.env.LOCALGRAVITY_OLLAMA_EXE ||
+    overrides.ollamaExe ||
+    existingOllamaExe ||
+    findExecutableOnPath(process.platform === 'win32' ? 'ollama.exe' : 'ollama');
+  const ollamaModelsDir = String(
+    process.env.OLLAMA_MODELS || overrides.ollamaModelsDir || path.join(homeDir, '.ollama', 'models')
+  );
+
   const runtimeDir = path.join(repoRoot, '.runtime');
   const mcpOutputsDir = path.join(runtimeDir, 'mcp-outputs');
 
@@ -167,6 +187,9 @@ export function getPathsConfig(repoRootOverride?: string): PathsConfig {
     modelsDirs,
     litertLmExe,
     llamaServerExe,
+    ollamaUrl,
+    ollamaExe,
+    ollamaModelsDir,
   };
 
   cachedConfig = cfg;

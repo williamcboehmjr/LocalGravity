@@ -51,6 +51,7 @@ import { ProviderRegistry } from './providers/providerRegistry.js';
 import { Harness2Manager, getClientAppDataDir } from './harness/harnessManager.js';
 import { getPathsConfig } from './core/pathsConfig.js';
 import { ComfyCompanionManager } from './tools/handlers/comfyui/comfyCompanion.js';
+import { stopManagedOllamaServer } from './tools/handlers/comfyui/ollamaClient.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerThreadRoutes } from './routes/threads.js';
 import { registerHarnessRoutes } from './routes/harness.js';
@@ -360,7 +361,8 @@ export async function createDaemonServer(options?: {
   let clientWakeInFlight: Promise<void> | null = null;
   const ensureModelsWarmedOnClientConnect = () => {
     if (tabby.getBrainProviderConfig().provider === 'google_ai_studio') return;
-    if (ComfyCompanionManager.getInstance().getConfig().studioMode && ComfyCompanionManager.getInstance().isZeroVramBrain()) {
+    const comfyMgr = ComfyCompanionManager.getInstance();
+    if (comfyMgr.getConfig().studioMode && (comfyMgr.isZeroVramBrain() || comfyMgr.isFastLocalSwapBrain())) {
       return;
     }
     if (!tabby.getIdleStatus().isOffloaded) return;
@@ -547,6 +549,7 @@ export async function createDaemonServer(options?: {
     setTimeout(async () => {
       try {
         ComfyCompanionManager.getInstance().stopCpuServer();
+        stopManagedOllamaServer();
         await tabby.offloadGpu('shutdown');
         db.close();
       } catch {}
@@ -713,9 +716,22 @@ export async function createDaemonServer(options?: {
     return { config: mgr.getConfig(), capabilities: mgr.getCapabilities(), workflows };
   };
 
+  const buildLiveComfyStudioSnapshot = async () => {
+    const base = buildComfyStudioSnapshot();
+    const liveCaps = await ComfyCompanionManager.getInstance().getLiveCapabilities();
+    return { ...base, capabilities: liveCaps };
+  };
+
   const handleWsConnection = (socket: WebSocket, initialThreadId?: string) => {
     syncClients.add(socket);
     void ensureModelsWarmedOnClientConnect();
+    void buildLiveComfyStudioSnapshot()
+      .then((snap) => {
+        if (socket.readyState === 1) {
+          socket.send(JSON.stringify({ type: 'COMFY_CONFIG_UPDATED', payload: snap }));
+        }
+      })
+      .catch(() => {});
 
     const projects = db.listProjects();
     const activeProject = projects[0] || db.ensureDefaultProject(REPO_ROOT);
@@ -809,7 +825,9 @@ export async function createDaemonServer(options?: {
           });
         } else if (type === 'COMFY_CONFIG_UPDATE') {
           ComfyCompanionManager.getInstance().updateConfig(payload || {});
-          broadcastSync({ type: 'COMFY_CONFIG_UPDATED', payload: buildComfyStudioSnapshot() });
+          void buildLiveComfyStudioSnapshot().then((snap) => {
+            broadcastSync({ type: 'COMFY_CONFIG_UPDATED', payload: snap });
+          });
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
           if (payload?.client_id && threadId) {
@@ -952,6 +970,7 @@ export async function createDaemonServer(options?: {
   app.addHook('onClose', async () => {
     clearInterval(telemetryInterval);
     ComfyCompanionManager.getInstance().stopCpuServer();
+    stopManagedOllamaServer();
   });
 
   const clientDistPath = path.join(REPO_ROOT, 'client', 'dist');

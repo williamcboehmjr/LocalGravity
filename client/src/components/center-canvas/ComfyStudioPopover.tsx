@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Palette, ChevronDown, Check, Cpu, Cloud, Flame, Trash2, Sparkles } from 'lucide-react';
+import { Palette, ChevronDown, Check, Cpu, Cloud, Flame, Trash2, Sparkles, Eye, Download } from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 import type { ComfyCompanionBrainId } from '../../types/protocol';
 
@@ -11,9 +11,15 @@ const COMPANION_OPTIONS: Array<{
 }> = [
   {
     id: 'auto',
-    label: 'Auto (Fastest 0-VRAM)',
-    desc: 'Gemini 3.8 Flash if keyed, else CPU GGUF / LiteRT',
-    vramBadge: '0 MB GPU',
+    label: 'Auto (Smart Fastest)',
+    desc: 'Gemini 3.8 Flash if keyed, else Ollama Vision or CPU',
+    vramBadge: 'Auto Swap',
+  },
+  {
+    id: 'ollama_vision',
+    label: 'Ollama Vision (Fast GPU Swap)',
+    desc: 'Local Ollama vision + tools • Instant keep_alive:0 unload/reload',
+    vramBadge: '~1-2s Swap',
   },
   {
     id: 'gemini_flash',
@@ -67,9 +73,14 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
     setComfyStudioState,
     updateComfyConfigRemote,
     freeComfyVramRemote,
+    unloadOllamaRemote,
+    pullOllamaModelRemote,
   } = useSessionStore();
   const [open, setOpen] = useState(false);
   const [freeingVram, setFreeingVram] = useState(false);
+  const [unloadingOllama, setUnloadingOllama] = useState(false);
+  const [pullingModel, setPullingModel] = useState<string | null>(null);
+  const [pullError, setPullError] = useState<string | null>(null);
   const fetchedOnceRef = useRef(false);
 
   useEffect(() => {
@@ -105,9 +116,31 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
     setFreeingVram(false);
   };
 
+  const handleUnloadOllama = async () => {
+    setUnloadingOllama(true);
+    await unloadOllamaRemote();
+    setUnloadingOllama(false);
+  };
+
+  const handlePullOllama = async (model: string) => {
+    setPullError(null);
+    setPullingModel(model);
+    const res = await pullOllamaModelRemote(model);
+    setPullingModel(null);
+    if (!res.ok) {
+      setPullError(res.error || `Failed to pull ${model}`);
+    } else {
+      await updateComfyConfigRemote({ ollamaModel: model, companionBrain: 'ollama_vision', studioMode: true });
+    }
+  };
+
   const presetNames = new Set(presets.map((p) => p.workflow.toLowerCase()));
   const extraWorkflows = comfyWorkflows.filter((w) => !presetNames.has(w.toLowerCase())).slice(0, 15);
   const discoveredGgufs = comfyCapabilities?.discoveredGgufs || [];
+  const ollamaModels = comfyCapabilities?.ollamaModels || [];
+  const installedOllama = ollamaModels.filter((m) => m.installed);
+  const unInstalledRecommendedOllama = ollamaModels.filter((m) => !m.installed && m.recommended).slice(0, 3);
+  const loadedOllama = comfyCapabilities?.ollamaLoadedModels || [];
 
   return (
     <div className="relative shrink-0">
@@ -141,7 +174,7 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
                 <span>ComfyUI Studio (Fast Turns)</span>
               </div>
               <div className="text-[10.5px] text-[#8E8E93]">
-                Single-tool mode with 0-VRAM companion &amp; warm cache
+                Single-tool mode • Fast Ollama Vision / 0-VRAM swap
               </div>
             </div>
             <button
@@ -236,6 +269,8 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
                       <div className="flex items-center gap-1.5 font-medium truncate">
                         {opt.id === 'gemini_flash' ? (
                           <Cloud className="w-3 h-3 text-sky-400 shrink-0" />
+                        ) : opt.id === 'ollama_vision' ? (
+                          <Eye className="w-3 h-3 text-violet-400 shrink-0" />
                         ) : (
                           <Cpu className="w-3 h-3 text-emerald-400 shrink-0" />
                         )}
@@ -253,6 +288,72 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
                 );
               })}
             </div>
+
+            {/* Ollama Vision Model Selector */}
+            {(comfyConfig.companionBrain === 'ollama_vision' || comfyConfig.companionBrain === 'auto') && (
+              <div className="pt-1.5 px-1 space-y-1.5">
+                <div className="text-[10px] text-[#8E8E93] flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1">
+                    <Eye className="w-3 h-3 text-violet-400" />
+                    <span>Ollama Vision Model:</span>
+                  </span>
+                  <div className="flex items-center gap-1.5 font-mono text-[9.5px]">
+                    <span className={comfyCapabilities?.ollamaRunning ? 'text-emerald-400' : 'text-amber-300'}>
+                      {comfyCapabilities?.ollamaRunning ? 'Online' : 'Auto-Start'}
+                    </span>
+                    <span className="text-[#5F6368]">•</span>
+                    <span className="text-violet-300">
+                      {loadedOllama.length > 0 ? `GPU: ${loadedOllama[0].name}` : 'GPU: Unloaded'}
+                    </span>
+                  </div>
+                </div>
+                {installedOllama.length > 0 ? (
+                  <select
+                    value={comfyConfig.ollamaModel || comfyCapabilities?.resolvedOllamaModel || 'qwen3.5:4b'}
+                    onChange={(e) =>
+                      void updateComfyConfigRemote({
+                        ollamaModel: e.target.value,
+                        companionBrain: 'ollama_vision',
+                        studioMode: true,
+                      })
+                    }
+                    className="w-full bg-[#141518] border border-[#2D2F35] rounded-lg px-2 py-1 text-[11px] font-mono text-[#E8EAED] outline-none"
+                  >
+                    {installedOllama.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.isVision ? '★ Vision' : 'Text'}
+                        {m.supportsTools ? '+Tools' : ''} • {m.name} ({m.sizeGb} GB)
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="text-[10px] text-[#6E6E73] italic">
+                    No installed Ollama models detected yet. Pull one below:
+                  </div>
+                )}
+
+                {unInstalledRecommendedOllama.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                    {unInstalledRecommendedOllama.map((m) => (
+                      <button
+                        key={m.name}
+                        type="button"
+                        disabled={Boolean(pullingModel)}
+                        onClick={() => void handlePullOllama(m.name)}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#141518] hover:bg-[#252730] border border-[#2D2F35] text-[9.5px] font-mono text-[#9AA0A6] hover:text-[#E8EAED] transition-colors cursor-pointer disabled:opacity-50"
+                        title={m.hint}
+                      >
+                        <Download className="w-2.5 h-2.5 text-violet-400" />
+                        <span>
+                          {pullingModel === m.name ? `Pulling ${m.name}...` : `Pull ${m.name} (${m.sizeGb}GB)`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {pullError && <div className="text-[10px] text-rose-400">{pullError}</div>}
+              </div>
+            )}
 
             {/* Optional Local CPU GGUF Picker */}
             {(comfyConfig.companionBrain === 'cpu_lightweight' || comfyConfig.companionBrain === 'auto') && (
@@ -312,16 +413,27 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
               />
             </label>
 
-            <div className="flex items-center justify-between pt-1">
-              <button
-                type="button"
-                onClick={handleFreeVram}
-                disabled={freeingVram}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#23242B] hover:bg-[#2E303A] text-[#C4C7C5] text-[11px] transition-colors cursor-pointer"
-              >
-                <Trash2 className="w-3 h-3 text-rose-400" />
-                <span>{freeingVram ? 'Freeing VRAM...' : 'Free ComfyUI VRAM'}</span>
-              </button>
+            <div className="flex items-center justify-between gap-1.5 pt-1">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleFreeVram}
+                  disabled={freeingVram}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#23242B] hover:bg-[#2E303A] text-[#C4C7C5] text-[10.5px] transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3 text-rose-400" />
+                  <span>{freeingVram ? 'Freeing...' : 'Free ComfyUI'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUnloadOllama}
+                  disabled={unloadingOllama}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#23242B] hover:bg-[#2E303A] text-[#C4C7C5] text-[10.5px] transition-colors cursor-pointer"
+                >
+                  <Eye className="w-3 h-3 text-violet-400" />
+                  <span>{unloadingOllama ? 'Unloading...' : 'Unload Ollama'}</span>
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setOpen(false)}

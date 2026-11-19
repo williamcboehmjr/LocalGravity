@@ -23,6 +23,7 @@ import {
   executeGeminiMediaAction,
 } from './comfyui/geminiMedia.js';
 import { ComfyCompanionManager } from './comfyui/comfyCompanion.js';
+import { unloadAllOllamaModels } from './comfyui/ollamaClient.js';
 
 export const name = 'comfyui';
 
@@ -185,7 +186,9 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
     const sidecar = LlamaMoESidecar.getInstance();
     const prevProfile = sidecar.getActiveProfile();
     const wasStrataActive = await sidecar.isHealthy();
+    const effectiveBrain = companion.resolveEffectiveBrain(studioCfg);
     const zeroVramCompanion = studioCfg.studioMode && companion.isZeroVramBrain(studioCfg);
+    const isOllamaVision = studioCfg.studioMode && effectiveBrain === 'ollama_vision';
 
     let finalPrompt = rawPrompt;
     let promptEnhanced = false;
@@ -198,7 +201,9 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       !rawPrompt.trimStart().startsWith('{')
     ) {
       const enhanceLabel = studioCfg.studioMode
-        ? companion.resolveEffectiveBrain(studioCfg)
+        ? effectiveBrain === 'ollama_vision'
+          ? `ollama:${companion.resolveOllamaModel(studioCfg)}`
+          : effectiveBrain
         : isGoogleMode
           ? 'gemini'
           : 'strata';
@@ -214,6 +219,13 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
     if (wasStrataActive) {
       ctx.onStdoutChunk?.('[ComfyUI] Offloading Strata from GPU to free 16 GB VRAM for ComfyUI...\n');
       await sidecar.offloadFromGpu('comfyui_generate');
+    }
+
+    const ollamaUnload = await unloadAllOllamaModels();
+    if (ollamaUnload.unloaded.length > 0) {
+      ctx.onStdoutChunk?.(
+        `[ComfyUI] Unloaded Ollama (${ollamaUnload.unloaded.join(', ')}) from GPU in ${ollamaUnload.durationMs}ms...\n`
+      );
     }
 
     let savedOutputs: Array<{
@@ -323,13 +335,15 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       const keepWarm =
         studioCfg.keepVramWarm &&
         !generationError &&
-        ((studioCfg.studioMode && zeroVramCompanion) || (isGoogleMode && !wasStrataActive));
+        ((studioCfg.studioMode && (zeroVramCompanion || isOllamaVision)) ||
+          (isGoogleMode && !wasStrataActive));
       if (keepWarm) {
         ctx.onStdoutChunk?.('[ComfyUI] Keeping workflow models warm in VRAM for fast repeat turns.\n');
       } else {
         await freeComfyVram();
-        await new Promise((r) => setTimeout(r, 1200));
-        if (wasStrataActive && !zeroVramCompanion && !isGoogleMode) {
+        const shouldReloadStrata = wasStrataActive && !zeroVramCompanion && !isOllamaVision && !isGoogleMode;
+        await new Promise((r) => setTimeout(r, shouldReloadStrata ? 1200 : 800));
+        if (shouldReloadStrata) {
           ctx.onStdoutChunk?.(`[ComfyUI] Freed ComfyUI VRAM. Reloading Strata (${prevProfile}) onto GPU...\n`);
           strataReloaded = await sidecar.ensureRunning(prevProfile);
         } else {
@@ -360,7 +374,7 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
           promptEnhanced,
           effectivePrompt: finalPrompt,
           strataReloaded,
-          vramKeptWarm: studioCfg.studioMode && studioCfg.keepVramWarm && zeroVramCompanion,
+          vramKeptWarm: studioCfg.studioMode && studioCfg.keepVramWarm && (zeroVramCompanion || isOllamaVision),
           outputs: savedOutputs,
         },
         null,
@@ -373,11 +387,32 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       lines.push(`[${label}: ${out.localPath}](${out.apiUrl})`);
     }
 
+    let inspectScreenshotBase64: string | undefined;
+    if (Boolean(args.inspect_output)) {
+      const firstImage = savedOutputs.find(
+        (o) => o.mediaKind === 'image' && o.localPath && fs.existsSync(o.localPath)
+      );
+      if (firstImage) {
+        try {
+          const buf = fs.readFileSync(firstImage.localPath);
+          const ext = (path.extname(firstImage.localPath) || '.png').toLowerCase();
+          const mime =
+            ext === '.jpg' || ext === '.jpeg'
+              ? 'image/jpeg'
+              : ext === '.webp'
+                ? 'image/webp'
+                : 'image/png';
+          inspectScreenshotBase64 = `data:${mime};base64,${buf.toString('base64')}`;
+        } catch {}
+      }
+    }
+
     return {
       stdout: lines.join('\n'),
       stderr: '',
       exitCode: 0,
       durationMs: Math.round(performance.now() - startMs),
+      ...(inspectScreenshotBase64 ? { screenshotBase64: inspectScreenshotBase64 } : {}),
     };
   }
 

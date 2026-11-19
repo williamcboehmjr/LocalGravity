@@ -1,4 +1,4 @@
-import type { ComfyStudioConfig, ComfyWorkflowPreset } from '../../types/protocol';
+import type { ComfyStudioConfig, ComfyWorkflowPreset, OllamaModelItem } from '../../types/protocol';
 
 export interface DiscoveredGgufItem {
   name: string;
@@ -12,6 +12,12 @@ export interface ComfyCapabilities {
   llamaServerExe?: string | null;
   hasLitertLm: boolean;
   litertLmExe?: string | null;
+  hasOllama?: boolean;
+  ollamaRunning?: boolean;
+  ollamaUrl?: string;
+  ollamaLoadedModels?: Array<{ name: string; sizeVramGb: number }>;
+  ollamaModels?: OllamaModelItem[];
+  resolvedOllamaModel?: string;
   cpuServerRunning: boolean;
   companionUrl?: string;
   presets: ComfyWorkflowPreset[];
@@ -32,6 +38,8 @@ export interface ComfySlice {
   }) => void;
   updateComfyConfigRemote: (patch: Partial<ComfyStudioConfig>) => Promise<void>;
   freeComfyVramRemote: () => Promise<boolean>;
+  unloadOllamaRemote: () => Promise<boolean>;
+  pullOllamaModelRemote: (model: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const DEFAULT_COMFY_CONFIG: ComfyStudioConfig = {
@@ -39,6 +47,8 @@ const DEFAULT_COMFY_CONFIG: ComfyStudioConfig = {
   defaultWorkflow: 'Moss Image.json',
   companionBrain: 'auto',
   customGgufPath: '',
+  ollamaModel: 'qwen3.5:4b',
+  ollamaKeepAlive: '2m',
   keepVramWarm: true,
   enhancePrompt: true,
 };
@@ -94,6 +104,39 @@ export function createComfySlice(
         }
       } catch {}
       return false;
+    },
+
+    unloadOllamaRemote: async () => {
+      const { apiBaseUrl } = get();
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/comfyui/ollama/unload`, { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.capabilities) {
+            set({ comfyCapabilities: data.capabilities });
+          }
+          return true;
+        }
+      } catch {}
+      return false;
+    },
+
+    pullOllamaModelRemote: async (model: string) => {
+      const { apiBaseUrl } = get();
+      try {
+        const res = await fetch(`${apiBaseUrl}/api/comfyui/ollama/pull`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        });
+        const data = await res.json();
+        if (data.capabilities) {
+          set({ comfyCapabilities: data.capabilities });
+        }
+        return { ok: Boolean(data.ok), error: data.error };
+      } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+      }
     },
   };
 }

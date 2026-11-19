@@ -22,24 +22,37 @@ export interface BuildSystemDirectiveParams {
   isComfyStudio: boolean;
   comfyDefaultWorkflow?: string;
   comfyCompanionBrain?: string;
+  comfyOllamaModel?: string;
   promptStr: string;
 }
 
 export function buildComfyStudioSystemDirective(params: {
   workflow: string;
   companionBrain: string;
+  ollamaModel?: string;
   workflowsDir: string;
   modeDirective?: string;
 }): string {
   const wf = params.workflow || 'Moss Image.json';
+  const brainLabel =
+    params.companionBrain === 'ollama_vision' && params.ollamaModel
+      ? `ollama_vision (${params.ollamaModel})`
+      : params.companionBrain;
   const lines = [
-    `You are LocalGravity ComfyUI Studio — a ultra-fast, single-tool image generation assistant.`,
-    `Active ComfyUI Workflow: "${wf}" | Companion Brain: ${params.companionBrain} | Workflows Dir: "${params.workflowsDir.replace(/\\/g, '/')}"`,
+    `You are LocalGravity ComfyUI Studio — an ultra-fast, single-tool image & vision assistant.`,
+    `Active ComfyUI Workflow: "${wf}" | Companion Brain: ${brainLabel} | Workflows Dir: "${params.workflowsDir.replace(/\\/g, '/')}"`,
     ``,
     `RULES FOR INSTANT TURNS:`,
     `1. Whenever the user asks to create, generate, draw, render, edit, or test an image/video, IMMEDIATELY call the \`comfyui\` tool on step 1.`,
     `2. If "${wf}" === "gemini_image", call comfyui({ action: "gemini_image", prompt: "..." }). Otherwise call comfyui({ action: "generate", workflow: "${wf}", prompt: "..." }) (unless the user explicitly names a different workflow like "z-image", "krea", "h3", "moss", "qwen", or "gemini_video").`,
-    `3. Do NOT invent fake file paths or "[MCP Image saved...]" strings in text. Only report exact outputs returned by the \`comfyui\` tool, including its markdown image link \`[MCP Image saved to: ...](/api/mcp-outputs/...)\`.`,
+    ...(params.companionBrain === 'ollama_vision'
+      ? [
+          `3. You have native multimodal vision: inspect any image attached by the user when crafting prompts or picking edits, and pass inspect_output: true to \`comfyui\` if the user explicitly asks you to visually inspect, critique, or iteratively refine the generated image.`,
+          `4. Do NOT invent fake file paths or "[MCP Image saved...]" strings in text. Only report exact outputs returned by the \`comfyui\` tool, including its markdown image link \`[MCP Image saved to: ...](/api/mcp-outputs/...)\`.`,
+        ]
+      : [
+          `3. Do NOT invent fake file paths or "[MCP Image saved...]" strings in text. Only report exact outputs returned by the \`comfyui\` tool, including its markdown image link \`[MCP Image saved to: ...](/api/mcp-outputs/...)\`.`,
+        ]),
   ];
   if (params.modeDirective) {
     lines.push('', params.modeDirective);
@@ -58,6 +71,7 @@ export function buildTurnSystemDirective(p: BuildSystemDirectiveParams): string 
     let base = buildComfyStudioSystemDirective({
       workflow: p.comfyDefaultWorkflow || 'Moss Image.json',
       companionBrain: p.comfyCompanionBrain || 'auto',
+      ollamaModel: p.comfyOllamaModel,
       workflowsDir: paths.comfyWorkflowsDir,
       modeDirective: p.modeDirective,
     });

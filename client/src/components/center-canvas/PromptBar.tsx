@@ -245,6 +245,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     selectedGoogleModel,
     setBrainProviderState,
     apiBaseUrl,
+    comfyConfig,
+    comfyCapabilities,
+    updateComfyConfigRemote,
   } = useSessionStore();
   // Stop button / queue mode follow the authoritative server turn state.
   const isGenerating = activeTurn ? activeTurn.isActive : isGeneratingLegacy;
@@ -542,6 +545,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   const handleSelectTier = (tier: ModelTier) => {
     setSelectedTier(tier);
     onTierChange?.(tier);
+    if (comfyConfig.studioMode) {
+      void updateComfyConfigRemote({ studioMode: false });
+    }
     setShowModelMenu(false);
   };
 
@@ -549,6 +555,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     setBrainProviderState({ selectedGoogleModel: modelId });
     if (!isGoogleOrchestratorModel(modelId)) {
       setThinkingBudget(normalizeGoogleThinkingLevel(thinkingBudget, modelId));
+    }
+    if (comfyConfig.studioMode) {
+      void updateComfyConfigRemote({ studioMode: false });
     }
     setShowModelMenu(false);
     try {
@@ -563,6 +572,48 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       }
     } catch {}
   };
+
+  const handleSelectComfyOllamaVision = (modelName: string) => {
+    setShowModelMenu(false);
+    void updateComfyConfigRemote({
+      studioMode: true,
+      companionBrain: 'ollama_vision',
+      ollamaModel: modelName,
+    });
+  };
+
+  const isComfyOllamaMode =
+    comfyConfig.studioMode &&
+    (comfyConfig.companionBrain === 'ollama_vision' ||
+      comfyCapabilities?.resolvedEffectiveBrain === 'ollama_vision');
+  const activeComfyOllamaModel =
+    comfyConfig.ollamaModel || comfyCapabilities?.resolvedOllamaModel || 'qwen3.5:4b';
+  const quickOllamaVisionModels = (() => {
+    const installedVision = (comfyCapabilities?.ollamaModels || []).filter(
+      (m) => m.installed && m.isVision
+    );
+    if (installedVision.length > 0) {
+      return installedVision.slice(0, 4);
+    }
+    return [
+      {
+        name: 'qwen3.5:4b',
+        sizeGb: 3.2,
+        isVision: true,
+        supportsTools: true,
+        hint: 'Fastest Vision + Tools (<1s swap)',
+        installed: true,
+      },
+      {
+        name: 'qwen3-vl:8b',
+        sizeGb: 5.8,
+        isVision: true,
+        supportsTools: true,
+        hint: 'Richer Vision + spatial reasoning',
+        installed: true,
+      },
+    ];
+  })();
 
   const mentionCandidates = [
     { type: 'skill' as const, label: 'git-diff' },
@@ -824,7 +875,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             <Slash className="w-3.5 h-3.5" />
           </button>
 
-          {/* Model Tier Pill (Strata vs Google AI Studio) */}
+          {/* Model Tier Pill (Strata, Google AI Studio, or Direct ComfyUI Ollama Vision) */}
           <div className="relative">
             <button
               type="button"
@@ -832,21 +883,28 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 setShowModelMenu(!showModelMenu);
                 setShowBudgetMenu(false);
               }}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium text-[#E8EAED] bg-[#222327] border border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A] transition-all"
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                isComfyOllamaMode
+                  ? 'text-violet-100 bg-violet-950/60 border-violet-500/50 hover:bg-violet-900/70'
+                  : 'text-[#E8EAED] bg-[#222327] border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A]'
+              }`}
             >
+              {isComfyOllamaMode && <Eye className="w-3 h-3 text-violet-300 shrink-0" />}
               <span className="truncate max-w-[118px] sm:max-w-[180px]">
-                {brainProvider === 'google_ai_studio'
-                  ? getGoogleModelOption(selectedGoogleModel).name
-                  : TIER_LABELS[selectedTier].name}
+                {isComfyOllamaMode
+                  ? `Comfy • ${activeComfyOllamaModel}`
+                  : brainProvider === 'google_ai_studio'
+                    ? getGoogleModelOption(selectedGoogleModel).name
+                    : TIER_LABELS[selectedTier].name}
               </span>
               <ChevronDown className="w-3 h-3 text-[#9AA0A6]" />
             </button>
 
             {showModelMenu && (
-              <div className="absolute bottom-full left-0 mb-1.5 w-72 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5">
+              <div className="absolute bottom-full left-0 mb-1.5 w-80 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5 max-h-[70vh] overflow-y-auto">
                 {brainProvider === 'google_ai_studio' ? (
                   GOOGLE_MODEL_OPTIONS.map((opt) => {
-                    const isActive = selectedGoogleModel === opt.id;
+                    const isActive = !isComfyOllamaMode && selectedGoogleModel === opt.id;
                     return (
                       <button
                         key={opt.id}
@@ -868,7 +926,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                   })
                 ) : (
                   (['high', 'medium'] as ModelTier[]).map((tier) => {
-                    const isActive = selectedTier === tier;
+                    const isActive = !isComfyOllamaMode && selectedTier === tier;
                     return (
                       <button
                         key={tier}
@@ -889,6 +947,41 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                     );
                   })
                 )}
+
+                <div className="my-1 border-t border-[#2E2E32]" />
+                <div className="px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-300/90 flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1">
+                    <Eye className="w-3 h-3 text-violet-400" />
+                    <span>ComfyUI Direct • Ollama Vision</span>
+                  </span>
+                  <span className="font-mono text-[9px] text-[#7E828A]">Fast Swap</span>
+                </div>
+                {quickOllamaVisionModels.map((om) => {
+                  const isActive = isComfyOllamaMode && activeComfyOllamaModel === om.name;
+                  return (
+                    <button
+                      key={om.name}
+                      type="button"
+                      onClick={() => handleSelectComfyOllamaVision(om.name)}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                        isActive
+                          ? 'bg-violet-950/60 text-violet-100 border border-violet-500/30'
+                          : 'text-[#9A9A9E] hover:bg-[#242428] hover:text-[#E3E3E3]'
+                      }`}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className="font-medium truncate">
+                          {om.name}{' '}
+                          <span className="text-[10px] font-mono text-[#7E828A]">({om.sizeGb} GB)</span>
+                        </div>
+                        <div className="text-[10px] text-violet-300/90 font-mono truncate">
+                          {om.hint || 'Vision + ComfyUI Tools'} • Unload/Reload GPU
+                        </div>
+                      </div>
+                      {isActive && <Check className="w-3.5 h-3.5 text-violet-400 shrink-0" />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -901,8 +994,8 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             }}
           />
 
-          {/* Thinking Effort Dropdown (hidden for Google and Strata Orchestrators; shown with valid levels for single models) */}
-          {!((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low'))) && (() => {
+          {/* Thinking Effort Dropdown (hidden for Google/Strata Orchestrators and fast ComfyUI Ollama Vision) */}
+          {!isComfyOllamaMode && !((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low'))) && (() => {
             const isGoogle = brainProvider === 'google_ai_studio';
             const googleLevels =
               GOOGLE_THINKING_LEVELS[selectedGoogleModel] || ['low', 'medium', 'high'];

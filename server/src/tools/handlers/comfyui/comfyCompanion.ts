@@ -3,11 +3,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { ChildProcess, spawn } from 'node:child_process';
 import { getPathsConfig } from '../../../core/pathsConfig.js';
-import type { ComfyCompanionBrainId, ComfyStudioConfig, ComfyWorkflowPreset } from '../../../core/protocol.js';
+import type {
+  ComfyCompanionBrainId,
+  ComfyStudioConfig,
+  ComfyWorkflowPreset,
+  OllamaModelItem,
+} from '../../../core/protocol.js';
 import type { InferenceCompletionParams, InferenceCompletionResult } from '../../../core/inferenceBackend.js';
 import { LlamaMoESidecar } from '../../../tabby/llamaSidecar.js';
 import type { GoogleAiEngine } from '../../../google/googleAiEngine.js';
 import { cleanEnhancedPrompt, enhancePromptWithGemini, readBrainProviderConfig } from './geminiMedia.js';
+import { freeComfyVram } from './comfyClient.js';
+import {
+  discoverOllamaModelsFromDisk,
+  enhancePromptWithOllama,
+  ensureOllamaServerRunning,
+  getOllamaRunningModels,
+  isOllamaHealthy,
+  listOllamaModels,
+  pickBestInstalledOllamaVisionModel,
+  streamOllamaChat,
+} from './ollamaClient.js';
 
 export const COMFY_WORKFLOW_PRESETS: ComfyWorkflowPreset[] = [
   {
@@ -86,6 +102,8 @@ const DEFAULT_STUDIO_CONFIG: ComfyStudioConfig = {
   defaultWorkflow: 'Moss Image.json',
   companionBrain: 'auto',
   customGgufPath: '',
+  ollamaModel: 'qwen3.5:4b',
+  ollamaKeepAlive: '2m',
   keepVramWarm: true,
   enhancePrompt: true,
 };
@@ -218,12 +236,20 @@ export class ComfyCompanionManager {
     }
     if (
       patch.companionBrain &&
-      ['auto', 'gemini_flash', 'cpu_lightweight', 'gemma4_litert', 'strata'].includes(patch.companionBrain)
+      ['auto', 'ollama_vision', 'gemini_flash', 'cpu_lightweight', 'gemma4_litert', 'strata'].includes(
+        patch.companionBrain
+      )
     ) {
       this.config.companionBrain = patch.companionBrain;
     }
     if (typeof patch.customGgufPath === 'string') {
       this.config.customGgufPath = patch.customGgufPath.trim();
+    }
+    if (typeof patch.ollamaModel === 'string' && patch.ollamaModel.trim()) {
+      this.config.ollamaModel = patch.ollamaModel.trim();
+    }
+    if (typeof patch.ollamaKeepAlive === 'string' && patch.ollamaKeepAlive.trim()) {
+      this.config.ollamaKeepAlive = patch.ollamaKeepAlive.trim();
     }
     if (typeof patch.keepVramWarm === 'boolean') this.config.keepVramWarm = patch.keepVramWarm;
     if (typeof patch.enhancePrompt === 'boolean') this.config.enhancePrompt = patch.enhancePrompt;
@@ -231,21 +257,56 @@ export class ComfyCompanionManager {
     return this.getConfig();
   }
 
+  public resolveOllamaModel(
+    config: ComfyStudioConfig = this.config,
+    knownModels?: OllamaModelItem[]
+  ): string {
+    if (config.ollamaModel && config.ollamaModel.trim()) {
+      return config.ollamaModel.trim();
+    }
+    return pickBestInstalledOllamaVisionModel(knownModels || discoverOllamaModelsFromDisk());
+  }
+
   public getCapabilities() {
     const cfg = getPathsConfig();
     const provider = readBrainProviderConfig();
     const ggufs = discoverLightweightGgufs();
+    const ollamaModels = discoverOllamaModelsFromDisk();
+    const hasOllamaBin = Boolean(cfg.ollamaExe && (cfg.ollamaExe === 'ollama' || fs.existsSync(cfg.ollamaExe)));
     return {
       hasGoogleApiKey: Boolean(provider.googleApiKey),
       hasLlamaServer: Boolean(cfg.llamaServerExe && fs.existsSync(cfg.llamaServerExe)),
       llamaServerExe: cfg.llamaServerExe,
       hasLitertLm: Boolean(cfg.litertLmExe && fs.existsSync(cfg.litertLmExe)),
       litertLmExe: cfg.litertLmExe,
+      hasOllama: hasOllamaBin || ollamaModels.length > 0,
+      ollamaRunning: false,
+      ollamaUrl: cfg.ollamaUrl,
+      ollamaLoadedModels: [] as Array<{ name: string; sizeVramGb: number }>,
+      ollamaModels,
+      resolvedOllamaModel: this.resolveOllamaModel(this.config, ollamaModels),
       cpuServerRunning: Boolean(this.cpuProc && this.cpuProc.exitCode === null && !this.cpuProc.killed),
       companionUrl: cfg.companionUrl,
       presets: COMFY_WORKFLOW_PRESETS,
       discoveredGgufs: ggufs,
       resolvedEffectiveBrain: this.resolveEffectiveBrain(this.config),
+    };
+  }
+
+  public async getLiveCapabilities() {
+    const base = this.getCapabilities();
+    const [ollamaRunning, ollamaLoadedModels, ollamaModels] = await Promise.all([
+      isOllamaHealthy(),
+      getOllamaRunningModels(),
+      listOllamaModels(),
+    ]);
+    return {
+      ...base,
+      hasOllama: base.hasOllama || ollamaRunning || ollamaModels.some((m) => m.installed),
+      ollamaRunning,
+      ollamaLoadedModels,
+      ollamaModels,
+      resolvedOllamaModel: this.resolveOllamaModel(this.config, ollamaModels),
     };
   }
 
@@ -257,6 +318,14 @@ export class ComfyCompanionManager {
     if (provider.googleApiKey) return 'gemini_flash';
 
     const paths = getPathsConfig();
+    const ollamaDiskModels = discoverOllamaModelsFromDisk();
+    const hasOllamaBin = Boolean(
+      paths.ollamaExe && (paths.ollamaExe === 'ollama' || fs.existsSync(paths.ollamaExe))
+    );
+    if (hasOllamaBin && ollamaDiskModels.some((m) => m.installed && m.isVision)) {
+      return 'ollama_vision';
+    }
+
     const ggufs = discoverLightweightGgufs();
     if (paths.llamaServerExe && (config.customGgufPath || ggufs.length > 0)) {
       return 'cpu_lightweight';
@@ -266,7 +335,12 @@ export class ComfyCompanionManager {
   }
 
   public isZeroVramBrain(config: ComfyStudioConfig = this.config): boolean {
-    return this.resolveEffectiveBrain(config) !== 'strata';
+    const brain = this.resolveEffectiveBrain(config);
+    return brain !== 'strata' && brain !== 'ollama_vision';
+  }
+
+  public isFastLocalSwapBrain(config: ComfyStudioConfig = this.config): boolean {
+    return this.resolveEffectiveBrain(config) === 'ollama_vision';
   }
 
   private resolveTargetGgufPath(): string | null {
@@ -382,6 +456,32 @@ export class ComfyCompanionManager {
     const brain = this.resolveEffectiveBrain(this.config);
     const providerCfg = readBrainProviderConfig();
 
+    if (brain === 'ollama_vision') {
+      const targetModel = this.resolveOllamaModel(this.config);
+      const sidecar = LlamaMoESidecar.getInstance();
+      if (await sidecar.isHealthy()) {
+        await sidecar.offloadFromGpu('ollama_vision_enhance');
+      }
+      const runningModels = await getOllamaRunningModels();
+      const targetLoaded = runningModels.some(
+        (m) => m.name.toLowerCase() === targetModel.toLowerCase()
+      );
+      if (!targetLoaded) {
+        await freeComfyVram().catch(() => {});
+      }
+      const ollamaRes = await ensureOllamaServerRunning();
+      if (ollamaRes.running) {
+        const enhanced = await enhancePromptWithOllama({
+          model: targetModel,
+          systemPrompt,
+          userPrompt,
+          keepAlive: this.config.ollamaKeepAlive,
+          abortSignal,
+        });
+        return { enhanced, enhancedBy: enhanced !== userPrompt ? `ollama:${targetModel}` : null };
+      }
+    }
+
     if (brain === 'gemini_flash' && providerCfg.googleApiKey) {
       const enhanced = await enhancePromptWithGemini(systemPrompt, userPrompt, providerCfg.googleApiKey, abortSignal);
       return { enhanced, enhancedBy: enhanced !== userPrompt ? 'gemini_flash' : null };
@@ -489,12 +589,106 @@ export class ComfyCompanionManager {
     });
   }
 
+  private tryBuildFastCompletedComfySummary(
+    messages: Array<Record<string, any>>
+  ): string | null {
+    if (!this.config.keepVramWarm || messages.length === 0) return null;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role !== 'tool' || lastMsg?.name !== 'comfyui') return null;
+
+    const latestUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    const userText =
+      typeof latestUserMsg?.content === 'string'
+        ? latestUserMsg.content
+        : Array.isArray(latestUserMsg?.content)
+          ? latestUserMsg.content.map((p: any) => p?.text || '').join(' ')
+          : '';
+    if (
+      /\b(inspect|critique|review|analyze|describe|check|compare|evaluate|look at|what does it look|how does it look|fix the)\b/i.test(
+        userText
+      )
+    ) {
+      return null;
+    }
+
+    const rawOutput = String(lastMsg.content || '');
+    const mdLines = rawOutput
+      .split(/\r?\n/)
+      .filter((l) => l.trim().startsWith('[MCP ') && l.includes('](/api/mcp-outputs/'));
+    if (mdLines.length === 0) return null;
+
+    const jsonIdx = rawOutput.indexOf('\n[MCP ');
+    const jsonPart = (jsonIdx >= 0 ? rawOutput.slice(0, jsonIdx) : rawOutput).trim();
+    try {
+      const parsed = JSON.parse(jsonPart);
+      if (parsed?.status !== 'completed') return null;
+      const wf = parsed.workflow || this.config.defaultWorkflow;
+      const seedNote = parsed.seed ? ` (seed \`${parsed.seed}\`)` : '';
+      const enhancedNote = parsed.promptEnhanced
+        ? `\n\nPrompt (${parsed.promptEnhancedBy || 'enhanced'}): ${String(parsed.effectivePrompt || '').slice(0, 260)}`
+        : '';
+      return `Generated with **${wf}**${seedNote}.${enhancedNote}\n\n${mdLines.join('\n')}`;
+    } catch {
+      return null;
+    }
+  }
+
   public async streamStudioTurn(
     params: InferenceCompletionParams,
     googleEngine: GoogleAiEngine,
     fallbackStream: (p: InferenceCompletionParams) => Promise<InferenceCompletionResult>
   ): Promise<InferenceCompletionResult> {
     const effectiveBrain = this.resolveEffectiveBrain(this.config);
+
+    if (effectiveBrain === 'ollama_vision') {
+      const startTime = performance.now();
+      const fastSummary = this.tryBuildFastCompletedComfySummary(params.messages);
+      if (fastSummary) {
+        const tok = Math.max(1, Math.ceil(fastSummary.length / 4));
+        params.onTokenDelta(fastSummary, tok, 120);
+        return {
+          content: fastSummary,
+          thinkingContent: '',
+          thinkingDurationMs: 0,
+          thinkingTokens: 0,
+          outputTokens: tok,
+        };
+      }
+
+      const targetModel = this.resolveOllamaModel(this.config);
+      const sidecar = LlamaMoESidecar.getInstance();
+      if (await sidecar.isHealthy()) {
+        await sidecar.offloadFromGpu('ollama_vision_studio');
+      }
+
+      const runningModels = await getOllamaRunningModels();
+      const targetLoaded = runningModels.some(
+        (m) => m.name.toLowerCase() === targetModel.toLowerCase()
+      );
+      if (!targetLoaded) {
+        await freeComfyVram().catch(() => {});
+      }
+
+      const started = await ensureOllamaServerRunning();
+      if (!started.running) {
+        const errText = `⚠️ ${started.error || 'Ollama server is unavailable.'}`;
+        const tok = Math.max(1, Math.ceil(errText.length / 4));
+        params.onTokenDelta(errText, tok);
+        return {
+          content: errText,
+          thinkingContent: '',
+          thinkingDurationMs: Math.round(performance.now() - startTime),
+          thinkingTokens: 0,
+          outputTokens: tok,
+        };
+      }
+
+      return await streamOllamaChat({
+        model: targetModel,
+        keepAlive: this.config.ollamaKeepAlive,
+        completion: params,
+      });
+    }
 
     if (effectiveBrain === 'gemini_flash') {
       const apiKey = googleEngine.getApiKey();

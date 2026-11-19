@@ -2,6 +2,7 @@ import { ChildProcess, spawn, execSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { getPathsConfig } from '../core/pathsConfig.js';
+import { unloadAllOllamaModels } from '../tools/handlers/comfyui/ollamaClient.js';
 
 export type GpuEngineState = 'active' | 'standby' | 'waking';
 export type StrataProfileId = 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl';
@@ -176,7 +177,7 @@ export class LlamaMoESidecar {
     this.state = 'waking';
     this.appendLog(`[LlamaMoE] Waking Strata GPU Inference Engine (${targetProfile})...`);
 
-    // Ensure warm ComfyUI models are evicted before Strata allocates 15 GB of GPU VRAM
+    // Ensure warm ComfyUI & Ollama models are evicted before Strata allocates 15 GB of GPU VRAM
     try {
       await fetch(`${getPathsConfig().comfyUrl}/free`, {
         method: 'POST',
@@ -185,6 +186,7 @@ export class LlamaMoESidecar {
         signal: AbortSignal.timeout(3000),
       });
     } catch {}
+    await unloadAllOllamaModels().catch(() => {});
 
     const strataRoot = getPathsConfig().strataDir;
     const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';

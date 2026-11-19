@@ -347,6 +347,10 @@ export const BUILTIN_TOOLS_SCHEMA = [
             type: 'string',
             description: 'Optional Gemini model override (defaults: "gemini-nano-banana-2.1" for gemini_image, "gemini-omni-1.2-flash" for gemini_video).',
           },
+          inspect_output: {
+            type: 'boolean',
+            description: 'If true, attach the generated image to the tool result for visual inspection by a vision model (e.g. Ollama Vision).',
+          },
         },
       },
     },

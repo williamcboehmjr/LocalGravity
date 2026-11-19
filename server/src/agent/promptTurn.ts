@@ -111,7 +111,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
     const slashInfo = parseAntigravitySlashCommand(promptStr);
     const effectiveThinkingBudget: ThinkingBudget = slashInfo.forceThinkingBudget || params.thinkingBudget;
 
-    const studioCfg = ComfyCompanionManager.getInstance().getConfig();
+    const companionMgr = ComfyCompanionManager.getInstance();
+    const studioCfg = companionMgr.getConfig();
+    const effectiveCompanionBrain = companionMgr.resolveEffectiveBrain(studioCfg);
+    const effectiveOllamaModel = companionMgr.resolveOllamaModel(studioCfg);
     const isComfyStudioTurn =
       slashInfo.command === '/comfy' || (studioCfg.studioMode && !slashInfo.command);
 
@@ -158,7 +161,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
     const brainProviderCfg = tabby.getBrainProviderConfig?.() || { provider: 'strata' as const };
     const resolvedModelDisplayName = isComfyStudioTurn
-      ? `ComfyUI Studio (${studioCfg.defaultWorkflow})`
+      ? effectiveCompanionBrain === 'ollama_vision'
+        ? `ComfyUI Vision (${effectiveOllamaModel} → ${studioCfg.defaultWorkflow})`
+        : `ComfyUI Studio (${studioCfg.defaultWorkflow})`
       : tabby.resolveDiskModelName?.(params.tier) || 'swift-1.5-iq2_xs';
 
     send({
@@ -336,7 +341,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         resolvedModelDisplayName,
         isComfyStudio: isComfyStudioTurn,
         comfyDefaultWorkflow: studioCfg.defaultWorkflow,
-        comfyCompanionBrain: studioCfg.companionBrain,
+        comfyCompanionBrain: effectiveCompanionBrain,
+        comfyOllamaModel: effectiveOllamaModel,
         promptStr,
       });
 
@@ -486,7 +492,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               ? orchestratorStep.reasoningBudgetTokens
               : adaptiveCot.reasoningBudgetTokens,
             modeLabel: isComfyStudioTurn
-              ? `ComfyUI Studio • ${studioCfg.companionBrain}`
+              ? effectiveCompanionBrain === 'ollama_vision'
+                ? `ComfyUI Studio • ollama:${effectiveOllamaModel}`
+                : `ComfyUI Studio • ${effectiveCompanionBrain}`
               : orchestratorStep
                 ? orchestratorStep.modeLabel
                 : adaptiveCot.modeLabel,
