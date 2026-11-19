@@ -7,12 +7,14 @@ import { getPathsConfig, resetPathsConfigCache } from '../core/pathsConfig.js';
 import { collectOutputItems } from '../tools/handlers/comfyui/comfyClient.js';
 import { healComboValue, resolveWorkflowFile, WORKFLOW_ALIASES } from '../tools/handlers/comfyui/workflowConverter.js';
 import { ComfyCompanionManager } from '../tools/handlers/comfyui/comfyCompanion.js';
+import { shouldSkipDuplicateOllamaEnhancement } from '../tools/handlers/comfyui.js';
 import {
   classifyOllamaModel,
   convertMessagesToOllamaFormat,
   discoverOllamaModelsFromDisk,
   parseFallbackToolCallsFromText,
   pickBestInstalledOllamaVisionModel,
+  prewarmOllamaModel,
   streamOllamaChat,
   unloadOllamaModel,
 } from '../tools/handlers/comfyui/ollamaClient.js';
@@ -251,13 +253,28 @@ async function runComfyuiReliabilityTests() {
   );
   assert.equal(fencedParsed[0].arguments.workflow, 'z-image.json');
 
-  // 9. Mock HTTP Ollama streaming tool calls + keep_alive:0 unload
-  let loadedModels = [{ name: 'qwen3.5:4b', size_vram: 3_400_000_000 }];
+  // 9. Mock HTTP Ollama streaming tool calls, keep_alive:0 unload, and prewarmOllamaModel
+  let loadedModels: Array<{ name: string; size_vram: number }> = [
+    { name: 'qwen3.5:4b', size_vram: 3_400_000_000 },
+  ];
   let sawKeepAliveZero = false;
+  const generateCalls: Array<{ model: string; keep_alive: any }> = [];
   const mockServer = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => (raw += chunk.toString()));
     req.on('end', () => {
+      if (req.url === '/api/tags') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            models: [
+              { name: 'qwen3.5:4b', size: 3_400_000_000 },
+              { name: 'qwen3-vl:8b', size: 5_800_000_000 },
+            ],
+          })
+        );
+        return;
+      }
       if (req.url === '/api/ps') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ models: loadedModels }));
@@ -265,9 +282,16 @@ async function runComfyuiReliabilityTests() {
       }
       if (req.url === '/api/generate') {
         const body = JSON.parse(raw || '{}');
+        generateCalls.push({ model: body.model, keep_alive: body.keep_alive });
         if (body.keep_alive === 0) {
           sawKeepAliveZero = true;
-          loadedModels = [];
+          loadedModels = loadedModels.filter(
+            (m) => m.name.toLowerCase() !== String(body.model || '').toLowerCase()
+          );
+        } else if (body.model) {
+          if (!loadedModels.some((m) => m.name.toLowerCase() === String(body.model).toLowerCase())) {
+            loadedModels.push({ name: String(body.model), size_vram: 5_800_000_000 });
+          }
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ done: true }));
@@ -327,9 +351,44 @@ async function runComfyuiReliabilityTests() {
     const unloadRes = await unloadOllamaModel('qwen3.5:4b', mockUrl);
     assert.equal(sawKeepAliveZero, true, 'unloadOllamaModel must send keep_alive: 0');
     assert.ok(unloadRes.unloaded.includes('qwen3.5:4b'));
+
+    // Re-seed qwen3.5:4b, switch to qwen3-vl:8b -> evicts qwen3.5:4b and prewarms qwen3-vl:8b
+    loadedModels = [{ name: 'qwen3.5:4b', size_vram: 3_400_000_000 }];
+    generateCalls.length = 0;
+    const warm1 = await prewarmOllamaModel('qwen3-vl:8b', '3m', mockUrl);
+    assert.equal(warm1.loaded, true);
+    assert.equal(warm1.alreadyLoaded, false);
+    assert.ok(
+      generateCalls.some((c) => c.model === 'qwen3.5:4b' && c.keep_alive === 0),
+      'Switching model should evict previous loaded model with keep_alive: 0'
+    );
+    assert.ok(
+      generateCalls.some((c) => c.model === 'qwen3-vl:8b' && c.keep_alive === '3m'),
+      'Prewarm should load target model with keep_alive: 3m'
+    );
+
+    // Calling prewarm again when already loaded should skip /api/generate
+    const callsBefore = generateCalls.length;
+    const warm2 = await prewarmOllamaModel('qwen3-vl:8b', '3m', mockUrl);
+    assert.equal(warm2.loaded, true);
+    assert.equal(warm2.alreadyLoaded, true);
+    assert.equal(generateCalls.length, callsBefore);
   } finally {
     await new Promise<void>((resolve) => mockServer.close(() => resolve()));
   }
+
+  // 10. Single-pass Ollama Vision enhancement skip helper
+  const richPrompt =
+    'A serene humanoid silver robot gently petting a fluffy orange tabby cat inside a sunlit glass conservatory filled with lush emerald ferns, warm golden hour dust motes, shallow 50mm depth of field, photorealistic editorial photography';
+  assert.equal(
+    shouldSkipDuplicateOllamaEnhancement(richPrompt, 'Rewrite the prompt vividly in plain prose.'),
+    true
+  );
+  assert.equal(shouldSkipDuplicateOllamaEnhancement('robot petting cat', 'Expand prompt'), false);
+  assert.equal(
+    shouldSkipDuplicateOllamaEnhancement(richPrompt, 'Output strict JSON schema { "prompt": "..." }'),
+    false
+  );
 
   console.log('✅ All ComfyUI Reliability & Companion Unit Tests PASSED');
 }

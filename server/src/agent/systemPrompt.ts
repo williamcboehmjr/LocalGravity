@@ -44,13 +44,14 @@ export function buildComfyStudioSystemDirective(params: {
     ``,
     `RULES FOR INSTANT TURNS:`,
     `1. Whenever the user asks to create, generate, draw, render, edit, or test an image/video, IMMEDIATELY call the \`comfyui\` tool on step 1.`,
-    `2. If "${wf}" === "gemini_image", call comfyui({ action: "gemini_image", prompt: "..." }). Otherwise call comfyui({ action: "generate", workflow: "${wf}", prompt: "..." }) (unless the user explicitly names a different workflow like "z-image", "krea", "h3", "moss", "qwen", or "gemini_video").`,
     ...(params.companionBrain === 'ollama_vision'
       ? [
+          `2. Expand the user's request directly into a rich, vivid visual prompt (2-4 detailed sentences covering subject, lighting, camera/lens, atmosphere, composition) inside \`comfyui({ action: "${wf === 'gemini_image' ? 'gemini_image' : 'generate'}"${wf === 'gemini_image' ? '' : `, workflow: "${wf}"`}, prompt: "<expanded prompt>", enhance_prompt: false })\` on step 1 for maximum single-pass speed (unless the user explicitly names another workflow like "z-image", "krea", "h3", "moss", "qwen", or "gemini_video").`,
           `3. You have native multimodal vision: inspect any image attached by the user when crafting prompts or picking edits, and pass inspect_output: true to \`comfyui\` if the user explicitly asks you to visually inspect, critique, or iteratively refine the generated image.`,
           `4. Do NOT invent fake file paths or "[MCP Image saved...]" strings in text. Only report exact outputs returned by the \`comfyui\` tool, including its markdown image link \`[MCP Image saved to: ...](/api/mcp-outputs/...)\`.`,
         ]
       : [
+          `2. If "${wf}" === "gemini_image", call comfyui({ action: "gemini_image", prompt: "..." }). Otherwise call comfyui({ action: "generate", workflow: "${wf}", prompt: "..." }) (unless the user explicitly names a different workflow like "z-image", "krea", "h3", "moss", "qwen", or "gemini_video").`,
           `3. Do NOT invent fake file paths or "[MCP Image saved...]" strings in text. Only report exact outputs returned by the \`comfyui\` tool, including its markdown image link \`[MCP Image saved to: ...](/api/mcp-outputs/...)\`.`,
         ]),
   ];

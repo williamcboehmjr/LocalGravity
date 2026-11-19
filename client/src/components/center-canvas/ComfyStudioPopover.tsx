@@ -1,5 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Palette, ChevronDown, Check, Cpu, Cloud, Flame, Trash2, Sparkles, Eye, Download } from 'lucide-react';
+import {
+  Palette,
+  ChevronDown,
+  Check,
+  Cpu,
+  Cloud,
+  Flame,
+  Trash2,
+  Sparkles,
+  Eye,
+  Download,
+  RefreshCw,
+  AlertTriangle,
+} from 'lucide-react';
 import { useSessionStore } from '../../store/useSessionStore';
 import type { ComfyCompanionBrainId } from '../../types/protocol';
 
@@ -70,15 +83,19 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
     comfyConfig,
     comfyCapabilities,
     comfyWorkflows,
+    comfyApiUnsupported,
+    comfySwitchingStatus,
     setComfyStudioState,
     updateComfyConfigRemote,
     freeComfyVramRemote,
     unloadOllamaRemote,
     pullOllamaModelRemote,
+    restartBrainRemote,
   } = useSessionStore();
   const [open, setOpen] = useState(false);
   const [freeingVram, setFreeingVram] = useState(false);
   const [unloadingOllama, setUnloadingOllama] = useState(false);
+  const [restartingBrain, setRestartingBrain] = useState(false);
   const [pullingModel, setPullingModel] = useState<string | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
   const fetchedOnceRef = useRef(false);
@@ -89,10 +106,17 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
     fetchedOnceRef.current = true;
     let cancelled = false;
     fetch(`${apiBaseUrl}/api/comfyui/config`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!cancelled && data) {
-          setComfyStudioState(data);
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res.status === 404) {
+          setComfyStudioState({ apiUnsupported: true });
+          return;
+        }
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data) {
+            setComfyStudioState({ ...data, apiUnsupported: false });
+          }
         }
       })
       .catch(() => {});
@@ -166,6 +190,38 @@ export const ComfyStudioPopover: React.FC<ComfyStudioPopoverProps> = ({ onCloseO
 
       {open && (
         <div className="absolute bottom-full left-0 mb-1.5 w-80 sm:w-96 max-h-[75vh] overflow-y-auto bg-[#1B1C20] border border-[#2F3036] rounded-xl shadow-2xl p-3 z-50 space-y-3 text-xs select-none">
+          {comfyApiUnsupported && (
+            <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-500/40 text-amber-200 space-y-1.5">
+              <div className="flex items-center gap-1.5 font-semibold text-[11px]">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Central Brain server is outdated</span>
+              </div>
+              <div className="text-[10.5px] text-amber-200/80">
+                The background server is missing ComfyUI Studio routes (/api/comfyui/config returned 404). Restart it once to enable Ollama Vision switching.
+              </div>
+              <button
+                type="button"
+                disabled={restartingBrain}
+                onClick={async () => {
+                  setRestartingBrain(true);
+                  await restartBrainRemote();
+                  setTimeout(() => setRestartingBrain(false), 4000);
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 text-[11px] font-medium transition-colors cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${restartingBrain ? 'animate-spin' : ''}`} />
+                <span>{restartingBrain ? 'Restarting Central Brain...' : 'Restart Central Brain'}</span>
+              </button>
+            </div>
+          )}
+
+          {comfySwitchingStatus && (
+            <div className="px-2.5 py-1.5 rounded-lg bg-violet-950/60 border border-violet-500/40 text-violet-200 flex items-center gap-2 text-[11px]">
+              <RefreshCw className="w-3.5 h-3.5 text-violet-300 animate-spin shrink-0" />
+              <span className="truncate">{comfySwitchingStatus}</span>
+            </div>
+          )}
+
           {/* Header + Studio Mode Toggle */}
           <div className="flex items-center justify-between gap-2 pb-2 border-b border-[#2A2B30]">
             <div>

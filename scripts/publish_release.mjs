@@ -259,6 +259,26 @@ async function main() {
   console.log(`Publishing release via GitHub CLI...`);
   execSync(ghCmd, { cwd: rootDir, stdio: 'inherit' });
 
+  // Best-effort restart of any locally running Central Brain daemon so new backend routes/handlers take effect immediately
+  console.log('--- Reloading local Central Brain daemon (if running on port 3390) ---');
+  try {
+    await fetch('http://127.0.0.1:3390/api/gpu/offload', {
+      method: 'POST',
+      signal: AbortSignal.timeout(2000),
+    }).catch(() => {});
+    const restartRes = await fetch('http://127.0.0.1:3390/api/system/restart', {
+      method: 'POST',
+      signal: AbortSignal.timeout(2000),
+    }).catch(() => null);
+    if (restartRes && restartRes.ok) {
+      console.log(' Triggered local Central Brain restart to load new server build.');
+    } else {
+      console.log(' Local Central Brain restart skipped (daemon offline or managed separately).');
+    }
+  } catch {
+    console.log(' Local Central Brain restart skipped (daemon offline).');
+  }
+
   console.log('==================================================================');
   console.log(`🎉 RELEASE ${tag} PUBLISHED SUCCESSFULLY TO GITHUB!`);
   console.log('==================================================================');

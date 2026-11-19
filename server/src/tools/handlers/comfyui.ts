@@ -27,6 +27,17 @@ import { unloadAllOllamaModels } from './comfyui/ollamaClient.js';
 
 export const name = 'comfyui';
 
+export function shouldSkipDuplicateOllamaEnhancement(
+  rawPrompt: string,
+  enhancerSystemPrompt?: string
+): boolean {
+  const trimmed = (rawPrompt || '').trim();
+  if (trimmed.length < 120) return false;
+  if (trimmed.split(/\s+/).length < 18) return false;
+  if (/\bjson\b/i.test(enhancerSystemPrompt || '')) return false;
+  return true;
+}
+
 export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
   const startMs = performance.now();
   const action = String(args.action || 'generate').toLowerCase();
@@ -200,19 +211,28 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       inspection.enhancerSystemPrompt &&
       !rawPrompt.trimStart().startsWith('{')
     ) {
-      const enhanceLabel = studioCfg.studioMode
-        ? effectiveBrain === 'ollama_vision'
-          ? `ollama:${companion.resolveOllamaModel(studioCfg)}`
-          : effectiveBrain
-        : isGoogleMode
-          ? 'gemini'
-          : 'strata';
-      ctx.onStdoutChunk?.(`[ComfyUI] Enhancing prompt (${enhanceLabel})...\n`);
-      const res = await companion.enhancePrompt(inspection.enhancerSystemPrompt, rawPrompt, ctx.abortSignal);
-      if (res.enhanced !== rawPrompt) {
-        finalPrompt = res.enhanced;
-        promptEnhanced = true;
-        enhancedBy = res.enhancedBy;
+      if (
+        isOllamaVision &&
+        shouldSkipDuplicateOllamaEnhancement(rawPrompt, inspection.enhancerSystemPrompt)
+      ) {
+        ctx.onStdoutChunk?.(
+          `[ComfyUI] Using Ollama Vision's already-expanded prompt directly (single-pass fast turn).\n`
+        );
+      } else {
+        const enhanceLabel = studioCfg.studioMode
+          ? effectiveBrain === 'ollama_vision'
+            ? `ollama:${companion.resolveOllamaModel(studioCfg)}`
+            : effectiveBrain
+          : isGoogleMode
+            ? 'gemini'
+            : 'strata';
+        ctx.onStdoutChunk?.(`[ComfyUI] Enhancing prompt (${enhanceLabel})...\n`);
+        const res = await companion.enhancePrompt(inspection.enhancerSystemPrompt, rawPrompt, ctx.abortSignal);
+        if (res.enhanced !== rawPrompt) {
+          finalPrompt = res.enhanced;
+          promptEnhanced = true;
+          enhancedBy = res.enhancedBy;
+        }
       }
     }
 

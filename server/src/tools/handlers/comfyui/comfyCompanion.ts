@@ -22,7 +22,9 @@ import {
   isOllamaHealthy,
   listOllamaModels,
   pickBestInstalledOllamaVisionModel,
+  prewarmOllamaModel,
   streamOllamaChat,
+  unloadAllOllamaModels,
 } from './ollamaClient.js';
 
 export const COMFY_WORKFLOW_PRESETS: ComfyWorkflowPreset[] = [
@@ -103,7 +105,7 @@ const DEFAULT_STUDIO_CONFIG: ComfyStudioConfig = {
   companionBrain: 'auto',
   customGgufPath: '',
   ollamaModel: 'qwen3.5:4b',
-  ollamaKeepAlive: '2m',
+  ollamaKeepAlive: '3m',
   keepVramWarm: true,
   enhancePrompt: true,
 };
@@ -165,6 +167,7 @@ export class ComfyCompanionManager {
   private cpuProc: ChildProcess | null = null;
   private activeCpuModelPath: string | null = null;
   private cpuWakePromise: Promise<boolean> | null = null;
+  private switchSeq = 0;
 
   private constructor() {
     this.config = this.loadConfig();
@@ -341,6 +344,101 @@ export class ComfyCompanionManager {
 
   public isFastLocalSwapBrain(config: ComfyStudioConfig = this.config): boolean {
     return this.resolveEffectiveBrain(config) === 'ollama_vision';
+  }
+
+  public async prepareStudioEngineSwitch(
+    onStatus?: (evt: { switching: boolean; statusText: string; activeModel?: string }) => void
+  ): Promise<{ switched: boolean; brain: string; model?: string; error?: string }> {
+    const seq = ++this.switchSeq;
+    const cfg = this.getConfig();
+    const effectiveBrain = this.resolveEffectiveBrain(cfg);
+    const sidecar = LlamaMoESidecar.getInstance();
+
+    if (cfg.studioMode && effectiveBrain === 'ollama_vision') {
+      const targetModel = this.resolveOllamaModel(cfg);
+      onStatus?.({
+        switching: true,
+        statusText: `Dropping Strata & loading ${targetModel}...`,
+        activeModel: `ollama:${targetModel}`,
+      });
+
+      const sidecarState = await sidecar.getState();
+      if (sidecarState === 'active' || sidecarState === 'waking' || (await sidecar.isHealthy())) {
+        await sidecar.offloadFromGpu('comfy_ollama_switch');
+      }
+      if (seq !== this.switchSeq) {
+        return { switched: false, brain: 'superseded' };
+      }
+
+      const running = await getOllamaRunningModels();
+      const targetLoaded = running.some((m) => m.name.toLowerCase() === targetModel.toLowerCase());
+      if (!targetLoaded) {
+        await freeComfyVram().catch(() => {});
+      }
+
+      const warm = await prewarmOllamaModel(targetModel, cfg.ollamaKeepAlive);
+      if (seq !== this.switchSeq) {
+        return { switched: false, brain: 'superseded' };
+      }
+
+      onStatus?.({
+        switching: false,
+        statusText: warm.loaded
+          ? `Ollama Vision ready (${targetModel})`
+          : warm.error || `Failed to load ${targetModel}`,
+        activeModel: `ollama:${targetModel}`,
+      });
+      return {
+        switched: warm.loaded,
+        brain: 'ollama_vision',
+        model: targetModel,
+        error: warm.error,
+      };
+    }
+
+    if (cfg.studioMode && this.isZeroVramBrain(cfg)) {
+      onStatus?.({
+        switching: true,
+        statusText: 'Freeing GPU VRAM for ComfyUI Studio...',
+        activeModel: effectiveBrain,
+      });
+
+      const sidecarState = await sidecar.getState();
+      if (sidecarState === 'active' || sidecarState === 'waking' || (await sidecar.isHealthy())) {
+        await sidecar.offloadFromGpu('comfy_studio_switch');
+      }
+      await unloadAllOllamaModels().catch(() => {});
+      if (seq !== this.switchSeq) {
+        return { switched: false, brain: 'superseded' };
+      }
+
+      onStatus?.({
+        switching: false,
+        statusText: 'ComfyUI Studio ready (0-VRAM companion)',
+        activeModel: effectiveBrain,
+      });
+      return { switched: true, brain: effectiveBrain };
+    }
+
+    // Switched back to Strata / Google mode
+    await unloadAllOllamaModels().catch(() => {});
+    if (readBrainProviderConfig().provider !== 'google_ai_studio') {
+      onStatus?.({
+        switching: true,
+        statusText: 'Unloaded Ollama — waking Strata...',
+        activeModel: 'waking',
+      });
+      await sidecar.ensureRunning(sidecar.getActiveProfile());
+      if (seq !== this.switchSeq) {
+        return { switched: false, brain: 'superseded' };
+      }
+      onStatus?.({
+        switching: false,
+        statusText: 'Strata GPU ready',
+        activeModel: sidecar.getActiveProfile(),
+      });
+    }
+    return { switched: true, brain: 'strata' };
   }
 
   private resolveTargetGgufPath(): string | null {

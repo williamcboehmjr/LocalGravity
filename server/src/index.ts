@@ -57,7 +57,11 @@ import { registerThreadRoutes } from './routes/threads.js';
 import { registerHarnessRoutes } from './routes/harness.js';
 import { registerWorkspaceRoutes } from './routes/workspace.js';
 import { registerUpdaterRoutes } from './routes/updater.js';
-import { registerComfyuiRoutes } from './routes/comfyui.js';
+import {
+  applyComfyConfigAndSwitch,
+  buildLiveComfyPayload,
+  registerComfyuiRoutes,
+} from './routes/comfyui.js';
 import { createAutomationStore, registerAutomationRoutes } from './routes/automations.js';
 import { startAutomationCronRunner } from './services/cronRunner.js';
 import type { RouteContext } from './routes/types.js';
@@ -362,7 +366,16 @@ export async function createDaemonServer(options?: {
   const ensureModelsWarmedOnClientConnect = () => {
     if (tabby.getBrainProviderConfig().provider === 'google_ai_studio') return;
     const comfyMgr = ComfyCompanionManager.getInstance();
-    if (comfyMgr.getConfig().studioMode && (comfyMgr.isZeroVramBrain() || comfyMgr.isFastLocalSwapBrain())) {
+    const studioCfg = comfyMgr.getConfig();
+    if (studioCfg.studioMode && comfyMgr.isFastLocalSwapBrain(studioCfg)) {
+      void applyComfyConfigAndSwitch({
+        patch: {},
+        broadcastSync,
+        forceSwitch: true,
+      }).catch(() => {});
+      return;
+    }
+    if (studioCfg.studioMode && comfyMgr.isZeroVramBrain(studioCfg)) {
       return;
     }
     if (!tabby.getIdleStatus().isOffloaded) return;
@@ -536,7 +549,15 @@ export async function createDaemonServer(options?: {
       type: 'SYSTEM_RESTARTING',
       payload: { message: 'LocalGravity Central Brain is restarting...', timestamp: Date.now() },
     });
-    setTimeout(() => process.exit(42), 400);
+    setTimeout(async () => {
+      try {
+        ComfyCompanionManager.getInstance().stopCpuServer();
+        stopManagedOllamaServer();
+        await tabby.offloadGpu('restart');
+        db.close();
+      } catch {}
+      process.exit(42);
+    }, 350);
     return { status: 'restarting', supervisorExitCode: 42 };
   });
 
@@ -716,16 +737,14 @@ export async function createDaemonServer(options?: {
     return { config: mgr.getConfig(), capabilities: mgr.getCapabilities(), workflows };
   };
 
-  const buildLiveComfyStudioSnapshot = async () => {
-    const base = buildComfyStudioSnapshot();
-    const liveCaps = await ComfyCompanionManager.getInstance().getLiveCapabilities();
-    return { ...base, capabilities: liveCaps };
-  };
-
   const handleWsConnection = (socket: WebSocket, initialThreadId?: string) => {
     syncClients.add(socket);
-    void ensureModelsWarmedOnClientConnect();
-    void buildLiveComfyStudioSnapshot()
+    // Short 250ms grace window allows a reconnecting client (e.g. Computer C) to assert
+    // its saved CLIENT_MODE_PREFERENCE before default Strata warming starts.
+    const connectWarmTimer = setTimeout(() => {
+      void ensureModelsWarmedOnClientConnect();
+    }, 250);
+    void buildLiveComfyPayload()
       .then((snap) => {
         if (socket.readyState === 1) {
           socket.send(JSON.stringify({ type: 'COMFY_CONFIG_UPDATED', payload: snap }));
@@ -824,10 +843,38 @@ export async function createDaemonServer(options?: {
             selectedGoogleModel: payload?.selectedGoogleModel,
           });
         } else if (type === 'COMFY_CONFIG_UPDATE') {
-          ComfyCompanionManager.getInstance().updateConfig(payload || {});
-          void buildLiveComfyStudioSnapshot().then((snap) => {
-            broadcastSync({ type: 'COMFY_CONFIG_UPDATED', payload: snap });
-          });
+          void applyComfyConfigAndSwitch({
+            patch: payload || {},
+            broadcastSync,
+          }).catch(() => {});
+        } else if (type === 'CLIENT_MODE_PREFERENCE') {
+          clearTimeout(connectWarmTimer);
+          const hasActiveTurn =
+            activeAbortControllers.size > 0 ||
+            Array.from(activeTurns.values()).some((t) => t.is_active);
+          if (hasActiveTurn) {
+            void buildLiveComfyPayload()
+              .then((snap) => {
+                if (socket.readyState === 1) {
+                  socket.send(JSON.stringify({ type: 'COMFY_CONFIG_UPDATED', payload: snap }));
+                }
+              })
+              .catch(() => {});
+          } else {
+            const prefPatch: Record<string, any> = {};
+            if (typeof payload?.studioMode === 'boolean') prefPatch.studioMode = payload.studioMode;
+            if (typeof payload?.companionBrain === 'string') prefPatch.companionBrain = payload.companionBrain;
+            if (typeof payload?.ollamaModel === 'string') prefPatch.ollamaModel = payload.ollamaModel;
+            if (typeof payload?.ollamaKeepAlive === 'string') prefPatch.ollamaKeepAlive = payload.ollamaKeepAlive;
+            if (typeof payload?.defaultWorkflow === 'string') prefPatch.defaultWorkflow = payload.defaultWorkflow;
+            if (typeof payload?.keepVramWarm === 'boolean') prefPatch.keepVramWarm = payload.keepVramWarm;
+            if (typeof payload?.enhancePrompt === 'boolean') prefPatch.enhancePrompt = payload.enhancePrompt;
+            void applyComfyConfigAndSwitch({
+              patch: prefPatch,
+              broadcastSync,
+              forceSwitch: true,
+            }).catch(() => {});
+          }
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
           if (payload?.client_id && threadId) {
@@ -912,6 +959,7 @@ export async function createDaemonServer(options?: {
     });
 
     socket.on('close', () => {
+      clearTimeout(connectWarmTimer);
       syncClients.delete(socket);
       EdgeBridgeManager.getInstance().unregisterSocket(socket);
       broadcastSync({

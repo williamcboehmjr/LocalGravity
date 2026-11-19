@@ -247,7 +247,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     apiBaseUrl,
     comfyConfig,
     comfyCapabilities,
+    comfyApiUnsupported,
+    comfySwitchingStatus,
     updateComfyConfigRemote,
+    restartBrainRemote,
   } = useSessionStore();
   // Stop button / queue mode follow the authoritative server turn state.
   const isGenerating = activeTurn ? activeTurn.isActive : isGeneratingLegacy;
@@ -876,29 +879,48 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           </button>
 
           {/* Model Tier Pill (Strata, Google AI Studio, or Direct ComfyUI Ollama Vision) */}
-          <div className="relative">
+          <div className="relative flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => {
                 setShowModelMenu(!showModelMenu);
                 setShowBudgetMenu(false);
               }}
+              title={comfySwitchingStatus || undefined}
               className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium border transition-all ${
                 isComfyOllamaMode
                   ? 'text-violet-100 bg-violet-950/60 border-violet-500/50 hover:bg-violet-900/70'
                   : 'text-[#E8EAED] bg-[#222327] border-[#34363B] hover:bg-[#2A2B30] hover:border-[#42444A]'
               }`}
             >
-              {isComfyOllamaMode && <Eye className="w-3 h-3 text-violet-300 shrink-0" />}
-              <span className="truncate max-w-[118px] sm:max-w-[180px]">
-                {isComfyOllamaMode
-                  ? `Comfy • ${activeComfyOllamaModel}`
-                  : brainProvider === 'google_ai_studio'
-                    ? getGoogleModelOption(selectedGoogleModel).name
-                    : TIER_LABELS[selectedTier].name}
+              {comfySwitchingStatus ? (
+                <RefreshCw className="w-3 h-3 text-violet-300 animate-spin shrink-0" />
+              ) : (
+                isComfyOllamaMode && <Eye className="w-3 h-3 text-violet-300 shrink-0" />
+              )}
+              <span className="truncate max-w-[130px] sm:max-w-[200px]">
+                {comfySwitchingStatus
+                  ? comfySwitchingStatus
+                  : isComfyOllamaMode
+                    ? `Comfy • ${activeComfyOllamaModel}`
+                    : brainProvider === 'google_ai_studio'
+                      ? getGoogleModelOption(selectedGoogleModel).name
+                      : TIER_LABELS[selectedTier].name}
               </span>
               <ChevronDown className="w-3 h-3 text-[#9AA0A6]" />
             </button>
+
+            {comfyApiUnsupported && (
+              <button
+                type="button"
+                onClick={() => void restartBrainRemote()}
+                className="flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium bg-amber-950/70 border border-amber-500/40 text-amber-200 hover:bg-amber-900/70 transition-colors cursor-pointer shrink-0"
+                title="Central Brain server is outdated (404 on /api/comfyui/config). Click to restart Central Brain."
+              >
+                <RefreshCw className="w-3 h-3 text-amber-300" />
+                <span>Restart Brain</span>
+              </button>
+            )}
 
             {showModelMenu && (
               <div className="absolute bottom-full left-0 mb-1.5 w-80 bg-[#1E1E20] border border-[#2E2E32] rounded-xl shadow-2xl p-1 z-50 space-y-0.5 max-h-[70vh] overflow-y-auto">

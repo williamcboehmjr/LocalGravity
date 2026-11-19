@@ -324,7 +324,7 @@ export async function ensureOllamaServerRunning(
         ...process.env,
         OLLAMA_FLASH_ATTENTION: process.env.OLLAMA_FLASH_ATTENTION || '1',
         OLLAMA_KV_CACHE_TYPE: process.env.OLLAMA_KV_CACHE_TYPE || 'q8_0',
-        OLLAMA_KEEP_ALIVE: process.env.OLLAMA_KEEP_ALIVE || '2m',
+        OLLAMA_KEEP_ALIVE: process.env.OLLAMA_KEEP_ALIVE || '3m',
       },
     });
     managedOllamaProc = child;
@@ -444,6 +444,85 @@ export async function unloadAllOllamaModels(
     unloaded,
     durationMs: Math.round(performance.now() - start),
   };
+}
+
+export async function prewarmOllamaModel(
+  modelName: string,
+  keepAlive = '3m',
+  ollamaUrl = getPathsConfig().ollamaUrl
+): Promise<{ loaded: boolean; alreadyLoaded: boolean; durationMs: number; error?: string }> {
+  const start = performance.now();
+  const target = (modelName || '').trim();
+  if (!target) {
+    return { loaded: false, alreadyLoaded: false, durationMs: 0, error: 'No Ollama model specified' };
+  }
+
+  const started = await ensureOllamaServerRunning(ollamaUrl);
+  if (!started.running) {
+    return {
+      loaded: false,
+      alreadyLoaded: false,
+      durationMs: Math.round(performance.now() - start),
+      error: started.error || 'Ollama server is unavailable',
+    };
+  }
+
+  const running = await getOllamaRunningModels(ollamaUrl);
+  const others = running.filter((m) => m.name && m.name.toLowerCase() !== target.toLowerCase());
+  for (const other of others) {
+    try {
+      await fetch(`${ollamaUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: other.name, prompt: '', keep_alive: 0, stream: false }),
+        signal: AbortSignal.timeout(4000),
+      });
+    } catch {}
+  }
+
+  if (running.some((m) => m.name.toLowerCase() === target.toLowerCase())) {
+    return {
+      loaded: true,
+      alreadyLoaded: true,
+      durationMs: Math.round(performance.now() - start),
+    };
+  }
+
+  try {
+    const res = await fetch(`${ollamaUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: target,
+        prompt: '',
+        keep_alive: keepAlive || '3m',
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(35000),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      return {
+        loaded: false,
+        alreadyLoaded: false,
+        durationMs: Math.round(performance.now() - start),
+        error: `Ollama prewarm failed (${res.status}): ${errText.slice(0, 300)}`,
+      };
+    }
+    await res.text().catch(() => '');
+    return {
+      loaded: true,
+      alreadyLoaded: false,
+      durationMs: Math.round(performance.now() - start),
+    };
+  } catch (err: any) {
+    return {
+      loaded: false,
+      alreadyLoaded: false,
+      durationMs: Math.round(performance.now() - start),
+      error: err?.message || String(err),
+    };
+  }
 }
 
 export async function pullOllamaModel(
@@ -633,7 +712,7 @@ export async function enhancePromptWithOllama(params: {
         ],
         stream: false,
         think: false,
-        keep_alive: params.keepAlive || '2m',
+        keep_alive: params.keepAlive || '3m',
         options: {
           num_ctx: 4096,
           temperature: 0.6,
@@ -669,7 +748,7 @@ export async function streamOllamaChat(params: {
     messages: convertMessagesToOllamaFormat(completion.messages),
     stream: true,
     think: false,
-    keep_alive: keepAlive || '2m',
+    keep_alive: keepAlive || '3m',
     options: {
       num_ctx: 8192,
       temperature: 0.25,

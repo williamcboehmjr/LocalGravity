@@ -1,27 +1,27 @@
 {
-  "version": "v2.3.24",
-  "notes": "v2.3.24: Add Direct ComfyUI Ollama Vision model selector (qwen3.5:4b / qwen3-vl:8b / ministral-3), native multimodal vision + tool calling, and instant keep_alive:0 GPU unload/reload choreography",
-  "pub_date": "2026-11-19T00:05:06.590Z",
+  "version": "v2.3.25",
+  "notes": "v2.3.25: Eager Strata offload + Ollama Vision pre-load on model switch & cross-device reconnect, single-pass prompt expansion, stale-daemon restart guard, and auto-restart Brain after releases",
+  "pub_date": "2026-11-19T00:23:36.353Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelo2VnFQT2p3OUZ3ZWFWa0RYY1phdTJpQURSZnVmV1M5RGgvTHl0d3VrTlozZ0VzdmFzbldKYmZ3UlhuMlhMNnVDRWgwVE1uYWNEZ1JQeW1qemwxdUE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ2NzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI0ClRsMUNJaFZlWWxlNlN4d1NaZFAzSkVxVE44Sys3c3pZOE14YVZ6dEMvbXY5WHBoeEpjcjdwbnVJYjZHcEkvWlpYTEhUUGNQQ3FzMmtsOGl6enltQkJnPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.24/LocalGravity_2.3.24_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemJhOFFzZUF4WVFvc3N3eGJ0NVBFZkFHaFg3RE0xUHFzeEdJdzEvdSs1ekF6TVZaVzFzN3pYOWw3VHdHT3pKS3J6MmxldmY0RndKbW5SMEpPMENWQlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ3ODE2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNV94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI1ClZMS2dPUk4xZUR5RDJ6cGRlZXRtRnZXaTU0WlptMmRGeURHcGw2NTRFNndBZXk4TFZ2cy8wMUdvVitNK1VTKzd2Z1NkRDlBWCtaZ1FyaXpRRVMyNUF3PT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.25/LocalGravity_2.3.25_x64_en-US.msi"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelo2VnFQT2p3OUZ3ZWFWa0RYY1phdTJpQURSZnVmV1M5RGgvTHl0d3VrTlozZ0VzdmFzbldKYmZ3UlhuMlhMNnVDRWgwVE1uYWNEZ1JQeW1qemwxdUE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ2NzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI0ClRsMUNJaFZlWWxlNlN4d1NaZFAzSkVxVE44Sys3c3pZOE14YVZ6dEMvbXY5WHBoeEpjcjdwbnVJYjZHcEkvWlpYTEhUUGNQQ3FzMmtsOGl6enltQkJnPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.24/LocalGravity_2.3.24_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemJhOFFzZUF4WVFvc3N3eGJ0NVBFZkFHaFg3RE0xUHFzeEdJdzEvdSs1ekF6TVZaVzFzN3pYOWw3VHdHT3pKS3J6MmxldmY0RndKbW5SMEpPMENWQlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ3ODE2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNV94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI1ClZMS2dPUk4xZUR5RDJ6cGRlZXRtRnZXaTU0WlptMmRGeURHcGw2NTRFNndBZXk4TFZ2cy8wMUdvVitNK1VTKzd2Z1NkRDlBWCtaZ1FyaXpRRVMyNUF3PT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.25/LocalGravity_2.3.25_aarch64.dmg"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelo2VnFQT2p3OUZ3ZWFWa0RYY1phdTJpQURSZnVmV1M5RGgvTHl0d3VrTlozZ0VzdmFzbldKYmZ3UlhuMlhMNnVDRWgwVE1uYWNEZ1JQeW1qemwxdUE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ2NzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI0ClRsMUNJaFZlWWxlNlN4d1NaZFAzSkVxVE44Sys3c3pZOE14YVZ6dEMvbXY5WHBoeEpjcjdwbnVJYjZHcEkvWlpYTEhUUGNQQ3FzMmtsOGl6enltQkJnPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.24/LocalGravity_2.3.24_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemJhOFFzZUF4WVFvc3N3eGJ0NVBFZkFHaFg3RE0xUHFzeEdJdzEvdSs1ekF6TVZaVzFzN3pYOWw3VHdHT3pKS3J6MmxldmY0RndKbW5SMEpPMENWQlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ3ODE2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNV94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI1ClZMS2dPUk4xZUR5RDJ6cGRlZXRtRnZXaTU0WlptMmRGeURHcGw2NTRFNndBZXk4TFZ2cy8wMUdvVitNK1VTKzd2Z1NkRDlBWCtaZ1FyaXpRRVMyNUF3PT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.25/LocalGravity_2.3.25_amd64.AppImage"
     },
     "linux-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelo2VnFQT2p3OUZ3ZWFWa0RYY1phdTJpQURSZnVmV1M5RGgvTHl0d3VrTlozZ0VzdmFzbldKYmZ3UlhuMlhMNnVDRWgwVE1uYWNEZ1JQeW1qemwxdUE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ2NzA2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI0ClRsMUNJaFZlWWxlNlN4d1NaZFAzSkVxVE44Sys3c3pZOE14YVZ6dEMvbXY5WHBoeEpjcjdwbnVJYjZHcEkvWlpYTEhUUGNQQ3FzMmtsOGl6enltQkJnPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.24/LocalGravity_2.3.24_arm64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemJhOFFzZUF4WVFvc3N3eGJ0NVBFZkFHaFg3RE0xUHFzeEdJdzEvdSs1ekF6TVZaVzFzN3pYOWw3VHdHT3pKS3J6MmxldmY0RndKbW5SMEpPMENWQlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDQ3ODE2CWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4yNV94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjI1ClZMS2dPUk4xZUR5RDJ6cGRlZXRtRnZXaTU0WlptMmRGeURHcGw2NTRFNndBZXk4TFZ2cy8wMUdvVitNK1VTKzd2Z1NkRDlBWCtaZ1FyaXpRRVMyNUF3PT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.25/LocalGravity_2.3.25_arm64.deb"
     },
     "android-aarch64": {
       "signature": "",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.24/LocalGravity_2.3.24_arm64.apk"
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.25/LocalGravity_2.3.25_arm64.apk"
     }
   }
 }

@@ -7,6 +7,7 @@ import {
 } from '../store/useSessionStore';
 import { useArtifactStore } from '../store/useArtifactStore';
 import { useTelemetryStore } from '../store/useTelemetryStore';
+import { loadClientComfyPref } from '../store/slices/comfySlice';
 
 export const getOrCreateEdgeClientId = (): string => {
   try {
@@ -88,6 +89,7 @@ export function useBrainSocket({
         const url = `${cleanHost}/ws/sync`;
         ws = new WebSocket(url);
         wsRef.current = ws;
+        let pendingClientPrefSync = false;
 
         ws.onopen = () => {
           if (isDisposed) {
@@ -99,6 +101,20 @@ export function useBrainSocket({
           useSessionStore.getState().setIsConnected(true);
           setReconnectAttempt(0);
           setReconnectCountdown(0);
+
+          const savedPref = loadClientComfyPref();
+          if (savedPref && ws && ws.readyState === WebSocket.OPEN) {
+            pendingClientPrefSync = true;
+            ws.send(
+              JSON.stringify({
+                type: 'CLIENT_MODE_PREFERENCE',
+                payload: {
+                  client_id: getOrCreateEdgeClientId(),
+                  ...savedPref,
+                },
+              })
+            );
+          }
 
           // Register this Tauri desktop host with Central Brain for Remote Host Bridge execution
           if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
@@ -354,7 +370,12 @@ export function useBrainSocket({
                 store.setBrainProviderState(payload.brainProvider);
               }
               if (payload.comfyStudio) {
-                store.setComfyStudioState(payload.comfyStudio);
+                if (pendingClientPrefSync) {
+                  const { config: _ignoredServerCfg, ...restComfy } = payload.comfyStudio;
+                  store.setComfyStudioState({ ...restComfy, apiUnsupported: false });
+                } else {
+                  store.setComfyStudioState({ ...payload.comfyStudio, apiUnsupported: false });
+                }
               }
               if (Array.isArray(payload.backgroundTasks)) {
                 store.setBackgroundTasks(payload.backgroundTasks);
@@ -387,7 +408,8 @@ export function useBrainSocket({
             } else if (type === 'BRAIN_PROVIDER_UPDATED') {
               store.setBrainProviderState(payload || {});
             } else if (type === 'COMFY_CONFIG_UPDATED') {
-              store.setComfyStudioState(payload || {});
+              pendingClientPrefSync = false;
+              store.setComfyStudioState({ ...(payload || {}), apiUnsupported: false });
             } else if (type === 'MODEL_STATE') {
               store.setModelState(payload.status, payload.active_model, payload.status_text);
               if (payload.active_tier) store.setSelectedTier(payload.active_tier);

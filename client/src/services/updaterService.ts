@@ -34,7 +34,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.24';
+  let currentVersion = '2.3.25';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
@@ -313,6 +313,17 @@ export async function downloadAndApplyUpdate(
     percent: 100,
     statusText: 'Relaunching LocalGravity...',
   });
+
+  // Trigger a clean local Central Brain restart if pointing at localhost so backend updates apply in lockstep
+  try {
+    const apiBaseUrl = useSessionStore.getState().apiBaseUrl || 'http://127.0.0.1:3390';
+    if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBaseUrl)) {
+      fetch(`${apiBaseUrl}/api/system/restart`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(1500),
+      }).catch(() => {});
+    }
+  } catch {}
 
   // Short pause to ensure disk flush, then relaunch
   try {
