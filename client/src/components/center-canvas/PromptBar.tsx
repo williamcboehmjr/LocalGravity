@@ -77,6 +77,7 @@ const BUDGET_LABELS: Record<ThinkingBudget, string> = {
 };
 
 const GOOGLE_THINKING_LEVELS: Record<string, GoogleThinkingLevel[]> = {
+  'gemini-4-neon': ['low', 'medium', 'high', 'xhigh'],
   'gemini-4-hydrogen': ['low', 'medium', 'high', 'xhigh'],
   'gemini-4-argon': ['low', 'medium', 'high'],
   'gemini-4-carbon': ['low', 'medium', 'high'],

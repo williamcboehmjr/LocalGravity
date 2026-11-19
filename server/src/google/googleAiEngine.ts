@@ -5,9 +5,16 @@ import type { GpuTurnPriority } from '../swarm/swarmScheduler.js';
 
 export type BrainProviderId = 'strata' | 'google_ai_studio';
 
+export type GoogleOrchestratorPlanner = 'neon' | 'carbon' | 'argon';
+export type GoogleOrchestratorExecutor = 'hydrogen' | 'neon';
+export type GooglePlannerChoice = 'neon' | 'carbon' | 'argon' | 'hydrogen';
+
 export type GoogleModelId =
+  | 'orchestrator-neon-hydrogen'
+  | 'orchestrator-carbon-neon'
   | 'orchestrator-argon-hydrogen'
   | 'orchestrator-carbon-hydrogen'
+  | 'gemini-4-neon'
   | 'gemini-4-hydrogen'
   | 'gemini-4-carbon'
   | 'gemini-4-argon'
@@ -16,6 +23,8 @@ export type GoogleModelId =
 export function isGoogleOrchestratorModel(id?: string | null): boolean {
   return (
     id === 'orchestrator' ||
+    id === 'orchestrator-neon-hydrogen' ||
+    id === 'orchestrator-carbon-neon' ||
     id === 'orchestrator-argon-hydrogen' ||
     id === 'orchestrator-carbon-hydrogen'
   );
@@ -32,6 +41,24 @@ export interface GoogleModelSpec {
 }
 
 export const GOOGLE_MODEL_SPECS: Record<GoogleModelId, GoogleModelSpec> = {
+  'orchestrator-neon-hydrogen': {
+    id: 'orchestrator-neon-hydrogen',
+    displayName: 'Orchestrator (Neon → Hydrogen)',
+    shortLabel: 'Orch: Neon → H',
+    subtitle: 'Decisions API → Gemini 4 Neon Plan → Hydrogen Execute',
+    apiModel: 'gemini-decision-1',
+    fallbackApiModels: ['gemini-4-neon', 'gemini-4-hydrogen'],
+    role: 'orchestrator',
+  },
+  'orchestrator-carbon-neon': {
+    id: 'orchestrator-carbon-neon',
+    displayName: 'Orchestrator (Carbon → Neon)',
+    shortLabel: 'Orch: Carbon → Neon',
+    subtitle: 'Decisions API → Gemini 4 Carbon Plan → Neon Execute',
+    apiModel: 'gemini-decision-1',
+    fallbackApiModels: ['gemini-4-carbon', 'gemini-4-neon'],
+    role: 'orchestrator',
+  },
   'orchestrator-argon-hydrogen': {
     id: 'orchestrator-argon-hydrogen',
     displayName: 'Orchestrator (Argon → Hydrogen)',
@@ -49,6 +76,15 @@ export const GOOGLE_MODEL_SPECS: Record<GoogleModelId, GoogleModelSpec> = {
     apiModel: 'gemini-decision-1',
     fallbackApiModels: ['gemini-4-carbon', 'gemini-4-hydrogen'],
     role: 'orchestrator',
+  },
+  'gemini-4-neon': {
+    id: 'gemini-4-neon',
+    displayName: 'Gemini 4 Neon',
+    shortLabel: 'Neon',
+    subtitle: 'High-Efficiency Frontier Coding & Reasoning (1M • low..xhigh)',
+    apiModel: 'gemini-4-neon',
+    fallbackApiModels: ['gemini-4-neon-preview', 'gemini-4-argon', 'gemini-2.5-pro'],
+    role: 'planner',
   },
   'gemini-4-hydrogen': {
     id: 'gemini-4-hydrogen',
@@ -130,15 +166,18 @@ export interface StreamCompletionResult {
 export interface OrchestratorDecision {
   needsPlanning: boolean;
   needsPlanningScore: number;
-  plannerChoice: 'carbon' | 'argon' | 'hydrogen';
+  plannerChoice: GooglePlannerChoice;
   confidence: number;
   source: 'decisions_api' | 'heuristic_fallback';
   reason: string;
 }
 
 const VALID_GOOGLE_MODELS = new Set<GoogleModelId>([
+  'orchestrator-neon-hydrogen',
+  'orchestrator-carbon-neon',
   'orchestrator-argon-hydrogen',
   'orchestrator-carbon-hydrogen',
+  'gemini-4-neon',
   'gemini-4-hydrogen',
   'gemini-4-carbon',
   'gemini-4-argon',
@@ -152,10 +191,12 @@ export function normalizeGoogleModelId(raw?: string | null): GoogleModelId {
   const lower = String(raw || '').toLowerCase().trim();
   if (lower === 'orchestrator') return 'orchestrator-argon-hydrogen';
   if (lower.includes('orchestrator')) {
-    return lower.includes('carbon')
-      ? 'orchestrator-carbon-hydrogen'
-      : 'orchestrator-argon-hydrogen';
+    if (lower.includes('carbon') && lower.includes('neon')) return 'orchestrator-carbon-neon';
+    if (lower.includes('neon')) return 'orchestrator-neon-hydrogen';
+    if (lower.includes('carbon')) return 'orchestrator-carbon-hydrogen';
+    return 'orchestrator-argon-hydrogen';
   }
+  if (lower.includes('neon')) return 'gemini-4-neon';
   if (lower.includes('carbon')) return 'gemini-4-carbon';
   if (lower.includes('argon')) return 'gemini-4-argon';
   if (lower.includes('hydrogen')) return 'gemini-4-hydrogen';
@@ -295,22 +336,31 @@ export class GoogleAiEngine {
     return '';
   }
 
+  private formatGemini4Label(name: GooglePlannerChoice): string {
+    return `Gemini 4 ${name.charAt(0).toUpperCase() + name.slice(1)}`;
+  }
+
   /**
    * Calls the Google Gemini Decisions API (`gemini-decision-1`) to determine whether
-   * a turn requires planning before executing on Gemini 4 Hydrogen, using the selected
-   * orchestrator planner (`argon` or `carbon`).
+   * a turn requires planning before executing on the target executor (`hydrogen` or `neon`),
+   * using the selected orchestrator planner (`neon`, `argon`, or `carbon`).
    */
   public async evaluateOrchestratorDecision(
     promptText: string,
     abortSignal?: AbortSignal,
-    targetPlanner: 'argon' | 'carbon' = 'argon'
+    targetPlanner: GoogleOrchestratorPlanner = 'argon',
+    targetExecutor: GoogleOrchestratorExecutor = 'hydrogen'
   ): Promise<OrchestratorDecision> {
     const apiKey = this.getApiKey();
     const cleanedInput = (promptText || '').trim().slice(0, 3500) || 'General assistant turn';
+    const plannerDisplayName = this.formatGemini4Label(targetPlanner);
+    const executorDisplayName = this.formatGemini4Label(targetExecutor);
     const plannerCriteriaDescription =
       targetPlanner === 'carbon'
         ? 'Any task requiring planning, investigation, architecture, multi-step reasoning, tool orchestration, or code generation using Gemini 4 Carbon.'
-        : 'Any task requiring planning, investigation, feature implementation, multi-step reasoning, tool orchestration, or code generation using Gemini 4 Argon.';
+        : targetPlanner === 'neon'
+          ? 'Any task requiring planning, investigation, complex coding, multi-step reasoning, tool orchestration, or science analysis using Gemini 4 Neon.'
+          : 'Any task requiring planning, investigation, feature implementation, multi-step reasoning, tool orchestration, or code generation using Gemini 4 Argon.';
 
     if (apiKey) {
       try {
@@ -331,11 +381,11 @@ export class GoogleAiEngine {
               },
               planner_model: {
                 type: 'choice',
-                instructions: `Decide whether this request needs a planning phase on ${targetPlanner === 'carbon' ? 'Gemini 4 Carbon' : 'Gemini 4 Argon'} or can go straight to Gemini 4 Hydrogen.`,
+                instructions: `Decide whether this request needs a planning phase on ${plannerDisplayName} or can go straight to ${executorDisplayName}.`,
                 criteria: {
                   [targetPlanner]: plannerCriteriaDescription,
-                  hydrogen:
-                    'Simple greeting, trivial one-line question, or direct single lookup that can go straight to Gemini 4 Hydrogen without a separate planning pass.',
+                  [targetExecutor]:
+                    `Simple greeting, trivial one-line question, or direct single lookup that can go straight to ${executorDisplayName} without a separate planning pass.`,
                 },
               },
             },
@@ -350,10 +400,10 @@ export class GoogleAiEngine {
           const needsScore = Number(data?.answers?.needs_planning?.noul ?? 0.7);
           const rawChoice = String(data?.answers?.planner_model?.choice || targetPlanner).toLowerCase();
           const confidence = Number(data?.answers?.planner_model?.confidence ?? 0.8);
-          const needsPlanning = rawChoice !== 'hydrogen' && needsScore >= 0.3;
-          const plannerChoice: 'carbon' | 'argon' | 'hydrogen' = needsPlanning
+          const needsPlanning = rawChoice !== targetExecutor && needsScore >= 0.3;
+          const plannerChoice: GooglePlannerChoice = needsPlanning
             ? targetPlanner
-            : 'hydrogen';
+            : targetExecutor;
 
           return {
             needsPlanning,
@@ -375,14 +425,16 @@ export class GoogleAiEngine {
       }
     }
 
-    return this.heuristicOrchestratorDecision(cleanedInput, targetPlanner);
+    return this.heuristicOrchestratorDecision(cleanedInput, targetPlanner, targetExecutor);
   }
 
   private heuristicOrchestratorDecision(
     promptText: string,
-    targetPlanner: 'argon' | 'carbon' = 'argon'
+    targetPlanner: GoogleOrchestratorPlanner = 'argon',
+    targetExecutor: GoogleOrchestratorExecutor = 'hydrogen'
   ): OrchestratorDecision {
     const trimmed = promptText.trim();
+    const executorDisplayName = this.formatGemini4Label(targetExecutor);
 
     const isGreetingOrTrivial =
       trimmed.length < 28 &&
@@ -392,10 +444,10 @@ export class GoogleAiEngine {
       return {
         needsPlanning: false,
         needsPlanningScore: 0.12,
-        plannerChoice: 'hydrogen',
+        plannerChoice: targetExecutor,
         confidence: 0.91,
         source: 'heuristic_fallback',
-        reason: 'Trivial conversational prompt routed directly to Gemini 4 Hydrogen.',
+        reason: `Trivial conversational prompt routed directly to ${executorDisplayName}.`,
       };
     }
 
@@ -406,7 +458,18 @@ export class GoogleAiEngine {
         plannerChoice: 'carbon',
         confidence: 0.88,
         source: 'heuristic_fallback',
-        reason: 'Task routed to Gemini 4 Carbon for planning, then Gemini 4 Hydrogen for execution.',
+        reason: `Task routed to Gemini 4 Carbon for planning, then ${executorDisplayName} for execution.`,
+      };
+    }
+
+    if (targetPlanner === 'neon') {
+      return {
+        needsPlanning: true,
+        needsPlanningScore: 0.86,
+        plannerChoice: 'neon',
+        confidence: 0.87,
+        source: 'heuristic_fallback',
+        reason: `Task routed to Gemini 4 Neon for planning, then ${executorDisplayName} for execution.`,
       };
     }
 
@@ -416,7 +479,7 @@ export class GoogleAiEngine {
       plannerChoice: 'argon',
       confidence: 0.85,
       source: 'heuristic_fallback',
-      reason: 'Task routed to Gemini 4 Argon for planning, then Gemini 4 Hydrogen for execution.',
+      reason: `Task routed to Gemini 4 Argon for planning, then ${executorDisplayName} for execution.`,
     };
   }
 
@@ -497,7 +560,9 @@ export class GoogleAiEngine {
     budget: ThinkingBudget,
     modelId: GoogleModelId
   ): 'low' | 'medium' | 'high' | 'xhigh' {
-    if (budget === 'xhigh') return modelId === 'gemini-4-hydrogen' ? 'xhigh' : 'high';
+    if (budget === 'xhigh') {
+      return modelId === 'gemini-4-hydrogen' || modelId === 'gemini-4-neon' ? 'xhigh' : 'high';
+    }
     if (budget === 'high' || budget === 'deep') return 'high';
     if (budget === 'medium') return 'medium';
     if (budget === 'low' || budget === 'fast' || budget === 'off') return 'low';
@@ -514,7 +579,12 @@ export class GoogleAiEngine {
       if (!isGoogleOrchestratorModel(explicit)) {
         return {
           modelId: explicit,
-          thinkingBudget: explicit === 'gemini-3.8-flash' ? 'low' : explicit === 'gemini-4-carbon' ? 'high' : 'medium',
+          thinkingBudget:
+            explicit === 'gemini-3.8-flash'
+              ? 'low'
+              : explicit === 'gemini-4-carbon' || explicit === 'gemini-4-neon'
+                ? 'high'
+                : 'medium',
         };
       }
     }
@@ -527,6 +597,49 @@ export class GoogleAiEngine {
       return { modelId: 'gemini-4-argon', thinkingBudget: 'medium' };
     }
     return { modelId: 'gemini-4-hydrogen', thinkingBudget: 'medium' };
+  }
+
+  private resolveOrchestratorConfig(selectedModel: GoogleModelId): {
+    planner: GoogleOrchestratorPlanner;
+    plannerModelId: GoogleModelId;
+    executor: GoogleOrchestratorExecutor;
+    executorModelId: GoogleModelId;
+    modeLabel: string;
+  } {
+    switch (selectedModel) {
+      case 'orchestrator-neon-hydrogen':
+        return {
+          planner: 'neon',
+          plannerModelId: 'gemini-4-neon',
+          executor: 'hydrogen',
+          executorModelId: 'gemini-4-hydrogen',
+          modeLabel: 'Neon → Hydrogen',
+        };
+      case 'orchestrator-carbon-neon':
+        return {
+          planner: 'carbon',
+          plannerModelId: 'gemini-4-carbon',
+          executor: 'neon',
+          executorModelId: 'gemini-4-neon',
+          modeLabel: 'Carbon → Neon',
+        };
+      case 'orchestrator-carbon-hydrogen':
+        return {
+          planner: 'carbon',
+          plannerModelId: 'gemini-4-carbon',
+          executor: 'hydrogen',
+          executorModelId: 'gemini-4-hydrogen',
+          modeLabel: 'Carbon → Hydrogen',
+        };
+      default:
+        return {
+          planner: 'argon',
+          plannerModelId: 'gemini-4-argon',
+          executor: 'hydrogen',
+          executorModelId: 'gemini-4-hydrogen',
+          modeLabel: 'Argon → Hydrogen',
+        };
+    }
   }
 
   public async streamChatCompletion(params: StreamCompletionParams): Promise<StreamCompletionResult> {
@@ -550,14 +663,16 @@ export class GoogleAiEngine {
       return this.streamSingleModelCall(selectedModel, params, apiKey);
     }
 
-    const targetPlanner: 'argon' | 'carbon' =
-      selectedModel === 'orchestrator-carbon-hydrogen' ? 'carbon' : 'argon';
+    const orchConfig = this.resolveOrchestratorConfig(selectedModel);
+    const executorModelId = orchConfig.executorModelId;
+    const executorLabel = GOOGLE_MODEL_SPECS[executorModelId].displayName;
 
     // ==================== ORCHESTRATOR MODE ====================
-    // 1. Step 1: Google Decisions API decides whether to plan on targetPlanner (Argon or Carbon) or execute directly on Hydrogen.
+    // 1. Step 1: Google Decisions API decides whether to plan on targetPlanner (Neon, Argon, or Carbon)
+    //    or execute directly on targetExecutor (Hydrogen or Neon).
     // 2. If planning needed: targetPlanner produces the execution plan (streamed into Thinking),
-    //    then Orchestrator automatically flips to Gemini 4 Hydrogen to execute the plan!
-    // 3. Step 2+: Execution continues on Gemini 4 Hydrogen.
+    //    then Orchestrator automatically flips to targetExecutor to execute the plan!
+    // 3. Step 2+: Execution continues on targetExecutor.
     const stepIndex = params.stepIndex ?? 1;
     let totalThinkingContent = '';
     let totalThinkingTokens = 0;
@@ -571,8 +686,8 @@ export class GoogleAiEngine {
     };
 
     if (stepIndex > 1) {
-      emitThought(`[Orchestrator → Gemini 4 Hydrogen Executing Step ${stepIndex}]\n`);
-      const execRes = await this.streamSingleModelCall('gemini-4-hydrogen', params, apiKey);
+      emitThought(`[Orchestrator → ${executorLabel} Executing Step ${stepIndex}]\n`);
+      const execRes = await this.streamSingleModelCall(executorModelId, params, apiKey);
       return {
         ...execRes,
         thinkingContent: `${totalThinkingContent}${execRes.thinkingContent}`.trim(),
@@ -585,25 +700,24 @@ export class GoogleAiEngine {
     const decision = await this.evaluateOrchestratorDecision(
       latestUserPrompt,
       params.abortSignal,
-      targetPlanner
+      orchConfig.planner,
+      orchConfig.executor
     );
-    const orchModeLabel =
-      targetPlanner === 'carbon' ? 'Carbon → Hydrogen' : 'Argon → Hydrogen';
     const sourceBadge =
       decision.source === 'decisions_api'
-        ? `Google Decisions API (gemini-decision-1 • ${orchModeLabel})`
-        : `Decisions Classifier Fallback (${orchModeLabel})`;
+        ? `Google Decisions API (gemini-decision-1 • ${orchConfig.modeLabel})`
+        : `Decisions Classifier Fallback (${orchConfig.modeLabel})`;
 
     emitThought(
       `[${sourceBadge}]\n` +
         `• Needs Planning: ${(decision.needsPlanningScore * 100).toFixed(0)}%\n` +
-        `• Planner Selected: Gemini 4 ${decision.plannerChoice.charAt(0).toUpperCase() + decision.plannerChoice.slice(1)} (${(decision.confidence * 100).toFixed(0)}% conf)\n` +
-        `• Execution Model: Gemini 4 Hydrogen\n\n`
+        `• Planner Selected: ${this.formatGemini4Label(decision.plannerChoice)} (${(decision.confidence * 100).toFixed(0)}% conf)\n` +
+        `• Execution Model: ${executorLabel}\n\n`
     );
 
-    if (!decision.needsPlanning || decision.plannerChoice === 'hydrogen') {
-      emitThought('[Orchestrator → Direct Execution on Gemini 4 Hydrogen]\n');
-      const directRes = await this.streamSingleModelCall('gemini-4-hydrogen', params, apiKey);
+    if (!decision.needsPlanning || decision.plannerChoice === orchConfig.executor) {
+      emitThought(`[Orchestrator → Direct Execution on ${executorLabel}]\n`);
+      const directRes = await this.streamSingleModelCall(executorModelId, params, apiKey);
       return {
         ...directRes,
         thinkingContent: `${totalThinkingContent}${directRes.thinkingContent}`.trim(),
@@ -612,9 +726,13 @@ export class GoogleAiEngine {
       };
     }
 
-    // Phase 1: Planning on Gemini 4 Argon or Gemini 4 Carbon
+    // Phase 1: Planning on Gemini 4 Neon, Gemini 4 Argon, or Gemini 4 Carbon
     const plannerModelId: GoogleModelId =
-      decision.plannerChoice === 'carbon' ? 'gemini-4-carbon' : 'gemini-4-argon';
+      decision.plannerChoice === 'carbon'
+        ? 'gemini-4-carbon'
+        : decision.plannerChoice === 'neon'
+          ? 'gemini-4-neon'
+          : 'gemini-4-argon';
     const plannerLabel = GOOGLE_MODEL_SPECS[plannerModelId].displayName;
 
     emitThought(`[${plannerLabel} • Formulating Plan...]\n`);
@@ -625,8 +743,8 @@ export class GoogleAiEngine {
         role: 'system',
         content:
           `[ORCHESTRATOR PLANNING PHASE — ${plannerLabel.toUpperCase()}]:\n` +
-          `Analyze the user's request and context above, and write a concise, concrete, numbered execution plan for Gemini 4 Hydrogen to execute. ` +
-          `Specify exact files, commands, tools, checks, and edge cases. Do NOT ask the user questions unless impossible to proceed; produce the plan directly so Hydrogen can execute immediately.`,
+          `Analyze the user's request and context above, and write a concise, concrete, numbered execution plan for ${executorLabel} to execute. ` +
+          `Specify exact files, commands, tools, checks, and edge cases. Do NOT ask the user questions unless impossible to proceed; produce the plan directly so ${this.formatGemini4Label(orchConfig.executor).replace('Gemini 4 ', '')} can execute immediately.`,
       },
     ];
 
@@ -663,23 +781,23 @@ export class GoogleAiEngine {
 
     const effectivePlan = (planText || plannerResult.content || '').trim();
     emitThought(
-      `\n\n[Orchestrator Hand-off → Flipping to Gemini 4 Hydrogen for Plan Execution]\n`
+      `\n\n[Orchestrator Hand-off → Flipping to ${executorLabel} for Plan Execution]\n`
     );
 
-    // Phase 2: Execute the plan on Gemini 4 Hydrogen with full tool belt
+    // Phase 2: Execute the plan on the selected execution model with full tool belt
     const executionMessages = [
       ...params.messages,
       {
         role: 'system',
         content:
-          `[ORCHESTRATOR EXECUTION HAND-OFF — GEMINI 4 HYDROGEN]:\n` +
+          `[ORCHESTRATOR EXECUTION HAND-OFF — ${executorLabel.toUpperCase()}]:\n` +
           `${plannerLabel} produced the following approved execution plan. Execute it now using your available tools (or respond directly if no tools are needed):\n\n` +
           `${effectivePlan || 'Proceed directly with implementing the user request accurately and verifying the result.'}`,
       },
     ];
 
-    const hydrogenResult = await this.streamSingleModelCall(
-      'gemini-4-hydrogen',
+    const executorResult = await this.streamSingleModelCall(
+      executorModelId,
       {
         ...params,
         messages: executionMessages,
@@ -691,11 +809,11 @@ export class GoogleAiEngine {
     );
 
     return {
-      content: hydrogenResult.content,
-      thinkingContent: `${totalThinkingContent}${hydrogenResult.thinkingContent}`.trim(),
+      content: executorResult.content,
+      thinkingContent: `${totalThinkingContent}${executorResult.thinkingContent}`.trim(),
       thinkingDurationMs: Date.now() - turnStart,
-      thinkingTokens: totalThinkingTokens + hydrogenResult.thinkingTokens,
-      outputTokens: hydrogenResult.outputTokens,
+      thinkingTokens: totalThinkingTokens + executorResult.thinkingTokens,
+      outputTokens: executorResult.outputTokens,
     };
   }
 
@@ -796,13 +914,20 @@ export class GoogleAiEngine {
         return { content: '', thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens: 0 };
       }
 
+      const candidateEffort =
+        reasoningEffort === 'xhigh' &&
+        !candidateModel.startsWith('gemini-4-hydrogen') &&
+        !candidateModel.startsWith('gemini-4-neon')
+          ? 'high'
+          : reasoningEffort;
+
       const bodyPayload: Record<string, any> = {
         model: candidateModel,
         messages: openAiMessages,
         stream: true,
         temperature: params.thinkingBudget === 'deep' || params.thinkingBudget === 'high' || params.thinkingBudget === 'xhigh' ? 0.35 : 0.6,
         ...(googleTools && googleTools.length > 0 ? { tools: googleTools, tool_choice: 'auto' } : {}),
-        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...(candidateEffort ? { reasoning_effort: candidateEffort } : {}),
       };
 
       let response: Response;

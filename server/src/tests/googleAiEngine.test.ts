@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { GoogleAiEngine, normalizeGoogleModelId } from '../google/googleAiEngine.js';
+import {
+  GoogleAiEngine,
+  GOOGLE_MODEL_SPECS,
+  isGoogleOrchestratorModel,
+  normalizeGoogleModelId,
+} from '../google/googleAiEngine.js';
 
 async function runGoogleAiEngineTests() {
   console.log('Running GoogleAiEngine Tool-Call & ThoughtSignature Unit Tests...');
@@ -106,7 +111,7 @@ async function runGoogleAiEngineTests() {
       'context_engineering_is_the_way_to_go'
     );
 
-    // 3. Two orchestrator IDs normalization & Argon/Carbon routing decisions
+    // 3. Orchestrator & Neon model ID normalization + Decisions routing decisions
     assert.equal(normalizeGoogleModelId('orchestrator'), 'orchestrator-argon-hydrogen');
     assert.equal(
       normalizeGoogleModelId('orchestrator-argon-hydrogen'),
@@ -116,6 +121,26 @@ async function runGoogleAiEngineTests() {
       normalizeGoogleModelId('orchestrator-carbon-hydrogen'),
       'orchestrator-carbon-hydrogen'
     );
+    assert.equal(normalizeGoogleModelId('gemini-4-neon'), 'gemini-4-neon');
+    assert.equal(normalizeGoogleModelId('neon'), 'gemini-4-neon');
+    assert.equal(
+      normalizeGoogleModelId('orchestrator-neon-hydrogen'),
+      'orchestrator-neon-hydrogen'
+    );
+    assert.equal(normalizeGoogleModelId('orchestrator-neon'), 'orchestrator-neon-hydrogen');
+    assert.equal(
+      normalizeGoogleModelId('orchestrator-carbon-neon'),
+      'orchestrator-carbon-neon'
+    );
+    assert.equal(
+      normalizeGoogleModelId('orchestrator carbon neon'),
+      'orchestrator-carbon-neon'
+    );
+
+    assert.equal(isGoogleOrchestratorModel('orchestrator-neon-hydrogen'), true);
+    assert.equal(isGoogleOrchestratorModel('orchestrator-carbon-neon'), true);
+    assert.equal(isGoogleOrchestratorModel('gemini-4-neon'), false);
+    assert.equal(GOOGLE_MODEL_SPECS['gemini-4-neon'].apiModel, 'gemini-4-neon');
 
     globalThis.fetch = (async () =>
       new Response('Decisions API offline in unit test', { status: 503 })) as typeof fetch;
@@ -136,11 +161,117 @@ async function runGoogleAiEngineTests() {
     assert.equal(carbonDecision.plannerChoice, 'carbon');
     assert.equal(carbonDecision.needsPlanning, true);
 
+    const neonDecision = await engine.evaluateOrchestratorDecision(
+      'Build a full multi-module TypeScript parser',
+      undefined,
+      'neon'
+    );
+    assert.equal(neonDecision.plannerChoice, 'neon');
+    assert.equal(neonDecision.needsPlanning, true);
+
+    const carbonNeonDecision = await engine.evaluateOrchestratorDecision(
+      'Build a full multi-module TypeScript parser',
+      undefined,
+      'carbon',
+      'neon'
+    );
+    assert.equal(carbonNeonDecision.plannerChoice, 'carbon');
+    assert.equal(carbonNeonDecision.needsPlanning, true);
+
     const trivialDecision = await engine.evaluateOrchestratorDecision('hello', undefined, 'carbon');
     assert.equal(trivialDecision.plannerChoice, 'hydrogen');
     assert.equal(trivialDecision.needsPlanning, false);
 
-    console.log('✅ GoogleAiEngine Unit Tests PASSED (17/17 assertions)');
+    const trivialNeonExecDecision = await engine.evaluateOrchestratorDecision(
+      'hello',
+      undefined,
+      'carbon',
+      'neon'
+    );
+    assert.equal(trivialNeonExecDecision.plannerChoice, 'neon');
+    assert.equal(trivialNeonExecDecision.needsPlanning, false);
+
+    // 4. budgetToReasoningEffort supports xhigh on Gemini 4 Neon & Hydrogen, clamping Argon to high
+    const budgetToReasoningEffort = (engine as any).budgetToReasoningEffort.bind(engine);
+    assert.equal(budgetToReasoningEffort('xhigh', 'gemini-4-neon'), 'xhigh');
+    assert.equal(budgetToReasoningEffort('xhigh', 'gemini-4-hydrogen'), 'xhigh');
+    assert.equal(budgetToReasoningEffort('xhigh', 'gemini-4-argon'), 'high');
+
+    // 5. End-to-end mocked streamChatCompletion for orchestrator-neon-hydrogen & orchestrator-carbon-neon
+    const capturedBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const targetUrl = String(url);
+      if (targetUrl.includes('/decisions')) {
+        return new Response('Decisions API offline in unit test', { status: 503 });
+      }
+      const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+      capturedBodies.push(parsedBody);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `data: {"choices":[{"delta":{"content":"Response from ${parsedBody.model}"}}]}\n\n`
+            )
+          );
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }) as typeof fetch;
+
+    const dummyTools = [
+      {
+        type: 'function',
+        function: {
+          name: 'read_file',
+          description: 'Read a file',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } },
+        },
+      },
+    ];
+
+    engine.updateConfig({ selectedGoogleModel: 'orchestrator-neon-hydrogen' });
+    const neonOrchRes = await engine.streamChatCompletion({
+      tier: 'high',
+      thinkingBudget: 'xhigh',
+      messages: [{ role: 'user', content: 'Design and implement a new rate limiter module' }],
+      tools: dummyTools,
+      onTokenDelta: () => {},
+      onThoughtDelta: () => {},
+    });
+    assert.equal(capturedBodies.length, 2);
+    assert.equal(capturedBodies[0].model, 'gemini-4-neon');
+    assert.equal(capturedBodies[0].tools, undefined);
+    assert.equal(capturedBodies[0].reasoning_effort, 'xhigh');
+    assert.equal(capturedBodies[1].model, 'gemini-4-hydrogen');
+    assert.ok(Array.isArray(capturedBodies[1].tools) && capturedBodies[1].tools.length === 1);
+    assert.equal(neonOrchRes.content, 'Response from gemini-4-hydrogen');
+
+    capturedBodies.length = 0;
+    engine.updateConfig({ selectedGoogleModel: 'orchestrator-carbon-neon' });
+    const carbonNeonRes = await engine.streamChatCompletion({
+      tier: 'high',
+      thinkingBudget: 'xhigh',
+      messages: [{ role: 'user', content: 'Refactor the distributed cache consistency protocol' }],
+      tools: dummyTools,
+      onTokenDelta: () => {},
+      onThoughtDelta: () => {},
+    });
+    assert.equal(capturedBodies.length, 2);
+    assert.equal(capturedBodies[0].model, 'gemini-4-carbon');
+    assert.equal(capturedBodies[0].reasoning_effort, 'high');
+    assert.equal(capturedBodies[0].tools, undefined);
+    assert.equal(capturedBodies[1].model, 'gemini-4-neon');
+    assert.equal(capturedBodies[1].reasoning_effort, 'xhigh');
+    assert.ok(Array.isArray(capturedBodies[1].tools) && capturedBodies[1].tools.length === 1);
+    assert.equal(carbonNeonRes.content, 'Response from gemini-4-neon');
+
+    console.log('✅ GoogleAiEngine Unit Tests PASSED (all assertions including Gemini 4 Neon)');
   } finally {
     globalThis.fetch = originalFetch;
     fs.rmSync(tmpDir, { recursive: true, force: true });

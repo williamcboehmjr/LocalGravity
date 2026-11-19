@@ -5,8 +5,11 @@ import { createComfySlice, type ComfySlice } from './slices/comfySlice';
 
 export type BrainProviderId = 'strata' | 'google_ai_studio';
 export type GoogleModelId =
+  | 'orchestrator-neon-hydrogen'
+  | 'orchestrator-carbon-neon'
   | 'orchestrator-argon-hydrogen'
   | 'orchestrator-carbon-hydrogen'
+  | 'gemini-4-neon'
   | 'gemini-4-hydrogen'
   | 'gemini-4-carbon'
   | 'gemini-4-argon'
@@ -14,6 +17,8 @@ export type GoogleModelId =
 
 export const isGoogleOrchestratorModel = (id?: string | null): boolean =>
   id === 'orchestrator' ||
+  id === 'orchestrator-neon-hydrogen' ||
+  id === 'orchestrator-carbon-neon' ||
   id === 'orchestrator-argon-hydrogen' ||
   id === 'orchestrator-carbon-hydrogen';
 
@@ -26,6 +31,18 @@ export interface GoogleModelOption {
 
 export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
   {
+    id: 'orchestrator-neon-hydrogen',
+    name: 'Orchestrator (Neon → Hydrogen)',
+    shortName: 'Orch: Neon → H',
+    sub: 'Decisions API → Neon Plan → Hydrogen Execute',
+  },
+  {
+    id: 'orchestrator-carbon-neon',
+    name: 'Orchestrator (Carbon → Neon)',
+    shortName: 'Orch: Carbon → Neon',
+    sub: 'Decisions API → Carbon Plan → Neon Execute',
+  },
+  {
     id: 'orchestrator-argon-hydrogen',
     name: 'Orchestrator (Argon → Hydrogen)',
     shortName: 'Orch: Argon → H',
@@ -36,6 +53,12 @@ export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
     name: 'Orchestrator (Carbon → Hydrogen)',
     shortName: 'Orch: Carbon → H',
     sub: 'Decisions API → Carbon Plan → Hydrogen Execute',
+  },
+  {
+    id: 'gemini-4-neon',
+    name: 'Gemini 4 Neon',
+    shortName: 'Neon',
+    sub: 'High-Efficiency Frontier Coding & Reasoning (1M)',
   },
   {
     id: 'gemini-4-hydrogen',
@@ -64,8 +87,8 @@ export const GOOGLE_MODEL_OPTIONS: GoogleModelOption[] = [
 ];
 
 export const getGoogleModelOption = (id?: string): GoogleModelOption => {
-  if (id === 'orchestrator') return GOOGLE_MODEL_OPTIONS[0];
-  return GOOGLE_MODEL_OPTIONS.find((m) => m.id === id) || GOOGLE_MODEL_OPTIONS[0];
+  const resolvedId = id === 'orchestrator' ? 'orchestrator-argon-hydrogen' : id;
+  return GOOGLE_MODEL_OPTIONS.find((m) => m.id === resolvedId) || GOOGLE_MODEL_OPTIONS[0];
 };
 
 export interface ToolCallItemData {
