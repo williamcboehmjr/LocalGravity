@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import WebSocket from 'ws';
 import { getPathsConfig } from '../../../core/pathsConfig.js';
 
 export interface SavedComfyOutput {
@@ -216,7 +217,9 @@ export function collectOutputItems(outputsObj: Record<string, any>): Array<{
     pushItems(nodeOut.audio, 'audio');
   }
 
-  return collected;
+  // Filter out intermediate "temp" preview images whenever final "output" renders are present.
+  const hasFinalOutput = collected.some((item) => item.type === 'output');
+  return hasFinalOutput ? collected.filter((item) => item.type === 'output') : collected;
 }
 
 export async function waitForComfyJob(params: {
@@ -224,81 +227,158 @@ export async function waitForComfyJob(params: {
   workflowName: string;
   timeoutMs: number;
   startMs: number;
+  clientId?: string;
+  nodeClassMap?: Record<string, string>;
+  comfyUrlOverride?: string;
+  pollIntervalMs?: number;
   abortSignal?: AbortSignal;
   onLog?: (line: string) => void;
 }): Promise<any> {
-  const { comfyUrl } = getPathsConfig();
+  const comfyUrl = params.comfyUrlOverride || getPathsConfig().comfyUrl;
   const pollDeadline = Date.now() + params.timeoutMs;
   const submittedAt = Date.now();
+  const pollIntervalMs = Math.max(10, params.pollIntervalMs ?? 1500);
   let lastLogAt = Date.now();
+  let lastProgressLogAt = 0;
+  let lastNodeLogged = '';
   let consecutivePollErrors = 0;
   let missingFromQueuePolls = 0;
+  let wsExecutionError: string | null = null;
+  let ws: WebSocket | null = null;
 
-  while (Date.now() < pollDeadline) {
-    if (params.abortSignal?.aborted) {
-      throw new Error('ComfyUI generation aborted by user.');
-    }
-    await new Promise((r) => setTimeout(r, 1500));
-
+  if (params.clientId) {
     try {
-      const histRes = await fetch(`${comfyUrl}/history/${encodeURIComponent(params.promptId)}`, {
-        signal: AbortSignal.timeout(12000),
-      });
-      consecutivePollErrors = 0;
-      if (histRes.ok) {
-        const histJson: any = await histRes.json();
-        if (histJson && histJson[params.promptId]) {
-          const entry = histJson[params.promptId];
-          const statusObj = entry.status;
-          if (statusObj?.status_str === 'error') {
-            const msgs = Array.isArray(statusObj.messages) ? JSON.stringify(statusObj.messages) : '';
-            throw new Error(`ComfyUI execution failed: ${msgs.slice(0, 1200)}`);
-          }
-          if (statusObj?.completed || (entry.outputs && Object.keys(entry.outputs).length > 0)) {
-            return entry;
-          }
-        } else if (Date.now() - submittedAt > 10000) {
-          // Verify job hasn't silently crashed out of queue while absent from history
-          const q = await getComfyQueue(comfyUrl);
-          if (q && !q.runningIds.includes(params.promptId) && !q.pendingIds.includes(params.promptId)) {
-            missingFromQueuePolls++;
-            if (missingFromQueuePolls >= 3) {
-              throw new Error(
-                `ComfyUI job ${params.promptId} left the queue without history output (possible OOM or workflow error).`
-              );
+      const wsUrl = `${comfyUrl.replace(/^http/i, 'ws')}/ws?clientId=${encodeURIComponent(params.clientId)}`;
+      ws = new WebSocket(wsUrl);
+      ws.on('error', () => {});
+      ws.on('message', (rawData) => {
+        try {
+          const msg = JSON.parse(rawData.toString());
+          const data = msg?.data || {};
+          if (msg?.type === 'executing') {
+            if (data.prompt_id && data.prompt_id !== params.promptId) return;
+            if (data.node === null) {
+              lastLogAt = Date.now();
+              params.onLog?.('[ComfyUI] Graph execution complete — verifying final saved output...\n');
+            } else if (data.node !== undefined) {
+              const cls = params.nodeClassMap?.[String(data.node)] || `Node #${data.node}`;
+              if (cls !== lastNodeLogged) {
+                lastNodeLogged = cls;
+                lastLogAt = Date.now();
+                params.onLog?.(`[ComfyUI] Running stage: ${cls}...\n`);
+              }
             }
-          } else {
-            missingFromQueuePolls = 0;
+          } else if (msg?.type === 'progress') {
+            const val = Number(data.value || 0);
+            const max = Number(data.max || 0);
+            const now = Date.now();
+            if (max > 0 && (now - lastProgressLogAt >= 2500 || val >= max)) {
+              lastProgressLogAt = now;
+              lastLogAt = now;
+              const elapsedS = Math.round((performance.now() - params.startMs) / 1000);
+              const pct = Math.min(100, Math.round((val / max) * 100));
+              params.onLog?.(`[ComfyUI] Sampling step ${val}/${max} (${pct}%) • ${elapsedS}s elapsed\n`);
+            }
+          } else if (msg?.type === 'execution_error' && data.prompt_id === params.promptId) {
+            wsExecutionError = data.exception_message || JSON.stringify(data);
           }
-        }
-      }
-    } catch (pollErr: any) {
-      if (
-        pollErr?.message?.includes('ComfyUI execution failed') ||
-        pollErr?.message?.includes('left the queue without history output')
-      ) {
-        throw pollErr;
-      }
-      consecutivePollErrors++;
-      if (consecutivePollErrors >= 12) {
-        throw new Error(
-          `Lost connection to ComfyUI during job ${params.promptId} (${consecutivePollErrors} consecutive poll failures): ${pollErr?.message || pollErr}`
-        );
-      }
-    }
-
-    if (Date.now() - lastLogAt >= 6000) {
-      lastLogAt = Date.now();
-      const elapsedS = Math.round((performance.now() - params.startMs) / 1000);
-      params.onLog?.(`[ComfyUI] Generating with ${params.workflowName} (${elapsedS}s elapsed)...\n`);
+        } catch {}
+      });
+    } catch {
+      ws = null;
     }
   }
 
-  throw new Error(`ComfyUI job ${params.promptId} timed out after ${Math.round(params.timeoutMs / 1000)}s`);
+  try {
+    while (Date.now() < pollDeadline) {
+      if (params.abortSignal?.aborted) {
+        throw new Error('ComfyUI generation aborted by user.');
+      }
+      if (wsExecutionError) {
+        throw new Error(`ComfyUI execution error: ${String(wsExecutionError).slice(0, 1200)}`);
+      }
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+
+      try {
+        const histRes = await fetch(`${comfyUrl}/history/${encodeURIComponent(params.promptId)}`, {
+          signal: AbortSignal.timeout(12000),
+        });
+        consecutivePollErrors = 0;
+        if (histRes.ok) {
+          const histJson: any = await histRes.json();
+          if (histJson && histJson[params.promptId]) {
+            const entry = histJson[params.promptId];
+            const statusObj = entry.status;
+            if (statusObj?.status_str === 'error') {
+              const msgs = Array.isArray(statusObj.messages) ? JSON.stringify(statusObj.messages) : '';
+              throw new Error(`ComfyUI execution failed: ${msgs.slice(0, 1200)}`);
+            }
+            const isExplicitlyComplete =
+              statusObj?.completed === true || statusObj?.status_str === 'success';
+            let isLegacyComplete = false;
+            if (!isExplicitlyComplete && !statusObj && entry.outputs && Object.keys(entry.outputs).length > 0) {
+              const q = await getComfyQueue(comfyUrl);
+              if (q && !q.runningIds.includes(params.promptId) && !q.pendingIds.includes(params.promptId)) {
+                isLegacyComplete = true;
+              }
+            }
+            if (isExplicitlyComplete || isLegacyComplete) {
+              return entry;
+            }
+          } else if (Date.now() - submittedAt > 10000) {
+            // Verify job hasn't silently crashed out of queue while absent from history
+            const q = await getComfyQueue(comfyUrl);
+            if (q && !q.runningIds.includes(params.promptId) && !q.pendingIds.includes(params.promptId)) {
+              missingFromQueuePolls++;
+              if (missingFromQueuePolls >= 3) {
+                throw new Error(
+                  `ComfyUI job ${params.promptId} left the queue without history output (possible OOM or workflow error).`
+                );
+              }
+            } else {
+              missingFromQueuePolls = 0;
+            }
+          }
+        }
+      } catch (pollErr: any) {
+        if (
+          pollErr?.message?.includes('ComfyUI execution failed') ||
+          pollErr?.message?.includes('ComfyUI execution error') ||
+          pollErr?.message?.includes('left the queue without history output')
+        ) {
+          throw pollErr;
+        }
+        consecutivePollErrors++;
+        if (consecutivePollErrors >= 12) {
+          throw new Error(
+            `Lost connection to ComfyUI during job ${params.promptId} (${consecutivePollErrors} consecutive poll failures): ${pollErr?.message || pollErr}`
+          );
+        }
+      }
+
+      if (Date.now() - lastLogAt >= 6000) {
+        lastLogAt = Date.now();
+        const elapsedS = Math.round((performance.now() - params.startMs) / 1000);
+        params.onLog?.(`[ComfyUI] Generating with ${params.workflowName} (${elapsedS}s elapsed)...\n`);
+      }
+    }
+
+    throw new Error(`ComfyUI job ${params.promptId} timed out after ${Math.round(params.timeoutMs / 1000)}s`);
+  } finally {
+    if (ws) {
+      try {
+        ws.close();
+      } catch {}
+    }
+  }
 }
 
-export async function downloadComfyOutputs(outputsObj: Record<string, any>): Promise<SavedComfyOutput[]> {
-  const { comfyUrl, mcpOutputsDir } = getPathsConfig();
+export async function downloadComfyOutputs(
+  outputsObj: Record<string, any>,
+  comfyUrlOverride?: string
+): Promise<SavedComfyOutput[]> {
+  const { comfyUrl: defaultUrl, mcpOutputsDir } = getPathsConfig();
+  const comfyUrl = comfyUrlOverride || defaultUrl;
   fs.mkdirSync(mcpOutputsDir, { recursive: true });
   const items = collectOutputItems(outputsObj);
   const savedOutputs: SavedComfyOutput[] = [];
@@ -314,10 +394,13 @@ export async function downloadComfyOutputs(outputsObj: Record<string, any>): Pro
     });
     if (!viewRes.ok) continue;
     const buf = Buffer.from(await viewRes.arrayBuffer());
+    if (buf.length === 0) continue;
     const safeBase = item.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
     const copyName = `comfyui-${Date.now()}-${safeBase}`;
     const localPath = path.join(mcpOutputsDir, copyName);
-    fs.writeFileSync(localPath, buf);
+    const tmpPath = `${localPath}.tmp`;
+    fs.writeFileSync(tmpPath, buf);
+    fs.renameSync(tmpPath, localPath);
     savedOutputs.push({
       filename: item.filename,
       localPath,

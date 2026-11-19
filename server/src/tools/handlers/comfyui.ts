@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { BuiltinToolHandler } from './types.js';
 import { LlamaMoESidecar } from '../../tabby/llamaSidecar.js';
 import { getPathsConfig } from '../../core/pathsConfig.js';
@@ -287,13 +288,15 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
       sanitizedNodeCount = converted.node_count;
       healedInputsCount = Array.isArray(converted.healed_inputs) ? converted.healed_inputs.length : 0;
 
+      const clientId = `lg-${randomUUID().slice(0, 8)}`;
+
       ctx.onStdoutChunk?.(
         `[ComfyUI] Queueing workflow (${sanitizedNodeCount} nodes, seed ${effectiveSeed}${healedInputsCount ? `, auto-healed ${healedInputsCount} input(s)` : ''})...\n`
       );
       let submitRes = await fetch(`${comfyUrl}/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: converted.api_prompt, client_id: 'localgravity' }),
+        body: JSON.stringify({ prompt: converted.api_prompt, client_id: clientId }),
         signal: AbortSignal.timeout(15000),
       });
 
@@ -316,7 +319,7 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
         submitRes = await fetch(`${comfyUrl}/prompt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: converted.api_prompt, client_id: 'localgravity' }),
+          body: JSON.stringify({ prompt: converted.api_prompt, client_id: clientId }),
           signal: AbortSignal.timeout(15000),
         });
         submitText = await submitRes.text();
@@ -334,17 +337,31 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
         throw new Error(`ComfyUI did not return prompt_id: ${submitText.slice(0, 400)}`);
       }
 
+      const nodeClassMap = Object.fromEntries(
+        Object.entries(converted.api_prompt || {}).map(([nid, n]: [string, any]) => [
+          nid,
+          String(n?.class_type || nid),
+        ])
+      );
+
       const timeoutMs = Number(args.timeout_ms) || 600000;
       const completedEntry = await waitForComfyJob({
         promptId,
         workflowName: path.basename(wfPath),
         timeoutMs,
         startMs,
+        clientId,
+        nodeClassMap,
         abortSignal: ctx.abortSignal,
         onLog: (line) => ctx.onStdoutChunk?.(line),
       });
 
+      ctx.onStdoutChunk?.('[ComfyUI] Final render complete! Downloading final output(s)...\n');
       savedOutputs = await downloadComfyOutputs(completedEntry.outputs || {});
+      if (savedOutputs.length === 0) {
+        throw new Error('ComfyUI completed without producing any downloadable output files.');
+      }
+      ctx.onStdoutChunk?.(`[ComfyUI] Saved ${savedOutputs.length} final output(s).\n`);
     } catch (err: any) {
       generationError = err?.message || String(err);
     } finally {

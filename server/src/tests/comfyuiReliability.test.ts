@@ -4,7 +4,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { getPathsConfig, resetPathsConfigCache } from '../core/pathsConfig.js';
-import { collectOutputItems } from '../tools/handlers/comfyui/comfyClient.js';
+import {
+  collectOutputItems,
+  downloadComfyOutputs,
+  waitForComfyJob,
+} from '../tools/handlers/comfyui/comfyClient.js';
 import { healComboValue, resolveWorkflowFile, WORKFLOW_ALIASES } from '../tools/handlers/comfyui/workflowConverter.js';
 import { ComfyCompanionManager } from '../tools/handlers/comfyui/comfyCompanion.js';
 import { shouldSkipDuplicateOllamaEnhancement } from '../tools/handlers/comfyui.js';
@@ -62,6 +66,21 @@ async function runComfyuiReliabilityTests() {
   assert.equal(items[0].mediaKind, 'image');
   assert.equal(items[1].mediaKind, 'video');
   assert.equal(items[2].mediaKind, 'audio');
+
+  // 2b. Filter out intermediate type:"temp" previews when final type:"output" exists
+  const mixedItems = collectOutputItems({
+    '5': { images: [{ filename: 'early_preview_00001_.png', subfolder: '', type: 'temp' }] },
+    '9': { images: [{ filename: 'final_render_00001_.png', subfolder: '', type: 'output' }] },
+  });
+  assert.equal(mixedItems.length, 1);
+  assert.equal(mixedItems[0].filename, 'final_render_00001_.png');
+  assert.equal(mixedItems[0].type, 'output');
+
+  const tempOnlyItems = collectOutputItems({
+    '5': { images: [{ filename: 'preview_only.png', subfolder: '', type: 'temp' }] },
+  });
+  assert.equal(tempOnlyItems.length, 1);
+  assert.equal(tempOnlyItems[0].filename, 'preview_only.png');
 
   // 3. Workflow aliases & pathsConfig overrides
   assert.equal(WORKFLOW_ALIASES['moss'], 'Moss Image.json');
@@ -389,6 +408,84 @@ async function runComfyuiReliabilityTests() {
     shouldSkipDuplicateOllamaEnhancement(richPrompt, 'Output strict JSON schema { "prompt": "..." }'),
     false
   );
+
+  // 11. Mock ComfyUI server: premature intermediate preview guard & atomic output download
+  let historyPolls = 0;
+  const mockComfyServer = http.createServer((req, res) => {
+    const reqUrl = req.url || '';
+    if (reqUrl.startsWith('/history/job-premature-1')) {
+      historyPolls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (historyPolls < 3) {
+        // Polls 1-2: intermediate temp preview present, status.completed is STILL false!
+        res.end(
+          JSON.stringify({
+            'job-premature-1': {
+              status: { status_str: 'running', completed: false },
+              outputs: {
+                '5': { images: [{ filename: 'early_preview.png', subfolder: '', type: 'temp' }] },
+              },
+            },
+          })
+        );
+      } else {
+        res.end(
+          JSON.stringify({
+            'job-premature-1': {
+              status: { status_str: 'success', completed: true },
+              outputs: {
+                '5': { images: [{ filename: 'early_preview.png', subfolder: '', type: 'temp' }] },
+                '9': { images: [{ filename: 'final_render.png', subfolder: '', type: 'output' }] },
+              },
+            },
+          })
+        );
+      }
+      return;
+    }
+    if (reqUrl.startsWith('/view?')) {
+      if (reqUrl.includes('final_render.png')) {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(Buffer.from('fake-png-final-bytes'));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(Buffer.alloc(0));
+      }
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => mockComfyServer.listen(0, '127.0.0.1', () => resolve()));
+  const downloadedFilesToClean: string[] = [];
+  try {
+    const cAddr = mockComfyServer.address() as { port: number };
+    const mockComfyUrl = `http://127.0.0.1:${cAddr.port}`;
+    const entry = await waitForComfyJob({
+      promptId: 'job-premature-1',
+      workflowName: 'Moss Image.json',
+      timeoutMs: 5000,
+      startMs: performance.now(),
+      comfyUrlOverride: mockComfyUrl,
+      pollIntervalMs: 25,
+    });
+    assert.ok(historyPolls >= 3, `Expected >= 3 polls before completion, got ${historyPolls}`);
+    assert.equal(entry.status.completed, true);
+
+    const saved = await downloadComfyOutputs(entry.outputs, mockComfyUrl);
+    for (const s of saved) downloadedFilesToClean.push(s.localPath);
+    assert.equal(saved.length, 1, 'Should download only final_render.png (filtering temp preview)');
+    assert.equal(saved[0].filename, 'final_render.png');
+    assert.equal(fs.readFileSync(saved[0].localPath, 'utf-8'), 'fake-png-final-bytes');
+  } finally {
+    for (const f of downloadedFilesToClean) {
+      try {
+        fs.unlinkSync(f);
+      } catch {}
+    }
+    await new Promise<void>((resolve) => mockComfyServer.close(() => resolve()));
+  }
 
   console.log('✅ All ComfyUI Reliability & Companion Unit Tests PASSED');
 }

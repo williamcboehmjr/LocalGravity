@@ -921,32 +921,115 @@ function extractOrchestratorPlan(
   return { plannerName, planBody };
 }
 
+interface ExtractedMediaItem {
+  url: string;
+  label: string;
+  mediaKind: 'image' | 'video' | 'audio';
+}
+
+const MEDIA_PRODUCING_TOOLS = new Set(['comfyui', 'generate_image', 'capture_screen']);
+
+function isMediaToolCall(tc: ToolCallItemData): boolean {
+  if (tc.status !== 'success') return false;
+  const rawName = (tc.toolName || (tc.command || '').split('(')[0] || '').trim().toLowerCase();
+  return MEDIA_PRODUCING_TOOLS.has(rawName) || rawName.startsWith('mcp_');
+}
+
+function isValidMediaOutputUrl(rel: string): boolean {
+  if (!rel || /[\s"'<>{}*$`]|(\.\.\.)/.test(rel)) return false;
+  const clean = rel.split('?')[0].split('#')[0];
+  const file = clean.split('/').pop() || '';
+  if (!file || /^\.+$/.test(file)) return false;
+  return /^[^/\\].*\.(png|jpe?g|webp|gif|bmp|avif|mp4|webm|mov|wav|mp3|ogg|flac)$/i.test(file);
+}
+
+function detectMediaKind(filenameOrUrl: string): 'image' | 'video' | 'audio' {
+  const clean = filenameOrUrl.split('?')[0].split('#')[0].toLowerCase();
+  if (/\.(mp4|webm|mov)$/.test(clean)) return 'video';
+  if (/\.(wav|mp3|ogg|flac)$/.test(clean)) return 'audio';
+  return 'image';
+}
+
 function extractMcpImages(
   toolCalls: ToolCallItemData[],
   content: string,
-  apiBaseUrl: string
-): Array<{ url: string; label: string }> {
+  apiBaseUrl: string,
+  isCurrentlyGenerating = false
+): ExtractedMediaItem[] {
   const seen = new Set<string>();
-  const images: Array<{ url: string; label: string }> = [];
+  const images: ExtractedMediaItem[] = [];
   const collect = (text: string) => {
     if (!text) return;
     const re = /\/api\/mcp-outputs\/[^\s)"'\]]+/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
-      const rel = m[0];
+      const rel = m[0].replace(/[).,;:!?]+$/, '');
+      if (!isValidMediaOutputUrl(rel)) continue;
       const fullUrl = rel.startsWith('http') ? rel : `${apiBaseUrl}${rel}`;
       if (seen.has(fullUrl)) continue;
       seen.add(fullUrl);
-      const label = rel.split('/').pop() || 'Generated Image';
-      images.push({ url: fullUrl, label });
+      const label = rel.split('/').pop() || 'Generated Media';
+      images.push({ url: fullUrl, label, mediaKind: detectMediaKind(label) });
     }
   };
   for (const tc of toolCalls || []) {
-    if (tc.output) collect(tc.output);
+    if (tc.output && isMediaToolCall(tc)) {
+      collect(tc.output);
+    }
   }
-  collect(content || '');
+  if (!isCurrentlyGenerating) {
+    collect(content || '');
+  }
   return images;
 }
+
+const McpMediaCard: React.FC<{ item: ExtractedMediaItem }> = ({ item }) => {
+  const [loadError, setLoadError] = useState(false);
+
+  return (
+    <div className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group">
+      {item.mediaKind === 'video' ? (
+        <video
+          controls
+          playsInline
+          preload="metadata"
+          src={item.url}
+          onError={() => setLoadError(true)}
+          className="w-full max-h-96 bg-[#0c0d0e]"
+        />
+      ) : item.mediaKind === 'audio' ? (
+        <audio controls src={item.url} onError={() => setLoadError(true)} className="w-full p-3" />
+      ) : loadError ? (
+        <div className="p-4 text-center text-[11px] text-[#7E828A] bg-[#0c0d0e]">
+          Media preview unavailable ({item.label})
+        </div>
+      ) : (
+        <a href={item.url} target="_blank" rel="noopener noreferrer" className="block">
+          <img
+            src={item.url}
+            alt={item.label}
+            onError={() => setLoadError(true)}
+            className="w-full max-h-80 object-contain bg-[#0c0d0e] cursor-pointer hover:opacity-95 transition-opacity"
+          />
+        </a>
+      )}
+      <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-[#9AA0A6] border-t border-[#242528]">
+        <span className="inline-flex items-center gap-1.5 truncate">
+          <ImageIcon className="w-3 h-3 text-[#8AB4F8] shrink-0" />
+          <span className="truncate font-mono">{item.label}</span>
+        </span>
+        <a
+          href={item.url}
+          download={item.label}
+          className="inline-flex items-center gap-1 text-[#8AB4F8] hover:underline shrink-0"
+        >
+          <Download className="w-3 h-3" />
+          <span>Save</span>
+        </a>
+      </div>
+    </div>
+  );
+};
 
 function extractAskQuestions(toolCalls: ToolCallItemData[]): AskQuestionItem[] {
   const out: AskQuestionItem[] = [];
@@ -1411,7 +1494,7 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
     (isCurrentlyGenerating && isStreaming && trailingTools.length === 0);
 
   const orchestratorPlan = extractOrchestratorPlan(activeThought || '');
-  const mcpImages = extractMcpImages(allTools, content || '', apiBaseUrl);
+  const mcpImages = extractMcpImages(allTools, content || '', apiBaseUrl, isCurrentlyGenerating);
   const askQuestions = extractAskQuestions(allTools);
 
   return (
@@ -1457,32 +1540,7 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
       {mcpImages.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
           {mcpImages.map((img, i) => (
-            <div
-              key={`${img.url}-${i}`}
-              className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group"
-            >
-              <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
-                <img
-                  src={img.url}
-                  alt={img.label}
-                  className="w-full max-h-80 object-contain bg-[#0c0d0e] cursor-pointer hover:opacity-95 transition-opacity"
-                />
-              </a>
-              <div className="px-3 py-1.5 flex items-center justify-between gap-2 text-[11px] text-[#9AA0A6] border-t border-[#242528]">
-                <span className="inline-flex items-center gap-1.5 truncate">
-                  <ImageIcon className="w-3 h-3 text-[#8AB4F8] shrink-0" />
-                  <span className="truncate font-mono">{img.label}</span>
-                </span>
-                <a
-                  href={img.url}
-                  download={img.label}
-                  className="inline-flex items-center gap-1 text-[#8AB4F8] hover:underline shrink-0"
-                >
-                  <Download className="w-3 h-3" />
-                  <span>Save</span>
-                </a>
-              </div>
-            </div>
+            <McpMediaCard key={`${img.url}-${i}`} item={img} />
           ))}
         </div>
       )}
