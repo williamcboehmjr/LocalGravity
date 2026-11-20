@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import {
   FileCode2,
@@ -21,6 +21,7 @@ export const WorkbenchEditor: React.FC = () => {
     diffOriginalContent,
     setActiveFile,
     checkpoints,
+    setCheckpoints,
     activeCheckpoint,
     setActiveCheckpoint,
   } = useArtifactStore();
@@ -28,18 +29,70 @@ export const WorkbenchEditor: React.FC = () => {
   const { apiBaseUrl, workspacePath, sessionId } = useSessionStore();
   const [isDiffMode, setIsDiffMode] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const editorRef = useRef<any>(null);
+
+  const revealLineInEditor = useCallback((startLine?: number, endLine?: number) => {
+    const ed = editorRef.current;
+    if (!ed || !startLine || startLine <= 0) return;
+    try {
+      const eLine = endLine && endLine >= startLine ? endLine : startLine;
+      ed.revealLineInCenter?.(startLine);
+      ed.setSelection?.({
+        startLineNumber: startLine,
+        startColumn: 1,
+        endLineNumber: eLine,
+        endColumn: 1000,
+      });
+      ed.focus?.();
+    } catch {}
+  }, []);
+
+  const consumePendingReveal = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem('localgravity:pendingEditorReveal');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed?.startLine) {
+        sessionStorage.removeItem('localgravity:pendingEditorReveal');
+        revealLineInEditor(Number(parsed.startLine), parsed.endLine ? Number(parsed.endLine) : undefined);
+      }
+    } catch {}
+  }, [revealLineInEditor]);
+
+  useEffect(() => {
+    const onRevealEvent = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail;
+      if (detail?.startLine) {
+        setIsDiffMode(false);
+        setTimeout(() => {
+          revealLineInEditor(Number(detail.startLine), detail.endLine ? Number(detail.endLine) : undefined);
+          try {
+            sessionStorage.removeItem('localgravity:pendingEditorReveal');
+          } catch {}
+        }, 60);
+      }
+    };
+    window.addEventListener('localgravity:reveal-editor-line', onRevealEvent);
+    return () => window.removeEventListener('localgravity:reveal-editor-line', onRevealEvent);
+  }, [revealLineInEditor]);
 
   const detectLanguage = (filePath: string): string => {
-    const lower = filePath.toLowerCase();
-    if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
-    if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
+    const lower = (filePath || '').toLowerCase();
+    if (lower.endsWith('.ts') || lower.endsWith('.tsx') || lower.endsWith('.mts') || lower.endsWith('.cts'))
+      return 'typescript';
+    if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs'))
+      return 'javascript';
     if (lower.endsWith('.py')) return 'python';
     if (lower.endsWith('.json')) return 'json';
     if (lower.endsWith('.md')) return 'markdown';
-    if (lower.endsWith('.css')) return 'css';
-    if (lower.endsWith('.html')) return 'html';
+    if (lower.endsWith('.css') || lower.endsWith('.scss')) return 'css';
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
     if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
     if (lower.endsWith('.rs')) return 'rust';
+    if (lower.endsWith('.go')) return 'go';
+    if (lower.endsWith('.sh') || lower.endsWith('.bash') || lower.endsWith('.ps1')) return 'shell';
+    if (lower.endsWith('.sql')) return 'sql';
+    if (lower.endsWith('.toml') || lower.endsWith('.ini')) return 'ini';
     return 'plaintext';
   };
 
@@ -111,6 +164,7 @@ export const WorkbenchEditor: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setActiveFile(activeFilePath, data.restoredContent || '', null);
+        setCheckpoints(useArtifactStore.getState().checkpoints.filter((c) => c.id !== checkpointId));
         setActiveCheckpoint(null);
         setIsDiffMode(false);
         setStatusMsg('Checkpoint Reverted');
@@ -212,7 +266,7 @@ export const WorkbenchEditor: React.FC = () => {
             <span>Checkpoints:</span>
           </span>
           {checkpoints.slice(0, 6).map((cp) => {
-            const shortFile = cp.file_path.split('/').pop() || cp.file_path;
+            const shortFile = cp.file_path.split(/[/\\]/).pop() || cp.file_path;
             const isSelected = activeCheckpoint?.id === cp.id;
             return (
               <button
@@ -259,6 +313,10 @@ export const WorkbenchEditor: React.FC = () => {
             language={detectLanguage(activeFilePath)}
             theme="vs-dark"
             value={activeFileContent}
+            onMount={(editor) => {
+              editorRef.current = editor;
+              consumePendingReveal();
+            }}
             onChange={(val) => setActiveFile(activeFilePath, val || '', diffOriginalContent)}
             options={{
               minimap: { enabled: false },

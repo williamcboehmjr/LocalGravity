@@ -1,9 +1,15 @@
 import {
   PrunableMessage,
   extractMessageText,
+  measureMessageLength,
   measureMessageTextLength,
   pruneChatMessages,
 } from './messagePruning.js';
+
+export interface AutoCompactionOptions {
+  forceCompact?: boolean;
+  pruneBudgetChars?: number;
+}
 
 export interface AutoCompactionResult {
   messages: PrunableMessage[];
@@ -14,6 +20,17 @@ export interface AutoCompactionResult {
   compactedTokens: number;
   compactedTurnCount: number;
   summary: string;
+  distilledMemory: string;
+}
+
+function isSyntheticUserPrompt(text: string): boolean {
+  const clean = text.trim();
+  return (
+    clean.startsWith('[ACTION REQUIRED') ||
+    clean.startsWith('[System Auto-Continue') ||
+    clean.startsWith('[Visual Capture') ||
+    clean.startsWith('[CONTEXT AUTO-COMPACTED')
+  );
 }
 
 /**
@@ -26,15 +43,22 @@ export interface AutoCompactionResult {
 export function autoCompactMessages(
   messages: PrunableMessage[],
   thresholdChars = 36000,
-  keepRecentCount = 6
+  keepRecentCount = 6,
+  options?: AutoCompactionOptions
 ): AutoCompactionResult {
-  const previousChars = messages.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
+  const previousChars = messages.reduce((sum, m) => sum + measureMessageLength(m), 0);
   const previousTokens = Math.max(1, Math.ceil(previousChars / 4));
+  const shouldForce = Boolean(options?.forceCompact) || thresholdChars <= 200;
+  const effectivePruneBudget =
+    options?.pruneBudgetChars ?? (shouldForce ? Math.max(thresholdChars, 32000) : thresholdChars);
 
   const fallbackPrune = () => {
-    const pruned = pruneChatMessages(messages, thresholdChars);
-    const afterChars = pruned.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
+    const pruned = pruneChatMessages(messages, effectivePruneBudget);
+    const afterChars = pruned.reduce((sum, m) => sum + measureMessageLength(m), 0);
     const didPrune = afterChars < previousChars;
+    const summaryText = didPrune
+      ? `Pruned historical tool outputs (${previousTokens} → ${Math.ceil(afterChars / 4)} tok)`
+      : '';
     return {
       messages: pruned,
       didCompact: didPrune,
@@ -43,14 +67,13 @@ export function autoCompactMessages(
       previousTokens,
       compactedTokens: Math.max(1, Math.ceil(afterChars / 4)),
       compactedTurnCount: didPrune ? Math.max(0, messages.length - keepRecentCount) : 0,
-      summary: didPrune
-        ? `Pruned historical tool outputs (${previousTokens} → ${Math.ceil(afterChars / 4)} tok)`
-        : '',
+      summary: summaryText,
+      distilledMemory: summaryText,
     };
   };
 
-  // If below threshold or too few messages to compact, return pruned messages directly
-  if (previousChars <= thresholdChars || messages.length <= keepRecentCount + 2) {
+  // If below threshold (and not forced) or too few messages to compact, return pruned messages directly
+  if ((!shouldForce && previousChars <= thresholdChars) || messages.length <= keepRecentCount + 2) {
     return fallbackPrune();
   }
 
@@ -89,7 +112,7 @@ export function autoCompactMessages(
         if (reqMatches) {
           for (const line of reqMatches) {
             const req = line.replace(/^\s{2}-\s+/, '').trim().slice(0, 260);
-            if (req && !req.startsWith('[ACTION REQUIRED')) userObjectives.push(req);
+            if (req && !isSyntheticUserPrompt(req)) userObjectives.push(req);
           }
         }
         const modMatch = text.match(/^•\s*Files Modified:\s*(.+)$/m);
@@ -104,7 +127,7 @@ export function autoCompactMessages(
             filesInspected.add(p);
           }
         }
-      } else if (!clean.startsWith('[ACTION REQUIRED')) {
+      } else if (!isSyntheticUserPrompt(clean)) {
         userObjectives.push(clean.slice(0, 260));
       }
     } else if (msg.role === 'assistant') {
@@ -137,7 +160,7 @@ export function autoCompactMessages(
   }
 
   const distilledLines: string[] = [
-    `[CONTEXT AUTO-COMPACTED • WORKING MEMORY DISTILLATION]`,
+    `[CONTEXT AUTO-COMPACTED — DISTILLED WORKING MEMORY]`,
     `Compacted ${middleMessages.length} earlier messages to keep inference fast and focused.`,
   ];
 
@@ -147,10 +170,7 @@ export function autoCompactMessages(
     );
     const activeReq = userObjectives[userObjectives.length - 1];
     const hasRecentRealUser = recentMessages.some(
-      (m) =>
-        m.role === 'user' &&
-        !extractMessageText(m.content).trim().startsWith('[ACTION REQUIRED') &&
-        !extractMessageText(m.content).trim().startsWith('[CONTEXT AUTO-COMPACTED')
+      (m) => m.role === 'user' && !isSyntheticUserPrompt(extractMessageText(m.content))
     );
     if (!hasRecentRealUser && activeReq) {
       distilledLines.push(`[ACTIVE USER REQUEST]: ${activeReq}`);
@@ -186,8 +206,8 @@ export function autoCompactMessages(
     assembled.push({ ...rm });
   }
 
-  const finalMessages = pruneChatMessages(assembled, thresholdChars);
-  const compactedChars = finalMessages.reduce((sum, m) => sum + measureMessageTextLength(m.content), 0);
+  const finalMessages = pruneChatMessages(assembled, effectivePruneBudget);
+  const compactedChars = finalMessages.reduce((sum, m) => sum + measureMessageLength(m), 0);
   const compactedTokens = Math.max(1, Math.ceil(compactedChars / 4));
 
   return {
@@ -199,5 +219,7 @@ export function autoCompactMessages(
     compactedTokens,
     compactedTurnCount: middleMessages.length,
     summary: `Auto-compacted ${middleMessages.length} turns (${previousTokens} → ${compactedTokens} tok)`,
+    distilledMemory: summaryBlock,
   };
 }
+export { measureMessageTextLength, measureMessageLength };

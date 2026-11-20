@@ -185,6 +185,43 @@ async fn install_msi_update(msi_url: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn install_linux_update(deb_url: String) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+
+        let temp_deb = "/tmp/localgravity_update.deb";
+        let _ = std::fs::remove_file(temp_deb);
+
+        let curl_out = Command::new("curl")
+            .args(["-s", "-L", "-f", "-o", temp_deb, &deb_url])
+            .output()
+            .map_err(|e| format!("curl execution failed: {}", e))?;
+
+        if !curl_out.status.success() {
+            return Err(format!(
+                "Failed to download DEB update from {}: {}",
+                deb_url,
+                String::from_utf8_lossy(&curl_out.stderr)
+            ));
+        }
+
+        let relaunch_script = "nohup sh -c \"sleep 1; (sudo -n apt-get install -y /tmp/localgravity_update.deb || sudo -n dpkg -i /tmp/localgravity_update.deb || pkexec dpkg -i /tmp/localgravity_update.deb) && rm -f /tmp/localgravity_update.deb && /usr/bin/localgravity-edge >/dev/null 2>&1 &\" >/dev/null 2>&1 &";
+        let _ = Command::new("sh")
+            .args(["-c", relaunch_script])
+            .spawn();
+
+        std::process::exit(0);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = deb_url;
+        Err("install_linux_update is only supported on Linux".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -204,7 +241,8 @@ pub fn run() {
             init_client_appdata,
             init_workspace_harness,
             install_dmg_update,
-            install_msi_update
+            install_msi_update,
+            install_linux_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

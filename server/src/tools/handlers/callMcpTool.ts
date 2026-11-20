@@ -3,7 +3,7 @@ import type { BuiltinToolHandler } from './types.js';
 
 export const name = 'call_mcp_tool';
 
-export const execute: BuiltinToolHandler = async (args, _ctx, exec) => {
+export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
   const startMs = performance.now();
 
   if (!exec.mcp) {
@@ -19,7 +19,7 @@ export const execute: BuiltinToolHandler = async (args, _ctx, exec) => {
   const tName = String(args.ToolName || '');
   const tArgs = (args.Arguments || {}) as Record<string, any>;
 
-  const res = await exec.mcp.callMcpTool(serverName, tName, tArgs);
+  const res = await exec.mcp.callMcpTool(serverName, tName, tArgs, 30000, ctx.abortSignal);
 
   return {
     stdout: res.outputText,

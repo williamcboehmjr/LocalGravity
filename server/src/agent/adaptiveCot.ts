@@ -5,8 +5,9 @@ export interface AdaptiveThinkingConfig {
   budget: ThinkingBudget;
   stepIndex: number;
   enableThinking: boolean;
-  reasoningEffort: 'none' | 'low' | 'medium' | 'high';
+  reasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
   reasoningBudgetTokens: number;
+  maxThinkingTokens: number;
   prefillClosedThink: boolean;
   modeLabel: string;
 }
@@ -125,8 +126,73 @@ export function computeAdaptiveThinkingConfig(
       enableThinking: false,
       reasoningEffort: 'none',
       reasoningBudgetTokens: 0,
+      maxThinkingTokens: 0,
       prefillClosedThink: true,
       modeLabel: `Direct Execution (0 tok • Step ${step})`,
+    };
+  }
+
+  if (thinkingBudget === 'low') {
+    return {
+      budget: 'low',
+      stepIndex: step,
+      enableThinking: true,
+      reasoningEffort: 'low',
+      reasoningBudgetTokens: 512,
+      maxThinkingTokens: 512,
+      prefillClosedThink: false,
+      modeLabel: `Low Thinking (512 tok budget • Step ${step})`,
+    };
+  }
+
+  if (thinkingBudget === 'medium') {
+    if (step === 1) {
+      return {
+        budget: 'medium',
+        stepIndex: 1,
+        enableThinking: true,
+        reasoningEffort: 'medium',
+        reasoningBudgetTokens: 1024,
+        maxThinkingTokens: 1024,
+        prefillClosedThink: false,
+        modeLabel: 'Medium Thinking (1024 tok budget • Step 1)',
+      };
+    }
+    return {
+      budget: 'medium',
+      stepIndex: step,
+      enableThinking: true,
+      reasoningEffort: 'medium',
+      reasoningBudgetTokens: 1024,
+      maxThinkingTokens: 1024,
+      prefillClosedThink: false,
+      modeLabel: `Medium Tool Loop (1024 tok budget • Step ${step})`,
+    };
+  }
+
+  if (thinkingBudget === 'high') {
+    return {
+      budget: 'high',
+      stepIndex: step,
+      enableThinking: true,
+      reasoningEffort: 'high',
+      reasoningBudgetTokens: 2560,
+      maxThinkingTokens: 2560,
+      prefillClosedThink: false,
+      modeLabel: `High Thinking (2560 tok budget • Step ${step})`,
+    };
+  }
+
+  if (thinkingBudget === 'xhigh') {
+    return {
+      budget: 'xhigh',
+      stepIndex: step,
+      enableThinking: true,
+      reasoningEffort: 'xhigh',
+      reasoningBudgetTokens: 4096,
+      maxThinkingTokens: 4096,
+      prefillClosedThink: false,
+      modeLabel: `Max Thinking (4096 tok budget • Step ${step})`,
     };
   }
 
@@ -138,6 +204,7 @@ export function computeAdaptiveThinkingConfig(
         enableThinking: true,
         reasoningEffort: 'medium',
         reasoningBudgetTokens: 1024,
+        maxThinkingTokens: 1024,
         prefillClosedThink: false,
         modeLabel: 'Fast Plan (1024 tok budget • Step 1)',
       };
@@ -148,6 +215,7 @@ export function computeAdaptiveThinkingConfig(
       enableThinking: true,
       reasoningEffort: 'low',
       reasoningBudgetTokens: 640,
+      maxThinkingTokens: 640,
       prefillClosedThink: false,
       modeLabel: `Fast Tool Loop (640 tok throttle • Step ${step})`,
     };
@@ -161,6 +229,7 @@ export function computeAdaptiveThinkingConfig(
       enableThinking: true,
       reasoningEffort: 'high',
       reasoningBudgetTokens: 2560,
+      maxThinkingTokens: 2560,
       prefillClosedThink: false,
       modeLabel: 'Deep Architecture Plan (2560 tok budget • Step 1)',
     };
@@ -173,6 +242,7 @@ export function computeAdaptiveThinkingConfig(
       enableThinking: true,
       reasoningEffort: 'medium',
       reasoningBudgetTokens: 1024,
+      maxThinkingTokens: 1024,
       prefillClosedThink: false,
       modeLabel: 'Adaptive Verification (1024 tok budget • Step 2)',
     };
@@ -184,6 +254,7 @@ export function computeAdaptiveThinkingConfig(
     enableThinking: true,
     reasoningEffort: 'low',
     reasoningBudgetTokens: 1024,
+    maxThinkingTokens: 1024,
     prefillClosedThink: false,
     modeLabel: `Rapid Tool Loop (1024 tok budget • Step ${step})`,
   };

@@ -31,46 +31,104 @@ export const IntegratedTerminal: React.FC = () => {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
-    setTimeout(() => {
-      try {
-        fitAddon.fit();
-      } catch {}
-    }, 50);
-
     xtermRef.current = term;
 
-    const cleanHost = hostUrl.replace(/^http/, 'ws');
-    const ws = new WebSocket(`${cleanHost}/ws/terminal`);
-    wsRef.current = ws;
+    let isDisposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let currentWs: WebSocket | null = null;
 
-    ws.onmessage = (ev) => {
+    const sendTerminalResize = () => {
       try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'TERMINAL_HISTORY' || msg.type === 'TERMINAL_OUTPUT') {
-          term.write(msg.chunk || '');
+        fitAddon.fit();
+        if (currentWs && currentWs.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+          currentWs.send(
+            JSON.stringify({
+              type: 'TERMINAL_RESIZE',
+              cols: term.cols,
+              rows: term.rows,
+            })
+          );
         }
+      } catch {}
+    };
+
+    setTimeout(sendTerminalResize, 50);
+
+    const connectWs = () => {
+      if (isDisposed) return;
+      try {
+        const cleanHost = hostUrl.replace(/^http/, 'ws').replace('localhost', '127.0.0.1');
+        const ws = new WebSocket(`${cleanHost}/ws/terminal`);
+        currentWs = ws;
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          if (isDisposed) {
+            try {
+              ws.close();
+            } catch {}
+            return;
+          }
+          sendTerminalResize();
+        };
+
+        ws.onmessage = (ev) => {
+          if (isDisposed) return;
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'TERMINAL_HISTORY' || msg.type === 'TERMINAL_OUTPUT') {
+              term.write(msg.chunk || '');
+            }
+          } catch {
+            term.write(ev.data);
+          }
+        };
+
+        ws.onclose = () => {
+          if (isDisposed) return;
+          reconnectTimer = setTimeout(connectWs, 1500);
+        };
       } catch {
-        term.write(ev.data);
+        if (!isDisposed) {
+          reconnectTimer = setTimeout(connectWs, 2000);
+        }
       }
     };
 
+    connectWs();
+
     const disp = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'TERMINAL_INPUT', data }));
+      if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+        currentWs.send(JSON.stringify({ type: 'TERMINAL_INPUT', data }));
       }
     });
 
-    const onResize = () => {
-      try {
-        fitAddon.fit();
-      } catch {}
-    };
-    window.addEventListener('resize', onResize);
+    const ro =
+      typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(() => {
+            sendTerminalResize();
+          })
+        : null;
+    if (ro && containerRef.current) {
+      ro.observe(containerRef.current);
+    }
+
+    window.addEventListener('resize', sendTerminalResize);
 
     return () => {
-      window.removeEventListener('resize', onResize);
+      isDisposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ro?.disconnect();
+      window.removeEventListener('resize', sendTerminalResize);
       disp.dispose();
-      ws.close();
+      if (currentWs) {
+        currentWs.onopen = null;
+        currentWs.onclose = null;
+        currentWs.onmessage = null;
+        try {
+          currentWs.close();
+        } catch {}
+      }
       term.dispose();
     };
   }, [hostUrl]);

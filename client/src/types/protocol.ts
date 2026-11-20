@@ -225,6 +225,43 @@ export interface ContextCompactedMessage extends BaseMessage<ContextCompactedPay
   type: 'CONTEXT_COMPACTED';
 }
 
+export interface ThreadCreatedMessage extends BaseMessage<{
+  thread: unknown;
+  parentThreadId?: string;
+  branchedFromMessageId?: string;
+}> {
+  type: 'THREAD_CREATED';
+}
+
+export interface ThreadUpdatedMessage extends BaseMessage<{
+  thread: unknown;
+}> {
+  type: 'THREAD_UPDATED';
+}
+
+export interface ThreadDeletedMessage extends BaseMessage<{
+  threadId: string;
+}> {
+  type: 'THREAD_DELETED';
+}
+
+export interface ThreadClearedMessage extends BaseMessage<{
+  threadId: string;
+}> {
+  type: 'THREAD_CLEARED';
+}
+
+export interface CheckpointRevertedMessage extends BaseMessage<{
+  checkpointId: string;
+  reverted?: boolean;
+  filePath?: string;
+  restoredContent?: string;
+  checkpoints?: unknown[];
+  messages?: unknown[];
+}> {
+  type: 'CHECKPOINT_REVERTED';
+}
+
 export type AnyIncomingMessage =
   | TurnPhaseMessage
   | SwarmStateMessage
@@ -239,7 +276,12 @@ export type AnyIncomingMessage =
   | ComfyConfigUpdatedMessage
   | ThreadRewoundMessage
   | HarnessReloadedMessage
-  | ContextCompactedMessage;
+  | ContextCompactedMessage
+  | ThreadCreatedMessage
+  | ThreadUpdatedMessage
+  | ThreadDeletedMessage
+  | ThreadClearedMessage
+  | CheckpointRevertedMessage;
 
 export type AnyOutgoingMessage =
   | SessionInitMessage

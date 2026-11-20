@@ -8,12 +8,16 @@ export const PI_CORE_TOOL_NAMES = [
   'find_files',
   'search_codebase',
   'code_outline',
+  'list_directory',
   'list_skills',
   'read_skill',
 ] as const;
 
 export const DEFAULT_CORE_TOOL_NAMES = [
   ...PI_CORE_TOOL_NAMES,
+  'lsp_diagnostics',
+  'list_directory',
+  'ask_question',
   'search_web',
   'patch_json',
   'manage_files',
@@ -30,7 +34,6 @@ const VISION_DOC_BROWSER_TOOLS = new Set([
   'inspect_window',
   'inspect_document',
   'inspect_file_metadata',
-  'browse_url',
   'browser_inspect',
 ]);
 const ENGINE_SYSTEM_RELEASE_TOOLS = new Set([
@@ -43,11 +46,12 @@ const ENGINE_SYSTEM_RELEASE_TOOLS = new Set([
   'reload_harness',
 ]);
 
-export interface SelectScopedToolsOptions {
+  export interface SelectScopedToolsOptions {
   prompt: string;
   slashCommand?: string | null;
   forceLean?: boolean;
   forceComfyStudio?: boolean;
+  includeSwarmBoardTools?: boolean;
   builtinTools: any[];
   skillTools: any[];
   mcpTools: any[];
@@ -92,6 +96,17 @@ export function selectScopedTools(opts: SelectScopedToolsOptions): any[] {
     for (const name of previouslyUsed) {
       allowed.add(name);
     }
+    if (
+      opts.includeSwarmBoardTools ||
+      (opts.swarmTools && opts.swarmTools.length > 0) ||
+      slashCommand === '/swarm' ||
+      /\bswarm\b|\/swarm\b/i.test(prompt)
+    ) {
+      allowed.add('swarm');
+    }
+    if (slashCommand === '/grill-me' || /\/grill-me\b/i.test(prompt)) {
+      allowed.add('ask_question');
+    }
     for (const t of allBuiltinAndSkill) {
       const name = getToolName(t);
       if (name && promptLower.includes(name.toLowerCase())) {
@@ -109,6 +124,18 @@ export function selectScopedTools(opts: SelectScopedToolsOptions): any[] {
   const allowed = new Set<string>(DEFAULT_CORE_TOOL_NAMES);
   for (const name of previouslyUsed) {
     allowed.add(name);
+  }
+
+  if (
+    opts.includeSwarmBoardTools ||
+    (opts.swarmTools && opts.swarmTools.length > 0) ||
+    slashCommand === '/swarm' ||
+    /\bswarm\b|\/swarm\b/i.test(prompt)
+  ) {
+    allowed.add('swarm');
+  }
+  if (slashCommand === '/grill-me' || /\/grill-me\b/i.test(prompt)) {
+    allowed.add('ask_question');
   }
 
   const wantComfyMedia =

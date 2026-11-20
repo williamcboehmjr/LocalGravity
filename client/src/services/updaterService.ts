@@ -64,10 +64,24 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
       });
 
       if (update) {
-        let macDmgUrl: string | undefined;
-        if (isMac && update.rawJson) {
+        let nativeDownloadUrl: string | undefined;
+        if (update.rawJson) {
           const platforms = (update.rawJson as any).platforms;
-          macDmgUrl = platforms?.['darwin-aarch64']?.url;
+          if (isMac) {
+            nativeDownloadUrl = platforms?.['darwin-aarch64']?.url;
+          } else if (isLinux) {
+            const linuxKey = isArm64 ? 'linux-aarch64' : 'linux-x86_64';
+            const rawLinuxUrl: string | undefined = platforms?.[linuxKey]?.url;
+            const cleanVer = update.version.replace(/^v/, '');
+            const debFile = `LocalGravity_${cleanVer}_${isArm64 ? 'arm64' : 'amd64'}.deb`;
+            if (rawLinuxUrl && /\.deb(?:$|\?)/i.test(rawLinuxUrl)) {
+              nativeDownloadUrl = rawLinuxUrl;
+            } else if (rawLinuxUrl) {
+              nativeDownloadUrl = rawLinuxUrl.replace(/LocalGravity_[^/?#]+\.AppImage/i, debFile);
+            } else {
+              nativeDownloadUrl = `https://github.com/williamcboehmjr/LocalGravity/releases/download/v${cleanVer}/${debFile}`;
+            }
+          }
         }
 
         return {
@@ -77,7 +91,7 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           body: update.body || '',
           date: update.date,
           updateHandle: update,
-          downloadUrl: macDmgUrl,
+          downloadUrl: nativeDownloadUrl,
         };
       }
     } catch (err: any) {
@@ -113,16 +127,23 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
           : isLinux && isArm64
           ? `LocalGravity_${latestTag}_arm64.deb`
           : isLinux
-          ? `LocalGravity_${latestTag}_amd64.AppImage`
+          ? `LocalGravity_${latestTag}_amd64.deb`
           : `LocalGravity_${latestTag}_x64_en-US.msi`;
         const platform = manifest.platforms?.[platformKey];
+        let resolvedUrl: string = platform?.url || `${apiBaseUrl}/api/updater/download/${fallbackFile}`;
+        if (isLinux && /\.AppImage(?:$|\?)/i.test(resolvedUrl)) {
+          resolvedUrl = resolvedUrl.replace(
+            /LocalGravity_[^/?#]+\.AppImage/i,
+            `LocalGravity_${latestTag}_${isArm64 ? 'arm64' : 'amd64'}.deb`
+          );
+        }
         return {
           available: true,
           version: latestTag,
           currentVersion,
           body: manifest.notes || '',
           date: manifest.pub_date,
-          downloadUrl: platform?.url || `${apiBaseUrl}/api/updater/download/${fallbackFile}`,
+          downloadUrl: resolvedUrl,
         };
       }
     }
@@ -176,6 +197,13 @@ export async function downloadAndApplyUpdate(
   const isMac =
     typeof navigator !== 'undefined' &&
     /mac|darwin|iphone|ipad/i.test(navigator.userAgent || navigator.platform || '');
+  const isLinux =
+    typeof navigator !== 'undefined' &&
+    /linux/i.test(navigator.userAgent || navigator.platform || '') &&
+    !isAndroid;
+  const isArm64 =
+    typeof navigator !== 'undefined' &&
+    /aarch64|arm64/i.test(navigator.userAgent || navigator.platform || '');
 
   // Extract updateHandle and downloadUrl (guard against UpdateInfo objects without updateHandle)
   const isUpdateInfoObj =
@@ -246,6 +274,54 @@ export async function downloadAndApplyUpdate(
     }
   }
 
+  // On Linux Desktop (especially ARM64 / Chromebook Crostini .deb installs), invoke install_linux_update
+  // to avoid Tauri signature mismatch against the Windows MSI signature in latest.json.
+  const linuxDebUrl =
+    (isLinux || (downloadUrl && /\.deb(?:$|\?)/i.test(downloadUrl))) && downloadUrl
+      ? /\.deb(?:$|\?)/i.test(downloadUrl)
+        ? downloadUrl
+        : downloadUrl.replace(
+            /LocalGravity_([^/?#]+)_amd64\.AppImage/i,
+            `LocalGravity_$1_${isArm64 ? 'arm64' : 'amd64'}.deb`
+          )
+      : undefined;
+
+  if (isTauri && linuxDebUrl) {
+    onProgress?.({
+      status: 'started',
+      downloadedBytes: 0,
+      totalBytes: 5800000,
+      percent: 15,
+      statusText: 'Downloading Linux .deb update package...',
+    });
+
+    onProgress?.({
+      status: 'downloading',
+      downloadedBytes: 2900000,
+      totalBytes: 5800000,
+      percent: 55,
+      statusText: 'Installing Linux .deb update & preparing relaunch...',
+    });
+
+    try {
+      await invoke('install_linux_update', { debUrl: linuxDebUrl });
+      return;
+    } catch (linuxErr: any) {
+      console.warn('[Updater] Native Linux .deb installer failed, falling back:', linuxErr);
+      if (!updateHandle) {
+        window.open(linuxDebUrl, '_blank');
+        onProgress?.({
+          status: 'finished',
+          downloadedBytes: 100,
+          totalBytes: 100,
+          percent: 100,
+          statusText: 'Opened Linux .deb download in browser.',
+        });
+        return;
+      }
+    }
+  }
+
   if (!updateHandle) {
     if (isTauri && !isMac && downloadUrl && /\.msi(?:$|\?)/i.test(downloadUrl)) {
       onProgress?.({
@@ -275,36 +351,52 @@ export async function downloadAndApplyUpdate(
   let total = 0;
   let downloaded = 0;
 
-  await updateHandle.downloadAndInstall((event: DownloadEvent) => {
-    if (event.event === 'Started') {
-      total = event.data.contentLength ?? 0;
-      onProgress?.({
-        status: 'started',
-        downloadedBytes: 0,
-        totalBytes: total,
-        percent: 0,
-        statusText: `Starting download (${total ? formatBytes(total) : 'calculating size'})...`,
-      });
-    } else if (event.event === 'Progress') {
-      downloaded += event.data.chunkLength;
-      const pct = total > 0 ? Math.round((downloaded / total) * 100) : 0;
-      onProgress?.({
-        status: 'downloading',
-        downloadedBytes: downloaded,
-        totalBytes: total,
-        percent: pct,
-        statusText: `Downloading: ${pct}% (${formatBytes(downloaded)} / ${formatBytes(total)})`,
-      });
-    } else if (event.event === 'Finished') {
+  try {
+    await updateHandle.downloadAndInstall((event: DownloadEvent) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength ?? 0;
+        onProgress?.({
+          status: 'started',
+          downloadedBytes: 0,
+          totalBytes: total,
+          percent: 0,
+          statusText: `Starting download (${total ? formatBytes(total) : 'calculating size'})...`,
+        });
+      } else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength;
+        const pct = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+        onProgress?.({
+          status: 'downloading',
+          downloadedBytes: downloaded,
+          totalBytes: total,
+          percent: pct,
+          statusText: `Downloading: ${pct}% (${formatBytes(downloaded)} / ${formatBytes(total)})`,
+        });
+      } else if (event.event === 'Finished') {
+        onProgress?.({
+          status: 'finished',
+          downloadedBytes: downloaded,
+          totalBytes: total,
+          percent: 100,
+          statusText: 'Download complete. Applying update & relaunching...',
+        });
+      }
+    });
+  } catch (installErr: any) {
+    if (isLinux && (linuxDebUrl || downloadUrl)) {
+      const targetUrl = linuxDebUrl || downloadUrl!;
+      window.open(targetUrl, '_blank');
       onProgress?.({
         status: 'finished',
-        downloadedBytes: downloaded,
-        totalBytes: total,
+        downloadedBytes: 100,
+        totalBytes: 100,
         percent: 100,
-        statusText: 'Download complete. Applying update & relaunching...',
+        statusText: 'Opened Linux .deb update package in browser.',
       });
+      return;
     }
-  });
+    throw installErr;
+  }
 
   onProgress?.({
     status: 'relaunching',
@@ -351,3 +443,6 @@ function compareSemver(v1: string, v2: string): number {
   }
   return 0;
 }
+
+export const applyAppUpdate = downloadAndApplyUpdate;
+

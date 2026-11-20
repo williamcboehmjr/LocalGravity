@@ -206,9 +206,9 @@ export class BuiltinToolExecutor {
       }
 
       return {
-        stdout: `Executed ${toolName} with args: ${JSON.stringify(args)}`,
-        stderr: '',
-        exitCode: 0,
+        stdout: '',
+        stderr: `Unknown tool "${toolName}". Verify the exact tool name from your active tool list.`,
+        exitCode: 1,
         durationMs: Math.round(performance.now() - startMs),
       };
     } catch (err: any) {

@@ -7,6 +7,21 @@ import { SwarmTurnScheduler } from '../../swarm/swarmScheduler.js';
 
 export const name = 'invoke_subagent';
 
+function formatSubagentToolOutput(stdout: string, stderr: string, exitCode: number): string {
+  const out = (stdout || '').trim();
+  const err = (stderr || '').trim();
+  let combined = '';
+  if (out && err) {
+    combined = `${out}\n[stderr]\n${err}`;
+  } else {
+    combined = out || err || 'ok';
+  }
+  if (exitCode !== 0 && !combined.includes(`[exit_code: ${exitCode}]`)) {
+    combined = combined ? `${combined}\n[exit_code: ${exitCode}]` : `[exit_code: ${exitCode}]`;
+  }
+  return combined;
+}
+
 function fallbackKeywordScan(prompt: string, role: string, workspaceRoot: string, targetDir: string): string {
   const keywords = prompt
     .replace(/[^\w\s./-]/g, ' ')
@@ -107,6 +122,16 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
     maxSteps,
   });
 
+  if (ctx.abortSignal?.aborted) {
+    manager.completeSubagentTask(task.id, 'Subagent execution aborted by user.', 'failed');
+    return {
+      stdout: '',
+      stderr: 'Subagent execution aborted by user.',
+      exitCode: 130,
+      durationMs: Date.now() - startMs,
+    };
+  }
+
   try {
     const engine = manager.getLlmEngine();
     let report = '';
@@ -172,7 +197,7 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
                         id: `sub-${step}-${executed.length + 1}`,
                         name: toolName,
                         args: toolArgs,
-                        output: toolRes.stdout || toolRes.stderr || 'ok',
+                        output: formatSubagentToolOutput(toolRes.stdout, toolRes.stderr, toolRes.exitCode),
                       });
                     },
               });
@@ -209,8 +234,20 @@ export const execute: BuiltinToolHandler = async (args, ctx, exec) => {
           });
         }
       } catch (llmErr) {
-        console.warn('[invoke_subagent] Live LLM loop failed, falling back to static scan:', llmErr);
+        if (!ctx.abortSignal?.aborted) {
+          console.warn('[invoke_subagent] Live LLM loop failed, falling back to static scan:', llmErr);
+        }
       }
+    }
+
+    if (ctx.abortSignal?.aborted) {
+      manager.completeSubagentTask(task.id, 'Subagent execution aborted by user.', 'failed');
+      return {
+        stdout: '',
+        stderr: 'Subagent execution aborted by user.',
+        exitCode: 130,
+        durationMs: Date.now() - startMs,
+      };
     }
 
     if (!report) {

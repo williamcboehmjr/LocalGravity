@@ -256,7 +256,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   // Stop button / queue mode follow the authoritative server turn state.
   const isGenerating = activeTurn ? activeTurn.isActive : isGeneratingLegacy;
 
-  const { workspaceFiles } = useArtifactStore();
+  const { workspaceFiles, setWorkspaceFiles } = useArtifactStore();
   const { mcpServers } = useTelemetryStore();
 
   const [input, setInput] = useState('');
@@ -281,9 +281,42 @@ export const PromptBar: React.FC<PromptBarProps> = ({
   const [showBudgetMenu, setShowBudgetMenu] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
 
+  const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastCompositionEndAtRef = useRef<number | null>(null);
+
+  // Close open popovers on outside click
+  useEffect(() => {
+    const hasOpenPopover =
+      showMentionPopover || showSlashPopover || showModelMenu || showBudgetMenu || showAttachMenu;
+    if (!hasOpenPopover) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowMentionPopover(false);
+        setShowSlashPopover(false);
+        setShowModelMenu(false);
+        setShowBudgetMenu(false);
+        setShowAttachMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showMentionPopover, showSlashPopover, showModelMenu, showBudgetMenu, showAttachMenu]);
+
+  // Fetch /api/workspace/files for @ mentions when opening @ menu if empty
+  useEffect(() => {
+    if (!showMentionPopover || workspaceFiles.length > 0) return;
+    const wsPath = useSessionStore.getState().workspacePath || '.';
+    fetch(`${apiBaseUrl}/api/workspace/files?root_path=${encodeURIComponent(wsPath)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.files)) {
+          setWorkspaceFiles(data.files);
+        }
+      })
+      .catch(() => {});
+  }, [showMentionPopover, workspaceFiles.length, apiBaseUrl, setWorkspaceFiles]);
 
   useEffect(() => {
     if (textareaRef.current && !CSS.supports('field-sizing', 'content')) {
@@ -429,9 +462,32 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     }
   };
 
-  const handleEditInInput = (text: string, imgs?: string[]) => {
+  const handleEditInInput = (
+    text: string,
+    imgs?: string[],
+    atts?: FileAttachmentItem[]
+  ) => {
     setInput(text);
-    if (imgs && imgs.length > 0) setImages(imgs);
+    if (atts && atts.length > 0) {
+      setAttachments(atts);
+      const derivedImages = atts
+        .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')))
+        .map((a) => a.base64DataUrl || a.url)
+        .filter((u): u is string => Boolean(u));
+      setImages(derivedImages.length > 0 ? derivedImages : imgs || []);
+    } else if (imgs && imgs.length > 0) {
+      setImages(imgs);
+      setAttachments(
+        imgs.map((url, i) => ({
+          name: `image-${i + 1}.png`,
+          type: 'image/png',
+          size: 0,
+          base64DataUrl: url,
+          url,
+          isImage: true,
+        }))
+      );
+    }
     textareaRef.current?.focus();
   };
 
@@ -543,6 +599,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       setShowSlashPopover(false);
       setShowModelMenu(false);
       setShowBudgetMenu(false);
+      setShowAttachMenu(false);
     }
   };
 
@@ -652,6 +709,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
 
   return (
     <div
+      ref={containerRef}
       onDragOver={(e) => {
         e.preventDefault();
         setIsDraggingOver(true);
@@ -771,11 +829,15 @@ export const PromptBar: React.FC<PromptBarProps> = ({
       <AttachmentStrip
         attachments={attachments}
         formatFileSize={formatFileSize}
-        onRemoveAttachment={(idx, base64DataUrl) => {
-          setAttachments(attachments.filter((_, i) => i !== idx));
-          if (base64DataUrl) {
-            setImages(images.filter((img) => img !== base64DataUrl));
-          }
+        onRemoveAttachment={(idx) => {
+          const nextAttachments = attachments.filter((_, i) => i !== idx);
+          setAttachments(nextAttachments);
+          setImages(
+            nextAttachments
+              .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')))
+              .map((a) => a.base64DataUrl || a.url)
+              .filter((u): u is string => Boolean(u))
+          );
         }}
       />
 
@@ -1112,8 +1174,8 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             }`}
             title={
               executionPolicy === 'always_proceed'
-                ? 'Turbo Mode: Auto-execute commands without review'
-                : 'Review Mode: Ask before executing commands'
+                ? 'Execution Policy (Turbo Guidance): Instructs the agent to proceed autonomously without pausing for plan review'
+                : 'Execution Policy (Review Guidance): Guides the agent to present an implementation plan and request review before major edits'
             }
           >
             {executionPolicy === 'always_proceed' ? (
@@ -1124,7 +1186,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             ) : (
               <>
                 <ShieldAlert className="w-3 h-3" />
-                <span>Review</span>
+                <span>Plan Review</span>
               </>
             )}
           </button>

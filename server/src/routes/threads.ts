@@ -1,15 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ModelTier, ThinkingBudget } from '../db/database.js';
+import type { ModelTier, ThinkingBudget, ThreadStatus } from '../db/database.js';
 import type { GoogleModelId } from '../google/googleAiEngine.js';
 import type { RawAttachmentInput } from '../files/attachmentManager.js';
 import type { RouteContext } from './types.js';
+
+const VALID_MODEL_TIERS = new Set<ModelTier>(['low', 'medium', 'high']);
+const VALID_THINKING_BUDGETS = new Set<ThinkingBudget>(['off', 'fast', 'deep', 'low', 'medium', 'high', 'xhigh']);
+const VALID_THREAD_STATUSES = new Set<ThreadStatus>([
+  'idle',
+  'thinking',
+  'executing_tool',
+  'awaiting_approval',
+  'error',
+]);
 
 export function registerThreadRoutes(ctx: RouteContext): void {
   const {
     app,
     repoRoot,
     db,
+    activeAbortControllers,
     activeTurns,
     attachmentManager,
     broadcastSync,
@@ -36,16 +47,44 @@ export function registerThreadRoutes(ctx: RouteContext): void {
     return { thread };
   });
 
-  app.patch('/api/threads/:id', async (req) => {
+  app.patch('/api/threads/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body || {}) as any;
-    const thread = db.updateThread(id, body);
+    const body = (req.body || {}) as Record<string, any>;
+    const updates: Partial<{
+      title: string;
+      status: ThreadStatus;
+      active_model_tier: ModelTier;
+      active_thinking_budget: ThinkingBudget;
+      kv_prefix_hash: string;
+    }> = {};
+
+    if (typeof body.title === 'string' && body.title.trim()) {
+      updates.title = body.title.trim();
+    }
+    if (typeof body.active_model_tier === 'string' && VALID_MODEL_TIERS.has(body.active_model_tier as ModelTier)) {
+      updates.active_model_tier = body.active_model_tier as ModelTier;
+    }
+    if (
+      typeof body.active_thinking_budget === 'string' &&
+      VALID_THINKING_BUDGETS.has(body.active_thinking_budget as ThinkingBudget)
+    ) {
+      updates.active_thinking_budget = body.active_thinking_budget as ThinkingBudget;
+    }
+    if (typeof body.status === 'string' && VALID_THREAD_STATUSES.has(body.status as ThreadStatus)) {
+      updates.status = body.status as ThreadStatus;
+    }
+
+    const thread = db.updateThread(id, updates);
+    if (!thread) {
+      return reply.status(404).send({ error: `Thread ${id} not found` });
+    }
     broadcastSync({ type: 'THREAD_UPDATED', payload: { thread } });
     return { thread };
   });
 
   app.delete('/api/threads/:id', async (req) => {
     const { id } = req.params as { id: string };
+    await stopGenerationHandler(id);
     db.deleteThread(id);
     broadcastSync({ type: 'THREAD_DELETED', payload: { threadId: id } });
     return { deleted: true };
@@ -53,6 +92,7 @@ export function registerThreadRoutes(ctx: RouteContext): void {
 
   app.post('/api/threads/:id/clear', async (req) => {
     const { id } = req.params as { id: string };
+    await stopGenerationHandler(id);
     db.clearThreadMessages(id);
     broadcastSync({ type: 'THREAD_CLEARED', payload: { threadId: id } });
     return { cleared: true };
@@ -84,6 +124,7 @@ export function registerThreadRoutes(ctx: RouteContext): void {
       return reply.status(400).send({ error: 'message_id is required' });
     }
     try {
+      await stopGenerationHandler(id);
       const res = db.rewindThreadToMessage(id, body.message_id, body.revert_files !== false);
       broadcastSync({ type: 'THREAD_REWOUND', payload: { ...res } });
       return res;
@@ -147,8 +188,13 @@ export function registerThreadRoutes(ctx: RouteContext): void {
     return result;
   });
 
-  app.post('/api/checkpoints/:id/rewind', async (req) => {
+  app.post('/api/checkpoints/:id/rewind', async (req, reply) => {
     const { id } = req.params as { id: string };
+    const cp = db.getFileCheckpoint(id);
+    if (!cp) {
+      return reply.status(404).send({ error: `Checkpoint ${id} not found` });
+    }
+    await stopGenerationHandler(cp.thread_id);
     const result = db.revertCheckpointAndRewindThread(id);
     broadcastSync({ type: 'CHECKPOINT_REVERTED', payload: { checkpointId: id, ...result } });
     return result;
@@ -198,6 +244,9 @@ export function registerThreadRoutes(ctx: RouteContext): void {
       google_model?: GoogleModelId;
       attachments?: any[];
     };
+    if (activeAbortControllers.has(id)) {
+      await stopGenerationHandler(id);
+    }
     if (body.google_model) {
       applyBrainProviderUpdate({ selectedGoogleModel: body.google_model });
     }

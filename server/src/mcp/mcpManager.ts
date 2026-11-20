@@ -48,6 +48,7 @@ interface PersistentMcpSession {
   initialized: boolean;
   initPromise: Promise<void> | null;
   buffer: string;
+  stderrLines: string[];
   pending: Map<number, { resolve: (msg: any) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>;
 }
 
@@ -150,7 +151,67 @@ export class McpClientManager {
   }
 
   private getDefaultToolsForServer(serverName: string): McpToolDefinition[] {
-    if (serverName.includes('puppeteer') || serverName.includes('playwright')) {
+    if (serverName.includes('playwright')) {
+      return [
+        {
+          name: 'browser_navigate',
+          serverName,
+          description: 'Navigate browser to a URL.',
+          inputSchema: {
+            type: 'object',
+            properties: { url: { type: 'string', description: 'Target URL' } },
+            required: ['url'],
+          },
+        },
+        {
+          name: 'browser_click',
+          serverName,
+          description: 'Click an element on the page.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              element: { type: 'string', description: 'Human-readable element description' },
+              ref: { type: 'string', description: 'Exact target element reference from snapshot' },
+            },
+            required: ['element', 'ref'],
+          },
+        },
+        {
+          name: 'browser_type',
+          serverName,
+          description: 'Type text into an editable element.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              element: { type: 'string' },
+              ref: { type: 'string' },
+              text: { type: 'string' },
+            },
+            required: ['element', 'ref', 'text'],
+          },
+        },
+        {
+          name: 'browser_snapshot',
+          serverName,
+          description: 'Capture accessibility snapshot of the current page.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
+          name: 'browser_take_screenshot',
+          serverName,
+          description: 'Take a screenshot of the current page.',
+          inputSchema: {
+            type: 'object',
+            properties: { filename: { type: 'string' }, fullPage: { type: 'boolean' } },
+          },
+        },
+      ];
+    }
+
+    if (serverName.includes('puppeteer')) {
       return [
         {
           name: 'puppeteer_navigate',
@@ -276,10 +337,19 @@ export class McpClientManager {
           inputSchema: {
             type: 'object',
             properties: {
-              entityName: { type: 'string' },
-              contents: { type: 'array', items: { type: 'string' } },
+              observations: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    entityName: { type: 'string' },
+                    contents: { type: 'array', items: { type: 'string' } },
+                  },
+                  required: ['entityName', 'contents'],
+                },
+              },
             },
-            required: ['entityName', 'contents'],
+            required: ['observations'],
           },
         },
         {
@@ -377,6 +447,38 @@ export class McpClientManager {
     ];
   }
 
+  private killChildProcessTree(child: ChildProcessWithoutNullStreams): void {
+    try {
+      if (process.platform === 'win32' && child.pid) {
+        spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+      } else {
+        child.kill('SIGTERM');
+      }
+    } catch {}
+  }
+
+  private evictStdioSession(serverName: string, reason = 'Evicted MCP stdio session'): void {
+    const sess = this.sessions.get(serverName);
+    if (!sess) return;
+    this.sessions.delete(serverName);
+    for (const [, p] of sess.pending.entries()) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
+    sess.pending.clear();
+    this.killChildProcessTree(sess.child);
+  }
+
+  public dispose(): void {
+    for (const serverName of Array.from(this.sessions.keys())) {
+      this.evictStdioSession(serverName, 'McpClientManager disposed');
+    }
+    this.httpSessions.clear();
+  }
+
   /**
    * Executes an MCP tool via live JSON-RPC 2.0 `tools/call`.
    */
@@ -384,8 +486,17 @@ export class McpClientManager {
     serverName: string,
     toolName: string,
     toolArgs: Record<string, any>,
-    timeoutMs = 30000
+    timeoutMs = 30000,
+    abortSignal?: AbortSignal
   ): Promise<McpToolCallResult> {
+    if (abortSignal?.aborted) {
+      return {
+        content: [],
+        isError: true,
+        outputText: 'Tool execution aborted by user.',
+      };
+    }
+
     let srv = this.servers.get(serverName);
 
     // If exact name didn't match, attempt fuzzy lookup
@@ -444,10 +555,10 @@ export class McpClientManager {
 
     const invokeTransport = () => {
       if (srv.transport === 'stdio' && srv.command) {
-        return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
+        return this.executeStdioToolCall(srv, cleanToolName, toolArgs, effectiveTimeout, abortSignal);
       }
       if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
-        return this.executeHttpToolCall(srv, cleanToolName, toolArgs, effectiveTimeout);
+        return this.executeHttpToolCall(srv, cleanToolName, toolArgs, effectiveTimeout, abortSignal);
       }
       return Promise.resolve({
         content: [],
@@ -474,10 +585,10 @@ export class McpClientManager {
       }
       try {
         if (srv.transport === 'stdio' && srv.command) {
-          return await this.executeStdioToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout);
+          return await this.executeStdioToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout, abortSignal);
         }
         if ((srv.transport === 'http' || srv.transport === 'sse') && srv.command) {
-          return await this.executeHttpToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout);
+          return await this.executeHttpToolCall(srv, cleanToolName, effectiveArgs, effectiveTimeout, abortSignal);
         }
       } finally {
         try {
@@ -499,9 +610,18 @@ export class McpClientManager {
 
   private async getOrCreatePersistentSession(srv: McpServerStatus, timeoutMs: number): Promise<PersistentMcpSession> {
     const existing = this.sessions.get(srv.name);
-    if (existing && !existing.child.killed && existing.child.exitCode === null) {
-      if (existing.initPromise) await existing.initPromise;
-      return existing;
+    if (existing) {
+      if (!existing.child.killed && existing.child.exitCode === null) {
+        if (existing.initPromise) {
+          await existing.initPromise;
+          if (existing.initialized && this.sessions.get(srv.name) === existing) {
+            return existing;
+          }
+        } else if (existing.initialized) {
+          return existing;
+        }
+      }
+      this.evictStdioSession(srv.name, 'Evicting uninitialized or dead MCP session');
     }
 
     const env = {
@@ -532,6 +652,7 @@ export class McpClientManager {
       initialized: false,
       initPromise: null,
       buffer: '',
+      stderrLines: [],
       pending: new Map(),
     };
     this.sessions.set(srv.name, session);
@@ -546,6 +667,18 @@ export class McpClientManager {
         this.sessions.delete(srv.name);
       }
     };
+
+    child.stderr?.on('data', (chunk) => {
+      const lines = chunk.toString().split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        session.stderrLines.push(trimmed.slice(0, 500));
+        if (session.stderrLines.length > 50) {
+          session.stderrLines.shift();
+        }
+      }
+    });
 
     child.stdout.on('data', (chunk) => {
       session.buffer += chunk.toString();
@@ -572,6 +705,7 @@ export class McpClientManager {
     });
 
     child.on('close', (code) => {
+      srv.status = !srv.enabled ? 'disabled' : code === 0 ? 'ready' : 'error';
       failAllPending(`MCP server ${srv.name} exited (${code ?? 'null'})`);
     });
 
@@ -594,46 +728,56 @@ export class McpClientManager {
     };
 
     session.initPromise = (async () => {
-      const initMsg = await sendRpc(
-        'initialize',
-        {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'LocalGravity', version: '2.3.10' },
-        },
-        Math.min(Math.max(timeoutMs, 15000), 20000)
-      );
-      if (typeof initMsg?.result?.instructions === 'string' && initMsg.result.instructions.trim()) {
-        srv.instructions = initMsg.result.instructions.trim();
-      } else if (!srv.instructions) {
-        const diskInstructions = path.join(os.homedir(), '.gemini', 'antigravity', 'mcp', srv.name, 'instructions.md');
-        if (fs.existsSync(diskInstructions)) {
-          try {
-            srv.instructions = fs.readFileSync(diskInstructions, 'utf-8').trim();
-          } catch {}
-        }
-      }
       try {
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
-      } catch {}
-      session.initialized = true;
-      srv.status = 'connected';
-      srv.lastCheckedAt = new Date().toISOString();
+        const initMsg = await sendRpc(
+          'initialize',
+          {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'LocalGravity', version: '2.3.10' },
+          },
+          Math.min(Math.max(timeoutMs, 1000), 20000)
+        );
+        if (initMsg?.error) {
+          throw new Error(initMsg.error.message || 'MCP initialize error');
+        }
+        if (typeof initMsg?.result?.instructions === 'string' && initMsg.result.instructions.trim()) {
+          srv.instructions = initMsg.result.instructions.trim();
+        } else if (!srv.instructions) {
+          const diskInstructions = path.join(os.homedir(), '.gemini', 'antigravity', 'mcp', srv.name, 'instructions.md');
+          if (fs.existsSync(diskInstructions)) {
+            try {
+              srv.instructions = fs.readFileSync(diskInstructions, 'utf-8').trim();
+            } catch {}
+          }
+        }
+        try {
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
+        } catch {}
+        session.initialized = true;
+        srv.status = 'connected';
+        srv.lastCheckedAt = new Date().toISOString();
 
-      // Dynamic tools/list discovery (non-fatal; retains legacy default tools if unavailable)
-      try {
-        const listMsg = await sendRpc('tools/list', {}, 4000);
-        const discovered = Array.isArray(listMsg?.result?.tools) ? listMsg.result.tools : [];
-        if (discovered.length > 0) {
-          srv.tools = discovered.map((t: any) => ({
-            name: String(t.name),
-            serverName: srv.name,
-            description: String(t.description || ''),
-            inputSchema: t.inputSchema || { type: 'object', properties: {} },
-          }));
-          srv.toolsCount = srv.tools.length;
-        }
-      } catch {}
+        // Dynamic tools/list discovery (non-fatal; retains legacy default tools if unavailable)
+        try {
+          const listMsg = await sendRpc('tools/list', {}, Math.min(timeoutMs, 4000));
+          const discovered = Array.isArray(listMsg?.result?.tools) ? listMsg.result.tools : [];
+          if (discovered.length > 0) {
+            srv.tools = discovered.map((t: any) => ({
+              name: String(t.name),
+              serverName: srv.name,
+              description: String(t.description || ''),
+              inputSchema: t.inputSchema || { type: 'object', properties: {} },
+            }));
+            srv.toolsCount = srv.tools.length;
+          }
+        } catch {}
+      } catch (err: any) {
+        srv.status = 'error';
+        failAllPending(err?.message || `MCP initialize failed for ${srv.name}`);
+        this.killChildProcessTree(child);
+        throw err;
+      }
     })();
 
     try {
@@ -648,17 +792,50 @@ export class McpClientManager {
     srv: McpServerStatus,
     toolName: string,
     toolArgs: Record<string, any>,
-    timeoutMs: number
+    timeoutMs: number,
+    abortSignal?: AbortSignal
   ): Promise<McpToolCallResult> {
     try {
+      if (abortSignal?.aborted) {
+        return {
+          content: [],
+          isError: true,
+          outputText: 'Tool execution aborted by user.',
+        };
+      }
       const session = await this.getOrCreatePersistentSession(srv, timeoutMs);
       const id = session.nextId++;
       const msg: any = await new Promise((resolve, reject) => {
+        const onAbort = () => {
+          session.pending.delete(id);
+          clearTimeout(timer);
+          this.evictStdioSession(srv.name, `MCP tool ${srv.name}:${toolName} aborted`);
+          reject(new Error(`MCP tool execution aborted for ${srv.name}:${toolName}`));
+        };
+        if (abortSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
+
         const timer = setTimeout(() => {
           session.pending.delete(id);
+          abortSignal?.removeEventListener('abort', onAbort);
+          this.evictStdioSession(srv.name, `MCP tool ${srv.name}:${toolName} timed out`);
           reject(new Error(`MCP tool execution timed out after ${timeoutMs}ms for ${srv.name}:${toolName}`));
         }, timeoutMs);
-        session.pending.set(id, { resolve, reject, timer });
+
+        session.pending.set(id, {
+          resolve: (res) => {
+            abortSignal?.removeEventListener('abort', onAbort);
+            resolve(res);
+          },
+          reject: (err) => {
+            abortSignal?.removeEventListener('abort', onAbort);
+            reject(err);
+          },
+          timer,
+        });
         try {
           session.child.stdin.write(
             JSON.stringify({
@@ -671,6 +848,7 @@ export class McpClientManager {
         } catch (err: any) {
           session.pending.delete(id);
           clearTimeout(timer);
+          abortSignal?.removeEventListener('abort', onAbort);
           reject(err instanceof Error ? err : new Error(String(err)));
         }
       });
@@ -835,9 +1013,17 @@ export class McpClientManager {
     srv: McpServerStatus,
     toolName: string,
     toolArgs: Record<string, any>,
-    timeoutMs: number
+    timeoutMs: number,
+    abortSignal?: AbortSignal
   ): Promise<McpToolCallResult> {
     try {
+      if (abortSignal?.aborted) {
+        return {
+          content: [],
+          isError: true,
+          outputText: 'Tool execution aborted by user.',
+        };
+      }
       await this.ensureHttpSessionInitialized(srv, timeoutMs);
       const msg = await this.sendHttpJsonRpc(
         srv,
@@ -938,11 +1124,7 @@ export class McpClientManager {
     srv.status = srv.enabled ? 'ready' : 'disabled';
     srv.lastCheckedAt = new Date().toISOString();
     if (!srv.enabled) {
-      const sess = this.sessions.get(serverName);
-      if (sess) {
-        try { sess.child.kill(); } catch {}
-        this.sessions.delete(serverName);
-      }
+      this.evictStdioSession(serverName, `MCP server ${serverName} disabled`);
       this.httpSessions.delete(serverName);
     }
     this.writeToggleOverrides();

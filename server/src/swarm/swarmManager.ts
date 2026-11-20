@@ -72,6 +72,7 @@ export class SwarmManager {
   private runtimeDeps: SwarmWorkerRuntimeDeps | null = null;
   private scheduler = SwarmTurnScheduler.getInstance();
   private queuedWorkers = new Set<string>();
+  private workerAbortControllers = new Map<string, AbortController>();
 
   public static getInstance(): SwarmManager {
     if (!SwarmManager.instance) {
@@ -246,6 +247,17 @@ export class SwarmManager {
   private cleanupWorkspace(workspaceMode: SwarmWorkspaceMode, workspacePath: string, baseRoot: string): void {
     if (workspaceMode === 'inherit' || !workspacePath || workspacePath === baseRoot) return;
     if (!workspacePath.includes('lg-swarm')) return;
+    let detectedBranch = '';
+    try {
+      detectedBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: workspacePath,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 2000,
+        windowsHide: true,
+      })
+        .toString()
+        .trim();
+    } catch {}
     try {
       execSync(`git worktree remove --force "${workspacePath}"`, {
         cwd: baseRoot,
@@ -254,6 +266,40 @@ export class SwarmManager {
         windowsHide: true,
       });
     } catch {}
+    if (detectedBranch && detectedBranch.startsWith('lg-swarm-')) {
+      try {
+        execSync(`git branch -D "${detectedBranch}"`, {
+          cwd: baseRoot,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 3000,
+          windowsHide: true,
+        });
+      } catch {}
+    } else {
+      const memberName = path.basename(workspacePath);
+      try {
+        const branches = execSync(`git branch --list "lg-swarm-${memberName}-*"`, {
+          cwd: baseRoot,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 3000,
+          windowsHide: true,
+        })
+          .toString()
+          .split(/\r?\n/)
+          .map((b) => b.replace(/^\*?\s+/, '').trim())
+          .filter((b) => b.startsWith('lg-swarm-'));
+        for (const b of branches) {
+          try {
+            execSync(`git branch -D "${b}"`, {
+              cwd: baseRoot,
+              stdio: ['ignore', 'pipe', 'ignore'],
+              timeout: 3000,
+              windowsHide: true,
+            });
+          } catch {}
+        }
+      } catch {}
+    }
     try {
       fs.rmSync(workspacePath, { recursive: true, force: true });
     } catch {}
@@ -336,6 +382,30 @@ export class SwarmManager {
     return { head, messages: msgs };
   }
 
+  private hasUnreadMatchingMessages(
+    swarmId: string,
+    memberName: string,
+    sinceSeq: number,
+    mentionsOnly: boolean
+  ): boolean {
+    if (!this.db) return false;
+    const rawMsgs = this.db.readSwarmMessages(swarmId, { since: sinceSeq, limit: 50 });
+    for (const raw of rawMsgs) {
+      if (raw.agent === memberName) continue;
+      if (!mentionsOnly) return true;
+      const msg = this.formatMessage(raw);
+      const mentions = new Set(msg.mentions.map((m) => m.toLowerCase()));
+      if (
+        mentions.has('all') ||
+        mentions.has(`#${msg.channel.toLowerCase()}`) ||
+        mentions.has(memberName.toLowerCase())
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public waitBoard(
     parentThreadId: string,
     agent: string,
@@ -360,6 +430,11 @@ export class SwarmManager {
       });
     }
     this.emitSwarmState(parentThreadId);
+    if (agent !== 'coordinator' && this.hasUnreadMatchingMessages(sess.id, agent, since, mentionsOnly)) {
+      setTimeout(() => {
+        this.scheduleWorkerTurn(parentThreadId, sess.id, agent);
+      }, 10);
+    }
     return { waiting: true, since, mentions_only: mentionsOnly };
   }
 
@@ -377,6 +452,15 @@ export class SwarmManager {
     if (!member) return { killed: false, reason: `Member "${name}" not found` };
     if (callerAgent !== 'coordinator' && callerAgent !== 'user' && member.added_by !== callerAgent) {
       return { killed: false, reason: `Only coordinator or ${member.added_by} can kill ${name}` };
+    }
+
+    const key = `${sess.id}:${name}`;
+    const ctrl = this.workerAbortControllers.get(key);
+    if (ctrl) {
+      try {
+        ctrl.abort();
+      } catch {}
+      this.workerAbortControllers.delete(key);
     }
 
     const baseRoot = this.runtimeDeps?.repoRoot || process.cwd();
@@ -539,25 +623,12 @@ export class SwarmManager {
     if (this.queuedWorkers.has(key)) return;
     this.queuedWorkers.add(key);
 
-    const isGoogleProvider =
-      this.runtimeDeps.tabby?.getBrainProviderConfig?.()?.provider === 'google_ai_studio';
-
-    if (isGoogleProvider) {
-      // Cloud Google AI Studio requests don't contend for local VRAM: run swarm workers concurrently
-      void this.executeWorkerTurn(parentThreadId, swarmId, memberName)
-        .catch((err) => {
-          console.warn(`[SwarmManager] Parallel Google worker ${memberName} error:`, err?.message);
-        })
-        .finally(() => {
-          this.queuedWorkers.delete(key);
-        });
-      return;
-    }
-
-    const priority = memberName === 'monitor' ? 2 : 1;
-    void this.scheduler
-      .acquireGpuTurn(priority, `swarm:${memberName}`, async () => {
-        await this.executeWorkerTurn(parentThreadId, swarmId, memberName);
+    // Do NOT wrap the entire 12-step executeWorkerTurn in acquireGpuTurn — each inference step
+    // acquires the GPU lock (skipGpuLock: false) so tool I/O doesn't hold the GPU lock and workers
+    // can't deadlock the scheduler.
+    void this.executeWorkerTurn(parentThreadId, swarmId, memberName)
+      .catch((err) => {
+        console.warn(`[SwarmManager] Worker ${memberName} error:`, err?.message);
       })
       .finally(() => {
         this.queuedWorkers.delete(key);
@@ -569,6 +640,10 @@ export class SwarmManager {
     const member = this.db.getSwarmMember(swarmId, memberName);
     if (!member || member.state === 'killed') return;
 
+    const key = `${swarmId}:${memberName}`;
+    const abortController = new AbortController();
+    this.workerAbortControllers.set(key, abortController);
+
     const workingRec = this.db.updateSwarmMember(swarmId, memberName, { state: 'working' });
     if (workingRec && this.broadcastSync) {
       this.broadcastSync({
@@ -579,10 +654,13 @@ export class SwarmManager {
     this.emitSwarmState(parentThreadId);
 
     const { tabby, tools, sharedSystemPrefix } = this.runtimeDeps;
-    const unread = this.db
-      .readSwarmMessages(swarmId, { since: member.last_read_seq, limit: 30 })
-      .map((m) => `[#${m.seq} ${m.agent}]: ${m.text}`)
-      .join('\n\n');
+    const unreadMsgs = this.db.readSwarmMessages(swarmId, { since: member.last_read_seq, limit: 30 });
+    let turnReadSeq = member.last_read_seq;
+    if (unreadMsgs.length > 0) {
+      turnReadSeq = Math.max(turnReadSeq, unreadMsgs[unreadMsgs.length - 1].seq);
+      this.db.updateSwarmMember(swarmId, memberName, { last_read_seq: turnReadSeq });
+    }
+    const unread = unreadMsgs.map((m) => `[#${m.seq} ${m.agent}]: ${m.text}`).join('\n\n');
 
     // Append worker persona at the TAIL of the system prompt for Strata KV prefix-cache reuse
     const prefix =
@@ -606,7 +684,9 @@ export class SwarmManager {
       },
     ];
 
-    const workerTools = [...BUILTIN_TOOLS_SCHEMA, ...SWARM_TOOLS_SCHEMA];
+    const workerTools = [...BUILTIN_TOOLS_SCHEMA, ...SWARM_TOOLS_SCHEMA].filter(
+      (t) => t.function?.name !== 'invoke_subagent'
+    );
     const tier: ModelTier = member.model.includes('low')
       ? 'low'
       : member.model.includes('medium')
@@ -620,9 +700,11 @@ export class SwarmManager {
 
     let calledWait = false;
     let lastContent = '';
+    const SWARM_BOARD_TOOLS = new Set(['swarm', 'post_message', 'read_board', 'swarm_wait']);
 
     try {
       for (let step = 1; step <= MAX_WORKER_STEPS; step++) {
+        if (abortController.signal.aborted) break;
         const curState = this.db.getSwarmMember(swarmId, memberName);
         if (!curState || curState.state === 'killed') break;
 
@@ -636,20 +718,23 @@ export class SwarmManager {
           stepIndex: step,
           messages,
           tools: isFinal ? undefined : workerTools,
-          skipGpuLock: true,
+          skipGpuLock: false,
+          abortSignal: abortController.signal,
           onThoughtDelta: () => {},
           onTokenDelta: () => {},
           onToolCallRequest: isFinal
             ? undefined
             : async (toolName, toolArgs) => {
+                if (abortController.signal.aborted) return;
                 if (toolName === 'swarm_wait') {
                   calledWait = true;
                 }
                 const execRes = await tools.executeTool(toolName, toolArgs, {
-                  threadId: parentThreadId,
+                  threadId: (SWARM_BOARD_TOOLS.has(toolName) ? parentThreadId : undefined) as any,
                   messageId: `${swarmId}:${memberName}:${step}`,
                   workspaceRoot: member.workspace_path || this.runtimeDeps!.repoRoot,
                   swarmAgentName: memberName,
+                  abortSignal: abortController.signal,
                 });
                 executed.push({
                   id: `sw-${step}-${executed.length + 1}`,
@@ -682,34 +767,52 @@ export class SwarmManager {
         }
       }
 
-      if (!calledWait && lastContent) {
+      if (!calledWait && lastContent && !abortController.signal.aborted) {
         const cur = this.db.getSwarmMember(swarmId, memberName);
         if (cur && cur.state !== 'killed' && cur.last_post_seq < this.db.getSwarmHead(swarmId)) {
           this.postMessage(parentThreadId, memberName, `@${member.added_by} ${lastContent.slice(0, 1500)}`);
         }
       }
     } catch (err: any) {
-      this.postMessage(
-        parentThreadId,
-        memberName,
-        `@${member.added_by} Worker hit error: ${err?.message || String(err)}`,
-        { kind: 'error', triggerWakeups: false }
-      );
+      if (!abortController.signal.aborted && err?.name !== 'AbortError') {
+        this.postMessage(
+          parentThreadId,
+          memberName,
+          `@${member.added_by} Worker hit error: ${err?.message || String(err)}`,
+          { kind: 'error', triggerWakeups: false }
+        );
+      }
     } finally {
+      if (this.workerAbortControllers.get(key) === abortController) {
+        this.workerAbortControllers.delete(key);
+      }
       const cur = this.db.getSwarmMember(swarmId, memberName);
-      if (cur && cur.state !== 'killed' && !calledWait) {
-        const head = this.db.getSwarmHead(swarmId);
-        const parked = this.db.updateSwarmMember(swarmId, memberName, {
-          state: 'waiting',
-          wait_since: head,
-        });
-        if (parked && this.broadcastSync) {
-          this.broadcastSync({
-            type: 'SWARM_MEMBER_UPDATED',
-            payload: { thread_id: parentThreadId, swarm_id: swarmId, member: this.formatMember(parked) },
+      if (cur && cur.state !== 'killed') {
+        const effectiveReadSeq = Math.max(cur.last_read_seq, turnReadSeq);
+        const waitBaseline = calledWait ? cur.wait_since : effectiveReadSeq;
+        if (!calledWait) {
+          const parked = this.db.updateSwarmMember(swarmId, memberName, {
+            state: 'waiting',
+            wait_since: waitBaseline,
+            last_read_seq: effectiveReadSeq,
           });
+          if (parked && this.broadcastSync) {
+            this.broadcastSync({
+              type: 'SWARM_MEMBER_UPDATED',
+              payload: { thread_id: parentThreadId, swarm_id: swarmId, member: this.formatMember(parked) },
+            });
+          }
+          this.emitSwarmState(parentThreadId);
         }
-        this.emitSwarmState(parentThreadId);
+        // Check if unread matching messages (seq > wait_since) arrived while 'working'
+        if (
+          !abortController.signal.aborted &&
+          this.hasUnreadMatchingMessages(swarmId, memberName, waitBaseline, Boolean(cur.mentions_only))
+        ) {
+          setTimeout(() => {
+            this.scheduleWorkerTurn(parentThreadId, swarmId, memberName);
+          }, 10);
+        }
       }
     }
   }

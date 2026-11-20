@@ -78,6 +78,7 @@ export const AgentEmbedWidget: React.FC<AgentEmbedWidgetProps> = ({ src, fallbac
       setActiveArtifactDoc(matchedArtifact.id);
     }
     setActiveTab('plan');
+    window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
   };
 
   return (

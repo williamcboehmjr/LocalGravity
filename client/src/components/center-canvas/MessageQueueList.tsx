@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Zap, Pencil, Trash2, Check, ArrowUpRight, Layers } from 'lucide-react';
-import { useSessionStore, QueuedMessage } from '../../store/useSessionStore';
+import { Zap, Pencil, Trash2, Check, ArrowUpRight, Layers, FileText } from 'lucide-react';
+import { useSessionStore, QueuedMessage, FileAttachmentItem } from '../../store/useSessionStore';
 
 interface MessageQueueListProps {
   onInterruptAndSend: (item: QueuedMessage) => void;
-  onEditInInput?: (text: string, images?: string[]) => void;
+  onEditInInput?: (text: string, images?: string[], attachments?: FileAttachmentItem[]) => void;
 }
 
 export const MessageQueueList: React.FC<MessageQueueListProps> = ({
@@ -37,7 +37,7 @@ export const MessageQueueList: React.FC<MessageQueueListProps> = ({
 
   const handleLoadIntoInput = (item: QueuedMessage) => {
     if (onEditInInput) {
-      onEditInInput(item.text, item.images);
+      onEditInInput(item.text, item.images, item.attachments);
       removeQueuedMessage(item.id);
     }
   };
@@ -159,18 +159,31 @@ export const MessageQueueList: React.FC<MessageQueueListProps> = ({
                   </div>
                 </div>
               ) : (
-                /* Display Message Text & Images */
+                /* Display Message Text, Images & Non-Image Attachments */
                 <div className="space-y-1">
-                  {item.images && item.images.length > 0 && (
-                    <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-                      {item.images.map((img, imgIdx) => (
+                  {((item.images && item.images.length > 0) ||
+                    (item.attachments && item.attachments.length > 0)) && (
+                    <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto py-0.5">
+                      {item.images?.map((img, imgIdx) => (
                         <img
-                          key={imgIdx}
+                          key={`img-${imgIdx}`}
                           src={img}
                           alt="queued attachment"
-                          className="w-10 h-10 object-cover rounded-md border border-border-subtle"
+                          className="w-10 h-10 object-cover rounded-md border border-border-subtle shrink-0"
                         />
                       ))}
+                      {item.attachments
+                        ?.filter((a) => !a.isImage && (!a.type || !a.type.startsWith('image/')))
+                        .map((att, attIdx) => (
+                          <div
+                            key={`att-${attIdx}`}
+                            className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-border-subtle bg-canvas/80 text-[11px] text-zinc-200 max-w-[200px] shrink-0"
+                            title={att.name}
+                          >
+                            <FileText className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                            <span className="truncate font-mono">{att.name}</span>
+                          </div>
+                        ))}
                     </div>
                   )}
                   <p className="text-xs sm:text-sm text-zinc-200 whitespace-pre-wrap font-sans leading-relaxed line-clamp-3">

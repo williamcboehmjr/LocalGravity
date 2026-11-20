@@ -7,6 +7,7 @@ interface MonacoDiffViewerProps {
   modifiedContent: string;
   language?: string;
   filePath?: string;
+  height?: string;
   onAccept?: () => void;
   onReject?: () => void;
 }
@@ -16,23 +17,24 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   modifiedContent,
   language = 'typescript',
   filePath = 'modified_file',
+  height,
   onAccept,
   onReject,
 }) => {
   const [inlineView, setInlineView] = useState(false);
 
   return (
-    <div className="my-3 border border-border-strong rounded-lg overflow-hidden bg-surface shadow-md">
+    <div className="my-3 flex-1 min-h-0 flex flex-col border border-border-strong rounded-lg overflow-hidden bg-surface shadow-md">
       {/* Diff Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-surface-muted border-b border-border-subtle text-xs">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-text-primary font-medium">{filePath}</span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-950/60 text-blue-400 border border-blue-800/40">
+      <div className="flex items-center justify-between px-3 py-2 bg-surface-muted border-b border-border-subtle text-xs shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-mono text-text-primary font-medium truncate">{filePath}</span>
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-950/60 text-blue-400 border border-blue-800/40 shrink-0">
             DIFF
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => setInlineView(!inlineView)}
             className="flex items-center gap-1 px-2 py-1 rounded bg-surface hover:bg-surface-highlight text-text-secondary text-[11px]"
@@ -65,7 +67,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       </div>
 
       {/* Editor Body */}
-      <div className="h-64 w-full">
+      <div className="flex-1 min-h-[260px] w-full" style={height ? { height } : undefined}>
         <DiffEditor
           height="100%"
           original={originalContent}
@@ -78,6 +80,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
             minimap: { enabled: false },
             fontSize: 12,
             scrollBeyondLastLine: false,
+            automaticLayout: true,
           }}
         />
       </div>

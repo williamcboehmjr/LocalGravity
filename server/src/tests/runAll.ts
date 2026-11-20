@@ -19,6 +19,11 @@ const tests = [
   'piHarnessUpgrades.test.js',
   'prematureStop.test.js',
   'comfyuiReliability.test.js',
+  'refactorSecurity.test.js',
+  'inferenceReliability.test.js',
+  'strataSidecarRegistry.test.js',
+  'agentTurnReliability.test.js',
+  'wave3And4Backend.test.js',
 ];
 
 console.log('==============================================================');

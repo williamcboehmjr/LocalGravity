@@ -86,8 +86,15 @@ export function registerAutomationRoutes(
 
   app.patch('/api/automations/:id', async (req) => {
     const { id } = req.params as { id: string };
-    const body = (req.body || {}) as any;
-    const list = store.readAutomations().map((a) => (a.id === id ? { ...a, ...body } : a));
+    const body = (req.body || {}) as Record<string, unknown>;
+    const patch: Partial<Omit<AutomationRecord, 'id'>> = {};
+    if (typeof body.name === 'string') patch.name = body.name;
+    if (typeof body.cron === 'string') patch.cron = body.cron;
+    if (typeof body.prompt === 'string') patch.prompt = body.prompt;
+    if (typeof body.tier === 'string') patch.tier = body.tier as ModelTier;
+    if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+    if (body.lastRunAt === null || typeof body.lastRunAt === 'string') patch.lastRunAt = body.lastRunAt;
+    const list = store.readAutomations().map((a) => (a.id === id ? { ...a, ...patch } : a));
     store.writeAutomations(list);
     return { automations: list };
   });

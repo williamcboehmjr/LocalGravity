@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ModelTier, ThinkingBudget } from '../db/database.js';
-import type { GpuTurnPriority } from '../swarm/swarmScheduler.js';
+import {
+  InferenceError,
+  type InferenceErrorCode,
+  type InferenceCompletionParams,
+  type InferenceCompletionResult,
+  type InferenceUsage,
+  type MalformedToolCallInfo,
+} from '../core/inferenceBackend.js';
 
 export type BrainProviderId = 'strata' | 'google_ai_studio';
 
@@ -139,28 +146,17 @@ export interface BrainProviderPublicConfig {
   models: GoogleModelSpec[];
 }
 
-export interface StreamCompletionParams {
-  tier: ModelTier;
-  thinkingBudget: ThinkingBudget;
-  stepIndex?: number;
-  messages: Array<{ role: string; content: any; tool_calls?: any[]; tool_call_id?: string; name?: string }>;
-  tools?: any[];
-  abortSignal?: AbortSignal;
-  onThoughtDelta: (delta: string, elapsedMs: number, tokenCount: number) => void;
-  onTokenDelta: (delta: string, tokenCount: number, tokensPerSec?: number) => void;
-  onToolCallRequest?: (toolName: string, args: Record<string, any>) => Promise<void>;
-  onToolCallPreparing?: (toolName?: string) => void;
-  gpuPriority?: GpuTurnPriority;
-  skipGpuLock?: boolean;
-  googleModelOverride?: GoogleModelId;
+export interface StreamCompletionParams extends InferenceCompletionParams {
+  googleModelOverride?: GoogleModelId | string;
 }
 
-export interface StreamCompletionResult {
-  content: string;
-  thinkingContent: string;
-  thinkingDurationMs: number;
-  thinkingTokens: number;
-  outputTokens: number;
+export type StreamCompletionResult = InferenceCompletionResult;
+
+export interface GoogleAiEngineOptions {
+  requestTimeoutMs?: number;
+  streamStallTimeoutMs?: number;
+  maxRetries?: number;
+  baseBackoffMs?: number;
 }
 
 export interface OrchestratorDecision {
@@ -211,17 +207,29 @@ export function maskApiKey(key: string): string {
   return `${clean.slice(0, 6)}••••••${clean.slice(-4)}`;
 }
 
+const MAX_SIG_CACHE_SIZE = 500;
+
 export class GoogleAiEngine {
   private repoRoot: string;
   private configPath: string;
   private config: BrainProviderConfig;
   private lastTokensPerSec = 0;
   private thoughtSignatureCache = new Map<string, any>();
+  private requestTimeoutMs: number;
+  private streamStallTimeoutMs: number;
+  private maxRetries: number;
+  private baseBackoffMs: number;
 
-  constructor(repoRoot: string) {
+  constructor(repoRoot: string, options?: GoogleAiEngineOptions) {
     this.repoRoot = repoRoot;
     this.configPath = path.join(this.repoRoot, '.runtime', 'brain-provider.json');
     this.config = this.loadConfig();
+    this.requestTimeoutMs =
+      options?.requestTimeoutMs ?? Number(process.env.LG_GOOGLE_REQUEST_TIMEOUT_MS || 45_000);
+    this.streamStallTimeoutMs =
+      options?.streamStallTimeoutMs ?? Number(process.env.LG_GOOGLE_STREAM_STALL_TIMEOUT_MS || 45_000);
+    this.maxRetries = options?.maxRetries ?? Number(process.env.LG_GOOGLE_MAX_RETRIES || 2);
+    this.baseBackoffMs = options?.baseBackoffMs ?? Number(process.env.LG_GOOGLE_BASE_BACKOFF_MS || 500);
   }
 
   private loadConfig(): BrainProviderConfig {
@@ -483,33 +491,112 @@ export class GoogleAiEngine {
     };
   }
 
+  private stableStringify(val: unknown): string {
+    if (val === null || val === undefined) return 'null';
+    if (typeof val !== 'object') return JSON.stringify(val);
+    if (Array.isArray(val)) {
+      return `[${val.map((item) => this.stableStringify(item)).join(',')}]`;
+    }
+    const obj = val as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    const parts: string[] = [];
+    for (const k of keys) {
+      const v = obj[k];
+      if (v === undefined) continue;
+      parts.push(`${JSON.stringify(k)}:${this.stableStringify(v)}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+
+  private mergeExtraContent(existing: any, incoming: any): any {
+    if (!existing || typeof existing !== 'object') {
+      if (!incoming || typeof incoming !== 'object') return incoming;
+      return {
+        ...incoming,
+        ...(incoming.google && typeof incoming.google === 'object' ? { google: { ...incoming.google } } : {}),
+      };
+    }
+    if (!incoming || typeof incoming !== 'object') {
+      return {
+        ...existing,
+        ...(existing.google && typeof existing.google === 'object' ? { google: { ...existing.google } } : {}),
+      };
+    }
+    const merged: Record<string, any> = { ...existing, ...incoming };
+    if (
+      (existing.google && typeof existing.google === 'object') ||
+      (incoming.google && typeof incoming.google === 'object')
+    ) {
+      merged.google = {
+        ...(existing.google && typeof existing.google === 'object' ? existing.google : {}),
+        ...(incoming.google && typeof incoming.google === 'object' ? incoming.google : {}),
+      };
+    }
+    return merged;
+  }
+
   private makeSignatureKey(name: string, args: unknown): string {
     let canonical = '{}';
     if (typeof args === 'string') {
-      try {
-        canonical = JSON.stringify(JSON.parse(args));
-      } catch {
-        canonical = args.trim() || '{}';
+      const parsed = this.tryParseToolCallArgs(args);
+      if (parsed.ok) {
+        canonical = this.stableStringify(parsed.args);
+      } else {
+        try {
+          canonical = this.stableStringify(JSON.parse(args));
+        } catch {
+          canonical = args.trim() || '{}';
+        }
       }
     } else if (args && typeof args === 'object') {
-      canonical = JSON.stringify(args);
+      canonical = this.stableStringify(args);
     }
     return `${name}::${canonical}`;
   }
 
-  private recordThoughtSignature(name: string, args: unknown, extraContent: any): void {
-    if (!extraContent?.google?.thought_signature) return;
-    const key = this.makeSignatureKey(name, args);
+  private setSignatureLru(key: string, extraContent: any): void {
+    if (this.thoughtSignatureCache.has(key)) {
+      this.thoughtSignatureCache.delete(key);
+    }
     this.thoughtSignatureCache.set(key, extraContent);
-    if (this.thoughtSignatureCache.size > 200) {
+    while (this.thoughtSignatureCache.size > MAX_SIG_CACHE_SIZE) {
       const oldestKey = this.thoughtSignatureCache.keys().next().value;
-      if (oldestKey !== undefined) this.thoughtSignatureCache.delete(oldestKey);
+      if (oldestKey === undefined) break;
+      this.thoughtSignatureCache.delete(oldestKey);
     }
   }
 
-  private lookupThoughtSignature(name: string, args: unknown): any | undefined {
-    const key = this.makeSignatureKey(name, args);
-    return this.thoughtSignatureCache.get(key);
+  private getSignatureLru(key: string): any | undefined {
+    if (!this.thoughtSignatureCache.has(key)) return undefined;
+    const val = this.thoughtSignatureCache.get(key);
+    this.thoughtSignatureCache.delete(key);
+    this.thoughtSignatureCache.set(key, val);
+    return val;
+  }
+
+  private recordThoughtSignature(opts: {
+    id?: string;
+    canonicalName: string;
+    sanitizedName?: string;
+    args: unknown;
+    extraContent: any;
+  }): void {
+    if (!opts.extraContent?.google?.thought_signature) return;
+    if (opts.id) {
+      this.setSignatureLru(`id::${opts.id}`, opts.extraContent);
+    }
+    this.setSignatureLru(`sig::${this.makeSignatureKey(opts.canonicalName, opts.args)}`, opts.extraContent);
+    if (opts.sanitizedName && opts.sanitizedName !== opts.canonicalName) {
+      this.setSignatureLru(`sig::${this.makeSignatureKey(opts.sanitizedName, opts.args)}`, opts.extraContent);
+    }
+  }
+
+  private lookupThoughtSignature(id: string | undefined, name: string, args: unknown): any | undefined {
+    if (id) {
+      const byId = this.getSignatureLru(`id::${id}`);
+      if (byId) return byId;
+    }
+    return this.getSignatureLru(`sig::${this.makeSignatureKey(name, args)}`);
   }
 
   private toOpenAiMessages(
@@ -527,9 +614,9 @@ export class GoogleAiEngine {
           const cloned = { ...tc };
           const cachedExtra = cloned.extra_content?.google?.thought_signature
             ? cloned.extra_content
-            : this.lookupThoughtSignature(cloned.function?.name || '', cloned.function?.arguments);
+            : this.lookupThoughtSignature(cloned.id, cloned.function?.name || '', cloned.function?.arguments);
           if (cachedExtra?.google?.thought_signature) {
-            cloned.extra_content = cachedExtra;
+            cloned.extra_content = this.mergeExtraContent(cloned.extra_content, cachedExtra);
             hasAnySignature = true;
           }
           return cloned;
@@ -537,11 +624,11 @@ export class GoogleAiEngine {
         if (!hasAnySignature && mappedToolCalls.length > 0) {
           mappedToolCalls[0] = {
             ...mappedToolCalls[0],
-            extra_content: {
+            extra_content: this.mergeExtraContent(mappedToolCalls[0].extra_content, {
               google: {
                 thought_signature: 'context_engineering_is_the_way_to_go',
               },
-            },
+            }),
           };
         }
         base.tool_calls = mappedToolCalls;
@@ -642,23 +729,59 @@ export class GoogleAiEngine {
     }
   }
 
+  private resolvePlannerThinkingBudget(budget: ThinkingBudget): ThinkingBudget {
+    if (budget === 'off') return 'off';
+    if (budget === 'fast' || budget === 'low') return 'medium';
+    return budget;
+  }
+
+  private resolveExecutorThinkingBudget(
+    budget: ThinkingBudget,
+    _phase: 'direct' | 'post_plan' | 'followup',
+    hadToolError: boolean
+  ): ThinkingBudget {
+    if (budget === 'off') return 'off';
+    if (_phase === 'direct') return 'low';
+    return hadToolError ? 'medium' : 'low';
+  }
+
+  private combineUsage(a?: InferenceUsage, b?: InferenceUsage): InferenceUsage | undefined {
+    if (!a && !b) return undefined;
+    const promptTokens = (a?.promptTokens ?? 0) + (b?.promptTokens ?? 0);
+    const completionTokens = (a?.completionTokens ?? 0) + (b?.completionTokens ?? 0);
+    const totalTokens =
+      a?.totalTokens !== undefined || b?.totalTokens !== undefined
+        ? (a?.totalTokens ?? 0) + (b?.totalTokens ?? 0)
+        : promptTokens + completionTokens;
+    const thinkingTokens =
+      a?.thinkingTokens !== undefined || b?.thinkingTokens !== undefined
+        ? (a?.thinkingTokens ?? 0) + (b?.thinkingTokens ?? 0)
+        : undefined;
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      ...(thinkingTokens !== undefined ? { thinkingTokens } : {}),
+    };
+  }
+
   public async streamChatCompletion(params: StreamCompletionParams): Promise<StreamCompletionResult> {
     const apiKey = this.getApiKey();
     if (!apiKey) {
-      const msg =
-        '⚠️ Google AI Studio is selected as the Brain Provider, but no API key is configured. Open **Settings → Brain Inference Provider**, paste your Google AI Studio API key (`AIza...`), and save.';
-      const tok = Math.ceil(msg.length / 4);
-      params.onTokenDelta(msg, tok);
-      return {
-        content: msg,
-        thinkingContent: '',
-        thinkingDurationMs: 0,
-        thinkingTokens: 0,
-        outputTokens: tok,
-      };
+      throw new InferenceError(
+        'Google AI Studio is selected as the Brain Provider, but no API key is configured. Open Settings -> Brain Inference Provider, paste your Google AI Studio API key (AIza...), and save.',
+        {
+          code: 'AUTH_MISSING',
+          status: 401,
+          retryable: false,
+          provider: 'google_ai_studio',
+        }
+      );
     }
 
-    const selectedModel = params.googleModelOverride || this.config.selectedGoogleModel;
+    const selectedModel = params.googleModelOverride
+      ? normalizeGoogleModelId(params.googleModelOverride)
+      : this.config.selectedGoogleModel;
     if (!isGoogleOrchestratorModel(selectedModel)) {
       return this.streamSingleModelCall(selectedModel, params, apiKey);
     }
@@ -679,7 +802,7 @@ export class GoogleAiEngine {
     const turnStart = Date.now();
 
     const emitThought = (chunk: string) => {
-      if (!chunk) return;
+      if (params.thinkingBudget === 'off' || !chunk) return;
       totalThinkingContent += chunk;
       totalThinkingTokens += Math.max(1, Math.ceil(chunk.length / 4));
       params.onThoughtDelta(chunk, Date.now() - turnStart, totalThinkingTokens);
@@ -687,22 +810,50 @@ export class GoogleAiEngine {
 
     if (stepIndex > 1) {
       emitThought(`[Orchestrator → ${executorLabel} Executing Step ${stepIndex}]\n`);
-      const execRes = await this.streamSingleModelCall(executorModelId, params, apiKey);
+      const execRes = await this.streamSingleModelCall(
+        executorModelId,
+        {
+          ...params,
+          thinkingBudget: this.resolveExecutorThinkingBudget(
+            params.thinkingBudget,
+            'followup',
+            Boolean(params.hadToolError)
+          ),
+          onThoughtDelta: (delta) => {
+            emitThought(delta);
+          },
+        },
+        apiKey
+      );
       return {
         ...execRes,
-        thinkingContent: `${totalThinkingContent}${execRes.thinkingContent}`.trim(),
-        thinkingTokens: totalThinkingTokens + execRes.thinkingTokens,
+        thinkingContent: totalThinkingContent.trim(),
+        thinkingTokens: totalThinkingTokens,
         thinkingDurationMs: Date.now() - turnStart,
       };
     }
 
     const latestUserPrompt = this.extractLatestUserText(params.messages);
-    const decision = await this.evaluateOrchestratorDecision(
-      latestUserPrompt,
-      params.abortSignal,
-      orchConfig.planner,
-      orchConfig.executor
-    );
+    let decision: OrchestratorDecision;
+    try {
+      decision = await this.evaluateOrchestratorDecision(
+        latestUserPrompt,
+        params.abortSignal,
+        orchConfig.planner,
+        orchConfig.executor
+      );
+    } catch (err: any) {
+      if (params.abortSignal?.aborted || err?.name === 'AbortError') {
+        throw new InferenceError('Google AI Studio request aborted by caller', {
+          code: 'ABORTED',
+          retryable: false,
+          provider: 'google_ai_studio',
+          cause: err,
+        });
+      }
+      throw err;
+    }
+
     const sourceBadge =
       decision.source === 'decisions_api'
         ? `Google Decisions API (gemini-decision-1 • ${orchConfig.modeLabel})`
@@ -717,11 +868,25 @@ export class GoogleAiEngine {
 
     if (!decision.needsPlanning || decision.plannerChoice === orchConfig.executor) {
       emitThought(`[Orchestrator → Direct Execution on ${executorLabel}]\n`);
-      const directRes = await this.streamSingleModelCall(executorModelId, params, apiKey);
+      const directRes = await this.streamSingleModelCall(
+        executorModelId,
+        {
+          ...params,
+          thinkingBudget: this.resolveExecutorThinkingBudget(
+            params.thinkingBudget,
+            'direct',
+            Boolean(params.hadToolError)
+          ),
+          onThoughtDelta: (delta) => {
+            emitThought(delta);
+          },
+        },
+        apiKey
+      );
       return {
         ...directRes,
-        thinkingContent: `${totalThinkingContent}${directRes.thinkingContent}`.trim(),
-        thinkingTokens: totalThinkingTokens + directRes.thinkingTokens,
+        thinkingContent: totalThinkingContent.trim(),
+        thinkingTokens: totalThinkingTokens,
         thinkingDurationMs: Date.now() - turnStart,
       };
     }
@@ -753,6 +918,7 @@ export class GoogleAiEngine {
       plannerModelId,
       {
         ...params,
+        thinkingBudget: this.resolvePlannerThinkingBudget(params.thinkingBudget),
         tools: undefined, // Planning phase outputs the plan without calling tools directly
         messages: plannerMessages,
         onThoughtDelta: (delta) => {
@@ -770,13 +936,11 @@ export class GoogleAiEngine {
     );
 
     if (params.abortSignal?.aborted) {
-      return {
-        content: '',
-        thinkingContent: totalThinkingContent,
-        thinkingDurationMs: Date.now() - turnStart,
-        thinkingTokens: totalThinkingTokens,
-        outputTokens: 0,
-      };
+      throw new InferenceError('Google AI Studio request aborted by caller', {
+        code: 'ABORTED',
+        retryable: false,
+        provider: 'google_ai_studio',
+      });
     }
 
     const effectivePlan = (planText || plannerResult.content || '').trim();
@@ -800,6 +964,11 @@ export class GoogleAiEngine {
       executorModelId,
       {
         ...params,
+        thinkingBudget: this.resolveExecutorThinkingBudget(
+          params.thinkingBudget,
+          'post_plan',
+          Boolean(params.hadToolError)
+        ),
         messages: executionMessages,
         onThoughtDelta: (delta) => {
           emitThought(delta);
@@ -810,10 +979,15 @@ export class GoogleAiEngine {
 
     return {
       content: executorResult.content,
-      thinkingContent: `${totalThinkingContent}${executorResult.thinkingContent}`.trim(),
+      thinkingContent: totalThinkingContent.trim(),
       thinkingDurationMs: Date.now() - turnStart,
-      thinkingTokens: totalThinkingTokens + executorResult.thinkingTokens,
+      thinkingTokens: totalThinkingTokens,
       outputTokens: executorResult.outputTokens,
+      finishReason: executorResult.finishReason,
+      usage: this.combineUsage(plannerResult.usage, executorResult.usage),
+      ...(executorResult.malformedToolCalls?.length
+        ? { malformedToolCalls: executorResult.malformedToolCalls }
+        : {}),
     };
   }
 
@@ -894,6 +1068,199 @@ export class GoogleAiEngine {
     return { tools: sanitized.length > 0 ? sanitized : undefined, nameMap };
   }
 
+  private tryParseToolCallArgs(
+    rawArgs: string
+  ): { ok: true; args: Record<string, any> } | { ok: false; error: string } {
+    const trimmed = String(rawArgs ?? '').trim();
+    if (!trimmed) {
+      return { ok: true, args: {} };
+    }
+
+    const asPlainObject = (val: unknown): Record<string, any> | null => {
+      let cur = val;
+      if (typeof cur === 'string') {
+        try {
+          cur = JSON.parse(cur);
+        } catch {
+          return null;
+        }
+      }
+      if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
+        return cur as Record<string, any>;
+      }
+      return null;
+    };
+
+    try {
+      const parsed = asPlainObject(JSON.parse(trimmed));
+      if (parsed) return { ok: true, args: parsed };
+    } catch {}
+
+    // Safe repair pass (no eval, no auto-closing truncated JSON):
+    // 1. Strip markdown code fences
+    let repaired = trimmed
+      .replace(/^```(?:json)?\s*\r?\n?/i, '')
+      .replace(/\r?\n?```\s*$/i, '')
+      .trim();
+
+    try {
+      const parsed = asPlainObject(JSON.parse(repaired));
+      if (parsed) return { ok: true, args: parsed };
+    } catch {}
+
+    // 2. Escape raw control chars inside strings and strip trailing commas outside strings
+    const sanitizeJsonText = (input: string): string => {
+      let out = '';
+      let inStr = false;
+      let escaped = false;
+      for (let i = 0; i < input.length; i += 1) {
+        const ch = input[i];
+        if (inStr) {
+          if (escaped) {
+            out += ch;
+            escaped = false;
+          } else if (ch === '\\') {
+            out += ch;
+            escaped = true;
+          } else if (ch === '"') {
+            out += ch;
+            inStr = false;
+          } else if (ch === '\n') {
+            out += '\\n';
+          } else if (ch === '\r') {
+            out += '\\r';
+          } else if (ch === '\t') {
+            out += '\\t';
+          } else {
+            out += ch;
+          }
+        } else {
+          if (ch === '"') {
+            out += ch;
+            inStr = true;
+          } else if (ch === ',') {
+            let j = i + 1;
+            while (j < input.length && /\s/.test(input[j])) j += 1;
+            if (j < input.length && (input[j] === '}' || input[j] === ']')) {
+              continue;
+            }
+            out += ch;
+          } else {
+            out += ch;
+          }
+        }
+      }
+      return out;
+    };
+
+    repaired = sanitizeJsonText(repaired);
+    try {
+      const parsed = asPlainObject(JSON.parse(repaired));
+      if (parsed) return { ok: true, args: parsed };
+    } catch {}
+
+    // 3. Extract first complete balanced {...} object if surrounded by prose
+    const firstBrace = repaired.indexOf('{');
+    if (firstBrace >= 0) {
+      let depth = 0;
+      let inStr = false;
+      let escaped = false;
+      let endIdx = -1;
+      for (let i = firstBrace; i < repaired.length; i += 1) {
+        const ch = repaired[i];
+        if (inStr) {
+          if (escaped) {
+            escaped = false;
+          } else if (ch === '\\') {
+            escaped = true;
+          } else if (ch === '"') {
+            inStr = false;
+          }
+        } else {
+          if (ch === '"') {
+            inStr = true;
+          } else if (ch === '{') {
+            depth += 1;
+          } else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+              endIdx = i;
+              break;
+            }
+          }
+        }
+      }
+      if (endIdx > firstBrace) {
+        const candidateObj = sanitizeJsonText(repaired.slice(firstBrace, endIdx + 1));
+        try {
+          const parsed = asPlainObject(JSON.parse(candidateObj));
+          if (parsed) return { ok: true, args: parsed };
+        } catch {}
+      }
+    }
+
+    try {
+      JSON.parse(trimmed);
+      return { ok: false, error: 'Tool call arguments must be a JSON object' };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Malformed JSON arguments' };
+    }
+  }
+
+  private parseRetryAfterMs(headerVal: string | null): number | undefined {
+    if (!headerVal) return undefined;
+    const trimmed = headerVal.trim();
+    if (!trimmed) return undefined;
+    const numSec = Number(trimmed);
+    if (Number.isFinite(numSec)) {
+      return Math.max(0, Math.min(60_000, Math.round(numSec * 1000)));
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+      return Math.max(0, Math.min(60_000, parsedDate - Date.now()));
+    }
+    return undefined;
+  }
+
+  private computeBackoffMs(attempt: number, retryAfterMs?: number): number {
+    const exp = Math.min(15_000, this.baseBackoffMs * Math.pow(2, attempt));
+    const jittered = Math.round(exp * (0.5 + Math.random() * 0.5));
+    if (retryAfterMs !== undefined) {
+      return Math.min(60_000, Math.max(retryAfterMs, jittered));
+    }
+    return jittered;
+  }
+
+  private sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new InferenceError('Google AI Studio request aborted by caller', {
+          code: 'ABORTED',
+          retryable: false,
+          provider: 'google_ai_studio',
+        })
+      );
+    }
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(
+          new InferenceError('Google AI Studio request aborted by caller', {
+            code: 'ABORTED',
+            retryable: false,
+            provider: 'google_ai_studio',
+          })
+        );
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
   private async streamSingleModelCall(
     modelId: GoogleModelId,
     params: StreamCompletionParams,
@@ -906,184 +1273,435 @@ export class GoogleAiEngine {
     const openAiMessages = this.toOpenAiMessages(params.messages);
     const { tools: googleTools, nameMap: toolNameMap } = this.sanitizeToolsForGoogle(params.tools);
 
-    let lastErrorStatus = 0;
-    let lastErrorBody = '';
+    let lastError: InferenceError | null = null;
 
     for (const candidateModel of candidates) {
-      if (params.abortSignal?.aborted) {
-        return { content: '', thinkingContent: '', thinkingDurationMs: 0, thinkingTokens: 0, outputTokens: 0 };
-      }
-
-      const candidateEffort =
-        reasoningEffort === 'xhigh' &&
-        !candidateModel.startsWith('gemini-4-hydrogen') &&
-        !candidateModel.startsWith('gemini-4-neon')
-          ? 'high'
-          : reasoningEffort;
-
-      const bodyPayload: Record<string, any> = {
-        model: candidateModel,
-        messages: openAiMessages,
-        stream: true,
-        temperature: params.thinkingBudget === 'deep' || params.thinkingBudget === 'high' || params.thinkingBudget === 'xhigh' ? 0.35 : 0.6,
-        ...(googleTools && googleTools.length > 0 ? { tools: googleTools, tool_choice: 'auto' } : {}),
-        ...(candidateEffort ? { reasoning_effort: candidateEffort } : {}),
-      };
-
-      let response: Response;
-      try {
-        response = await fetch(
-          'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify(bodyPayload),
-            signal: params.abortSignal,
-          }
-        );
-      } catch (fetchErr: any) {
-        if (params.abortSignal?.aborted || fetchErr?.name === 'AbortError') {
-          return {
-            content: '',
-            thinkingContent: '',
-            thinkingDurationMs: Date.now() - startTime,
-            thinkingTokens: 0,
-            outputTokens: 0,
-          };
+      for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+        if (params.abortSignal?.aborted) {
+          throw new InferenceError('Google AI Studio request aborted by caller', {
+            code: 'ABORTED',
+            retryable: false,
+            provider: 'google_ai_studio',
+          });
         }
-        lastErrorBody = fetchErr?.message || String(fetchErr);
-        continue;
-      }
 
-      if (!response.ok || !response.body) {
-        lastErrorStatus = response.status;
-        lastErrorBody = await response.text().catch(() => response.statusText);
-        // If 404 or 400 mentions model not found / invalid model, try fallback candidate model
-        if (
-          response.status === 404 ||
-          (response.status === 400 && /model|not found|unsupported|unknown/i.test(lastErrorBody))
-        ) {
-          console.warn(
-            `[GoogleAiEngine] Model "${candidateModel}" rejected (${response.status}), trying next alias...`
+        const candidateEffort =
+          reasoningEffort === 'xhigh' &&
+          !candidateModel.startsWith('gemini-4-hydrogen') &&
+          !candidateModel.startsWith('gemini-4-neon')
+            ? 'high'
+            : reasoningEffort;
+
+        const bodyPayload: Record<string, any> = {
+          model: candidateModel,
+          messages: openAiMessages,
+          stream: true,
+          stream_options: { include_usage: true },
+          temperature:
+            params.thinkingBudget === 'deep' ||
+            params.thinkingBudget === 'high' ||
+            params.thinkingBudget === 'xhigh'
+              ? 0.35
+              : 0.6,
+          ...(googleTools && googleTools.length > 0 ? { tools: googleTools, tool_choice: 'auto' } : {}),
+          ...(candidateEffort ? { reasoning_effort: candidateEffort } : {}),
+        };
+
+        const attemptController = new AbortController();
+        let abortReason: 'caller' | 'timeout' | 'stall' | null = null;
+        const onCallerAbort = () => {
+          abortReason = 'caller';
+          attemptController.abort();
+        };
+        params.abortSignal?.addEventListener('abort', onCallerAbort, { once: true });
+
+        let requestTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+          abortReason = 'timeout';
+          attemptController.abort();
+        }, this.requestTimeoutMs);
+
+        let response: Response;
+        try {
+          response = await fetch(
+            'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify(bodyPayload),
+              signal: attemptController.signal,
+            }
           );
-          continue;
+        } catch (fetchErr: any) {
+          if (requestTimer) {
+            clearTimeout(requestTimer);
+            requestTimer = null;
+          }
+          params.abortSignal?.removeEventListener('abort', onCallerAbort);
+
+          if (abortReason === 'caller' || params.abortSignal?.aborted) {
+            throw new InferenceError('Google AI Studio request aborted by caller', {
+              code: 'ABORTED',
+              retryable: false,
+              provider: 'google_ai_studio',
+              cause: fetchErr,
+            });
+          }
+
+          if (abortReason === 'timeout') {
+            lastError = new InferenceError(
+              `Google AI Studio request timed out after ${this.requestTimeoutMs}ms`,
+              {
+                code: 'TIMEOUT',
+                retryable: true,
+                provider: 'google_ai_studio',
+                cause: fetchErr,
+              }
+            );
+          } else {
+            const rawMsg = String(fetchErr?.message || fetchErr || 'Network failure').replace(
+              /abort/gi,
+              'cancel'
+            );
+            lastError = new InferenceError(
+              `Google AI Studio network error: ${rawMsg}`,
+              {
+                code: 'NETWORK_ERROR',
+                retryable: true,
+                provider: 'google_ai_studio',
+                cause: fetchErr,
+              }
+            );
+          }
+
+          if (attempt < this.maxRetries) {
+            await this.sleepWithAbort(this.computeBackoffMs(attempt), params.abortSignal);
+            continue;
+          }
+          break;
+        } finally {
+          if (requestTimer) {
+            clearTimeout(requestTimer);
+            requestTimer = null;
+          }
         }
-        break;
-      }
 
-      // Stream SSE response
-      let content = '';
-      let thinkingContent = '';
-      let thinkingTokens = 0;
-      let outputTokens = 0;
-      let firstTokenAt = 0;
-      let inThinkTag = false;
-      const toolCallSlots: Array<{
-        id: string;
-        index?: number;
-        name: string;
-        args: string;
-        announced: boolean;
-        extraContent?: any;
-      }> = [];
+        if (!response.ok || !response.body) {
+          params.abortSignal?.removeEventListener('abort', onCallerAbort);
+          const retryAfterMs = this.parseRetryAfterMs(response.headers?.get?.('retry-after') ?? null);
+          const errBody = await response.text().catch(() => response.statusText);
+          const safeErrBody = errBody.slice(0, 300).replace(/abort/gi, 'cancel');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let sseBuffer = '';
+          if (response.status === 401 || response.status === 403) {
+            throw new InferenceError(
+              `Google AI Studio authentication failed (HTTP ${response.status}): ${safeErrBody}`,
+              {
+                code: 'AUTH_MISSING',
+                status: response.status,
+                retryable: false,
+                provider: 'google_ai_studio',
+              }
+            );
+          }
 
-      while (true) {
-        if (params.abortSignal?.aborted) break;
-        const { value, done } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split(/\r?\n/);
-        sseBuffer = lines.pop() ?? '';
+          if (response.status === 400 && /safety|prohibited|blocked|content_filter/i.test(errBody)) {
+            throw new InferenceError(
+              `Google AI Studio content filter triggered (HTTP 400): ${safeErrBody}`,
+              {
+                code: 'CONTENT_FILTER',
+                status: 400,
+                retryable: false,
+                provider: 'google_ai_studio',
+              }
+            );
+          }
 
-        for (const rawLine of lines) {
+          // If 404 or 400 mentions model not found / invalid model, immediately try next fallback alias
+          if (
+            response.status === 404 ||
+            (response.status === 400 && /model|not found|unsupported|unknown/i.test(errBody))
+          ) {
+            console.warn(
+              `[GoogleAiEngine] Model "${candidateModel}" rejected (${response.status}), trying next alias...`
+            );
+            lastError = new InferenceError(
+              `Google AI Studio model "${candidateModel}" unavailable (HTTP ${response.status}): ${safeErrBody}`,
+              {
+                code: 'ENGINE_UNAVAILABLE',
+                status: response.status,
+                retryable: false,
+                provider: 'google_ai_studio',
+              }
+            );
+            break;
+          }
+
+          if (response.status === 400) {
+            throw new InferenceError(
+              `Google AI Studio bad request (HTTP 400): ${safeErrBody}`,
+              {
+                code: 'SERVER_ERROR',
+                status: 400,
+                retryable: false,
+                provider: 'google_ai_studio',
+              }
+            );
+          }
+
+          if (response.status === 429) {
+            lastError = new InferenceError(
+              `Google AI Studio rate limited (HTTP 429): ${safeErrBody}`,
+              {
+                code: 'RATE_LIMIT',
+                status: 429,
+                retryable: true,
+                retryAfterMs,
+                provider: 'google_ai_studio',
+              }
+            );
+            if (attempt < this.maxRetries) {
+              await this.sleepWithAbort(
+                this.computeBackoffMs(attempt, retryAfterMs),
+                params.abortSignal
+              );
+              continue;
+            }
+            break;
+          }
+
+          if (response.status === 408) {
+            lastError = new InferenceError(
+              `Google AI Studio request timed out (HTTP 408): ${safeErrBody}`,
+              {
+                code: 'TIMEOUT',
+                status: 408,
+                retryable: true,
+                retryAfterMs,
+                provider: 'google_ai_studio',
+              }
+            );
+            if (attempt < this.maxRetries) {
+              await this.sleepWithAbort(
+                this.computeBackoffMs(attempt, retryAfterMs),
+                params.abortSignal
+              );
+              continue;
+            }
+            break;
+          }
+
+          if (response.status >= 500 || !response.body) {
+            lastError = new InferenceError(
+              `Google AI Studio server error (HTTP ${response.status || 502}): ${safeErrBody}`,
+              {
+                code: 'SERVER_ERROR',
+                status: response.status || 502,
+                retryable: true,
+                retryAfterMs,
+                provider: 'google_ai_studio',
+              }
+            );
+            if (attempt < this.maxRetries) {
+              await this.sleepWithAbort(
+                this.computeBackoffMs(attempt, retryAfterMs),
+                params.abortSignal
+              );
+              continue;
+            }
+            break;
+          }
+
+          throw new InferenceError(
+            `Google AI Studio request failed (HTTP ${response.status}): ${safeErrBody}`,
+            {
+              code: 'SERVER_ERROR',
+              status: response.status,
+              retryable: false,
+              provider: 'google_ai_studio',
+            }
+          );
+        }
+
+        // Stream SSE response
+        let content = '';
+        let thinkingContent = '';
+        let thinkingTokens = 0;
+        let outputTokens = 0;
+        let firstTokenAt = 0;
+        let hasEmittedAnyOutput = false;
+        let finishReason: string | undefined;
+        let apiUsage: InferenceUsage | undefined;
+        let streamCompletedCleanly = false;
+        let sawDone = false;
+
+        // Sliding-buffer <thought>/<think> parser: tags may be split across SSE chunks.
+        let activeThinkTag: 'thought' | 'think' | null = null;
+        let tagCarry = '';
+
+        const toolCallSlots: Array<{
+          id: string;
+          index?: number;
+          name: string;
+          args: string;
+          announced: boolean;
+          extraContent?: any;
+        }> = [];
+
+        const emitThoughtText = (text: string) => {
+          if (!text || params.thinkingBudget === 'off') return;
+          hasEmittedAnyOutput = true;
+          thinkingContent += text;
+          thinkingTokens += Math.max(1, Math.ceil(text.length / 4));
+          params.onThoughtDelta(text, Date.now() - startTime, thinkingTokens);
+        };
+
+        const emitAnswerText = (text: string) => {
+          if (!text) return;
+          hasEmittedAnyOutput = true;
+          if (!firstTokenAt) firstTokenAt = Date.now();
+          content += text;
+          outputTokens += Math.max(1, Math.ceil(text.length / 4));
+          const tps = Number(
+            (outputTokens / Math.max(0.08, (Date.now() - firstTokenAt) / 1000)).toFixed(1)
+          );
+          this.lastTokensPerSec = tps;
+          params.onTokenDelta(text, outputTokens, tps);
+        };
+
+        const partialAnyTagLen = (s: string, tags: string[]): number => {
+          let maxHold = 0;
+          for (const tag of tags) {
+            const max = Math.min(s.length, tag.length - 1);
+            for (let n = max; n > maxHold; n -= 1) {
+              if (tag.startsWith(s.slice(s.length - n))) {
+                maxHold = n;
+                break;
+              }
+            }
+          }
+          return maxHold;
+        };
+
+        const processContentChunk = (chunk: string, flush = false) => {
+          let pending = tagCarry + chunk;
+          tagCarry = '';
+          while (pending.length > 0) {
+            if (activeThinkTag === null) {
+              const thoughtIdx = pending.indexOf('<thought>');
+              const thinkIdx = pending.indexOf('<think>');
+              let openIdx = -1;
+              let matchedTag: 'thought' | 'think' | null = null;
+              let openLen = 0;
+              if (thoughtIdx >= 0 && (thinkIdx < 0 || thoughtIdx <= thinkIdx)) {
+                openIdx = thoughtIdx;
+                matchedTag = 'thought';
+                openLen = 9;
+              } else if (thinkIdx >= 0) {
+                openIdx = thinkIdx;
+                matchedTag = 'think';
+                openLen = 7;
+              }
+              if (openIdx >= 0 && matchedTag) {
+                const before = pending.slice(0, openIdx);
+                emitAnswerText(before);
+                activeThinkTag = matchedTag;
+                pending = pending.slice(openIdx + openLen);
+                continue;
+              }
+              const hold = flush ? 0 : partialAnyTagLen(pending, ['<thought>', '<think>']);
+              const emitPart = pending.slice(0, pending.length - hold);
+              tagCarry = pending.slice(pending.length - hold);
+              emitAnswerText(emitPart);
+              break;
+            } else {
+              const closeTag = `</${activeThinkTag}>`;
+              const closeIdx = pending.indexOf(closeTag);
+              if (closeIdx >= 0) {
+                const thoughtPart = pending.slice(0, closeIdx);
+                emitThoughtText(thoughtPart);
+                activeThinkTag = null;
+                pending = pending.slice(closeIdx + closeTag.length);
+                continue;
+              }
+              const hold = flush ? 0 : partialAnyTagLen(pending, [closeTag]);
+              const emitPart = pending.slice(0, pending.length - hold);
+              tagCarry = pending.slice(pending.length - hold);
+              emitThoughtText(emitPart);
+              break;
+            }
+          }
+        };
+
+        const processSseLine = (rawLine: string) => {
           const line = rawLine.trim();
-          if (!line.startsWith('data:')) continue;
+          if (!line.startsWith('data:')) return;
           const payloadStr = line.slice(5).trim();
-          if (!payloadStr || payloadStr === '[DONE]') continue;
+          if (!payloadStr) return;
+          if (payloadStr === '[DONE]') {
+            sawDone = true;
+            return;
+          }
 
           let parsed: any;
           try {
             parsed = JSON.parse(payloadStr);
           } catch {
-            continue;
+            return;
           }
 
-          const delta = parsed?.choices?.[0]?.delta;
-          if (!delta) continue;
+          if (parsed?.error) {
+            const errStatus = Number(parsed.error?.code || parsed.error?.status || 500);
+            const rawErrMsg = String(parsed.error?.message || 'Google AI Studio stream error').replace(
+              /abort/gi,
+              'cancel'
+            );
+            throw new InferenceError(rawErrMsg, {
+              code: errStatus === 429 ? 'RATE_LIMIT' : 'SERVER_ERROR',
+              status: Number.isFinite(errStatus) ? errStatus : 500,
+              retryable: errStatus === 429 || errStatus >= 500,
+              provider: 'google_ai_studio',
+            });
+          }
+
+          if (parsed?.promptFeedback?.blockReason && !parsed?.choices?.length) {
+            finishReason = 'content_filter';
+          }
+
+          const choice0 = parsed?.choices?.[0];
+          if (choice0?.finish_reason) {
+            finishReason = String(choice0.finish_reason);
+          }
+
+          if (parsed?.usage && typeof parsed.usage === 'object') {
+            const u = parsed.usage;
+            const promptTokens = Number(u.prompt_tokens ?? u.promptTokens ?? 0);
+            const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? 0);
+            const totalTokens =
+              u.total_tokens !== undefined ? Number(u.total_tokens) : promptTokens + completionTokens;
+            const rawThinking =
+              u.completion_tokens_details?.reasoning_tokens ??
+              u.reasoning_tokens ??
+              u.thinking_tokens;
+            apiUsage = {
+              promptTokens,
+              completionTokens,
+              totalTokens,
+              ...(rawThinking !== undefined ? { thinkingTokens: Number(rawThinking) } : {}),
+            };
+          }
+
+          const delta = choice0?.delta;
+          if (!delta) return;
 
           const reasoningDelta = delta.reasoning_content || delta.reasoning;
-          // Mirror Strata's emitThought gate: when the thinking budget is OFF, suppress all
-          // reasoning deltas entirely (do not count tokens, do not surface a thought stream).
-          if (params.thinkingBudget === 'off') {
-            // Intentionally drop reasoning_content so `thinkingTokens` stays 0.
-          } else if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
-            thinkingContent += reasoningDelta;
-            thinkingTokens += Math.max(1, Math.ceil(reasoningDelta.length / 4));
-            params.onThoughtDelta(reasoningDelta, Date.now() - startTime, thinkingTokens);
+          if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
+            emitThoughtText(reasoningDelta);
           }
 
           if (typeof delta.content === 'string' && delta.content.length > 0) {
-            let chunkText = delta.content;
-
-            // Support models emitting <thought>...</thought> or <think>...</think>.
-            // When budget is OFF, treat the entire stream as plain answer content and skip tag parsing.
-            if (params.thinkingBudget !== 'off' && !inThinkTag && (chunkText.includes('<thought>') || chunkText.includes('<think>'))) {
-              const openMatch = chunkText.match(/<(thought|think)>/);
-              if (openMatch && openMatch.index !== undefined) {
-                const before = chunkText.slice(0, openMatch.index);
-                const after = chunkText.slice(openMatch.index + openMatch[0].length);
-                if (before) {
-                  if (!firstTokenAt) firstTokenAt = Date.now();
-                  content += before;
-                  outputTokens += Math.max(1, Math.ceil(before.length / 4));
-                  const tps = Number(
-                    (outputTokens / Math.max(0.08, (Date.now() - firstTokenAt) / 1000)).toFixed(1)
-                  );
-                  this.lastTokensPerSec = tps;
-                  params.onTokenDelta(before, outputTokens, tps);
-                }
-                inThinkTag = true;
-                chunkText = after;
-              }
-            }
-
-            if (inThinkTag) {
-              const closeMatch = chunkText.match(/<\/(thought|think)>/);
-              if (closeMatch && closeMatch.index !== undefined) {
-                const thoughtPart = chunkText.slice(0, closeMatch.index);
-                const prosePart = chunkText.slice(closeMatch.index + closeMatch[0].length);
-                if (thoughtPart) {
-                  thinkingContent += thoughtPart;
-                  thinkingTokens += Math.max(1, Math.ceil(thoughtPart.length / 4));
-                  params.onThoughtDelta(thoughtPart, Date.now() - startTime, thinkingTokens);
-                }
-                inThinkTag = false;
-                chunkText = prosePart;
-              } else {
-                thinkingContent += chunkText;
-                thinkingTokens += Math.max(1, Math.ceil(chunkText.length / 4));
-                params.onThoughtDelta(chunkText, Date.now() - startTime, thinkingTokens);
-                continue;
-              }
-            }
-
-            if (chunkText.length > 0) {
-              if (!firstTokenAt) firstTokenAt = Date.now();
-              content += chunkText;
-              outputTokens += Math.max(1, Math.ceil(chunkText.length / 4));
-              const tps = Number(
-                (outputTokens / Math.max(0.08, (Date.now() - firstTokenAt) / 1000)).toFixed(1)
-              );
-              this.lastTokensPerSec = tps;
-              params.onTokenDelta(chunkText, outputTokens, tps);
-            }
+            processContentChunk(delta.content, false);
           }
 
           if (Array.isArray(delta.tool_calls)) {
@@ -1144,54 +1762,246 @@ export class GoogleAiEngine {
                 }
               }
               if (tc.function?.arguments) slot.args += tc.function.arguments;
-              if (tc.extra_content) slot.extraContent = tc.extra_content;
+              if (tc.extra_content) {
+                slot.extraContent = this.mergeExtraContent(slot.extraContent, tc.extra_content);
+              }
               if (slot.name && !slot.announced) {
                 slot.announced = true;
+                hasEmittedAnyOutput = true;
                 params.onToolCallPreparing?.(slot.name);
               }
             }
           }
-        }
-      }
+        };
 
-      if (!params.abortSignal?.aborted && toolCallSlots.length > 0 && params.onToolCallRequest) {
-        for (const tc of toolCallSlots) {
-          if (!tc.name) continue;
-          let parsedArgs: Record<string, any> = {};
-          const rawArgs = tc.args.trim();
-          if (rawArgs) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let sseBuffer = '';
+        let stallTimer: ReturnType<typeof setTimeout> | null = null;
+        let streamReadError: InferenceError | null = null;
+
+        const onReaderAbort = () => {
+          abortReason = 'caller';
+          attemptController.abort();
+          void reader.cancel().catch(() => {});
+        };
+        params.abortSignal?.addEventListener('abort', onReaderAbort, { once: true });
+
+        try {
+          while (true) {
+            if (params.abortSignal?.aborted || abortReason === 'caller') {
+              abortReason = 'caller';
+              break;
+            }
+            stallTimer = setTimeout(() => {
+              abortReason = 'stall';
+              attemptController.abort();
+              void reader.cancel().catch(() => {});
+            }, this.streamStallTimeoutMs);
+
+            let readResult: ReadableStreamReadResult<Uint8Array>;
             try {
-              parsedArgs = JSON.parse(rawArgs);
-            } catch {
-              parsedArgs = {};
+              readResult = await reader.read();
+            } finally {
+              if (stallTimer) {
+                clearTimeout(stallTimer);
+                stallTimer = null;
+              }
+            }
+
+            if (readResult.done) {
+              sseBuffer += decoder.decode();
+              if (sseBuffer.trim().length > 0) {
+                for (const trailingLine of sseBuffer.split(/\r?\n/)) {
+                  processSseLine(trailingLine);
+                }
+                sseBuffer = '';
+              }
+              streamCompletedCleanly = true;
+              break;
+            }
+
+            sseBuffer += decoder.decode(readResult.value, { stream: true });
+            const lines = sseBuffer.split(/\r?\n/);
+            sseBuffer = lines.pop() ?? '';
+
+            for (const rawLine of lines) {
+              processSseLine(rawLine);
+              if (sawDone) break;
+            }
+            if (sawDone) {
+              streamCompletedCleanly = true;
+              break;
             }
           }
-          if (tc.extraContent) {
-            this.recordThoughtSignature(tc.name, parsedArgs, tc.extraContent);
+        } catch (readErr: any) {
+          if (readErr instanceof InferenceError) {
+            streamReadError = readErr;
+          } else if (abortReason === 'caller' || params.abortSignal?.aborted) {
+            abortReason = 'caller';
+          } else if (abortReason === 'stall') {
+            streamReadError = new InferenceError(
+              `Google AI Studio stream stalled after ${this.streamStallTimeoutMs}ms without data`,
+              {
+                code: 'STREAM_STALL',
+                retryable: !hasEmittedAnyOutput,
+                provider: 'google_ai_studio',
+                cause: readErr,
+              }
+            );
+          } else {
+            const rawMsg = String(readErr?.message || readErr || 'Stream interrupted').replace(
+              /abort/gi,
+              'cancel'
+            );
+            streamReadError = new InferenceError(
+              `Google AI Studio stream error: ${rawMsg}`,
+              {
+                code: 'NETWORK_ERROR',
+                retryable: !hasEmittedAnyOutput,
+                provider: 'google_ai_studio',
+                cause: readErr,
+              }
+            );
           }
-          const canonicalToolName = toolNameMap.get(tc.name) || tc.name;
-          await params.onToolCallRequest(canonicalToolName, parsedArgs);
+        } finally {
+          if (stallTimer) {
+            clearTimeout(stallTimer);
+            stallTimer = null;
+          }
+          params.abortSignal?.removeEventListener('abort', onCallerAbort);
+          params.abortSignal?.removeEventListener('abort', onReaderAbort);
+          if (!streamCompletedCleanly || sawDone) {
+            await reader.cancel().catch(() => {});
+          }
         }
-      }
 
-      return {
-        content,
-        thinkingContent,
-        thinkingDurationMs: Date.now() - startTime,
-        thinkingTokens,
-        outputTokens,
-      };
+        if (abortReason === 'caller' || params.abortSignal?.aborted) {
+          throw new InferenceError('Google AI Studio request aborted by caller', {
+            code: 'ABORTED',
+            retryable: false,
+            provider: 'google_ai_studio',
+          });
+        }
+
+        if (abortReason === 'stall' && !streamReadError) {
+          streamReadError = new InferenceError(
+            `Google AI Studio stream stalled after ${this.streamStallTimeoutMs}ms without data`,
+            {
+              code: 'STREAM_STALL',
+              retryable: !hasEmittedAnyOutput,
+              provider: 'google_ai_studio',
+            }
+          );
+        }
+
+        if (streamReadError) {
+          lastError = streamReadError;
+          if (!hasEmittedAnyOutput && streamReadError.retryable && attempt < this.maxRetries) {
+            await this.sleepWithAbort(
+              this.computeBackoffMs(attempt, streamReadError.retryAfterMs),
+              params.abortSignal
+            );
+            continue;
+          }
+          if (hasEmittedAnyOutput) {
+            throw new InferenceError(streamReadError.message, {
+              code: streamReadError.code,
+              status: streamReadError.status,
+              retryable: false,
+              provider: 'google_ai_studio',
+              cause: streamReadError,
+            });
+          }
+          break;
+        }
+
+        // Flush any remaining tag carry buffer
+        if (tagCarry.length > 0) {
+          processContentChunk('', true);
+        }
+
+        // Treat empty 200 stream drop (zero tokens, zero tool calls, zero finish_reason, zero usage) as transient
+        if (!hasEmittedAnyOutput && toolCallSlots.length === 0 && !finishReason && !apiUsage) {
+          lastError = new InferenceError('Google AI Studio stream closed with empty response', {
+            code: 'NETWORK_ERROR',
+            retryable: true,
+            provider: 'google_ai_studio',
+          });
+          if (attempt < this.maxRetries) {
+            await this.sleepWithAbort(this.computeBackoffMs(attempt), params.abortSignal);
+            continue;
+          }
+          break;
+        }
+
+        const malformedToolCalls: MalformedToolCallInfo[] = [];
+        if (toolCallSlots.length > 0) {
+          for (const tc of toolCallSlots) {
+            if (!tc.name) continue;
+            const canonicalToolName = toolNameMap.get(tc.name) || tc.name;
+            const parsed = this.tryParseToolCallArgs(tc.args);
+            if (!parsed.ok) {
+              malformedToolCalls.push({
+                callId: tc.id,
+                toolName: canonicalToolName,
+                rawArguments: tc.args,
+                error: parsed.error,
+              });
+              if (params.onToolCallParseError) {
+                await params.onToolCallParseError({
+                  toolName: canonicalToolName,
+                  rawArguments: tc.args,
+                  error: parsed.error,
+                  callId: tc.id,
+                });
+              }
+              continue;
+            }
+            if (tc.extraContent) {
+              this.recordThoughtSignature({
+                id: tc.id,
+                canonicalName: canonicalToolName,
+                sanitizedName: tc.name,
+                args: parsed.args,
+                extraContent: tc.extraContent,
+              });
+            }
+            if (params.onToolCallRequest) {
+              await params.onToolCallRequest(canonicalToolName, parsed.args);
+            }
+          }
+        }
+
+        if (apiUsage) {
+          if (apiUsage.completionTokens > 0) {
+            outputTokens = apiUsage.completionTokens;
+          }
+          if (params.thinkingBudget !== 'off' && typeof apiUsage.thinkingTokens === 'number') {
+            thinkingTokens = apiUsage.thinkingTokens;
+          }
+        }
+
+        return {
+          content,
+          thinkingContent,
+          thinkingDurationMs: Date.now() - startTime,
+          thinkingTokens,
+          outputTokens,
+          ...(finishReason ? { finishReason } : {}),
+          ...(apiUsage ? { usage: apiUsage } : {}),
+          ...(malformedToolCalls.length > 0 ? { malformedToolCalls } : {}),
+        };
+      }
     }
 
-    const errMsg = `⚠️ Google AI Studio request failed (${lastErrorStatus || 'network'}): ${lastErrorBody.slice(0, 400)}`;
-    const tok = Math.max(1, Math.ceil(errMsg.length / 4));
-    params.onTokenDelta(errMsg, tok);
-    return {
-      content: errMsg,
-      thinkingContent: '',
-      thinkingDurationMs: Date.now() - startTime,
-      thinkingTokens: 0,
-      outputTokens: tok,
-    };
+    throw (
+      lastError ||
+      new InferenceError('Google AI Studio request failed across all candidate models', {
+        code: 'ENGINE_UNAVAILABLE',
+        retryable: false,
+        provider: 'google_ai_studio',
+      })
+    );
   }
 }

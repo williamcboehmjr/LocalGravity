@@ -146,17 +146,12 @@ export function useBrainSocket({
           if (isDisposed) return;
           const store = useSessionStore.getState();
           store.setIsConnected(false);
-          setReconnectAttempt((prev) => prev + 1);
-          setReconnectCountdown(3);
-          if ((brainHost === '127.0.0.1' || brainHost === 'localhost') && brainPort !== '3390') {
-            fetch('http://127.0.0.1:3390/health', { signal: AbortSignal.timeout(1200) })
-              .then((r) => {
-                if (!isDisposed && r.ok) {
-                  useSessionStore.getState().setBrainConnection('127.0.0.1', '3390');
-                }
-              })
-              .catch(() => {});
-          }
+          setReconnectAttempt((prev) => {
+            const next = prev + 1;
+            const backoffSec = Math.min(8, Math.pow(2, Math.max(0, next - 1)));
+            setReconnectCountdown(backoffSec);
+            return next;
+          });
         };
 
         ws.onerror = () => {
@@ -329,9 +324,10 @@ export function useBrainSocket({
                     ? payload.threads.find((t: any) => t.id === resolvedThreadId)
                     : null;
                   const matchingStreams = Array.isArray(payload.activeStreams)
-                    ? payload.activeStreams.filter(
-                        (s: any) => !s?.thread_id || s.thread_id === resolvedThreadId
-                      )
+                    ? payload.activeStreams.filter((s: any) => {
+                        const stId = s?.threadId ?? s?.thread_id;
+                        return !stId || stId === resolvedThreadId;
+                      })
                     : [];
                   if (payload.messages) {
                     store.hydrateMessagesFromServer(
@@ -477,13 +473,35 @@ export function useBrainSocket({
                 store.setThreadStatus(evtThreadId!, phase === 'error' ? 'error' : 'idle');
                 return;
               }
-              store.applyLegacyTurnEnd(payload, phase);
+              if (type === 'TURN_ERROR') {
+                const errMsg =
+                  typeof payload?.error === 'string'
+                    ? payload.error
+                    : typeof payload?.message === 'string'
+                    ? payload.message
+                    : payload?.error
+                    ? String(payload.error)
+                    : undefined;
+                store.applyLegacyTurnEnd(
+                  { ...payload, ...(errMsg ? { error: errMsg } : {}) },
+                  'error'
+                );
+                if (!isPhaseProtocolActive() && (evtThreadId || activeThreadId)) {
+                  store.setThreadStatus(evtThreadId || activeThreadId, 'error');
+                }
+              } else {
+                store.applyLegacyTurnEnd(payload, phase);
+              }
               if (!isStaleTurnEvent) setAdaptiveCotLabel('');
             } else if (type === 'STEP_NOTE_COMMITTED') {
               if (!isForActiveThread || isStaleTurnEvent) return;
               if (!isPhaseProtocolActive()) store.setIsGenerating(true);
               store.commitAssistantStepNote(payload.note, payload.committed_content, payload.message_id);
             } else if (type === 'SUBAGENT_EVENT') {
+              store.upsertSubagentTask({
+                ...payload,
+                thread_id: evtThreadId || activeThreadId,
+              });
               if (!isForActiveThread) return;
               if (!isPhaseProtocolActive()) {
                 if (payload?.status === 'running') {
@@ -492,7 +510,6 @@ export function useBrainSocket({
                   if (!store.activeTurn?.isActive) store.setIsGenerating(false);
                 }
               }
-              store.upsertSubagentTask(payload);
             } else if (type === 'TOOL_EVENT') {
               if (!isForActiveThread) {
                 store.setThreadStatus(
@@ -505,9 +522,16 @@ export function useBrainSocket({
               if (!isPhaseProtocolActive() && payload?.status === 'running') {
                 store.setIsGenerating(true);
               }
+              const argsJson =
+                typeof payload.arguments_json === 'string'
+                  ? payload.arguments_json
+                  : payload.arguments !== undefined
+                  ? JSON.stringify(payload.arguments)
+                  : undefined;
               store.updateLastAssistantTool(payload.command, payload.output, payload.status, {
                 id: payload.tool_execution_id,
                 toolName: payload.tool_name,
+                argumentsJson: argsJson,
                 durationMs: payload.duration_ms,
                 exitCode: payload.exit_code,
                 messageId: payload.message_id,
@@ -533,11 +557,62 @@ export function useBrainSocket({
                 const latestCheckpoints = useArtifactStore.getState().checkpoints;
                 artStore.setCheckpoints([payload.checkpoint, ...latestCheckpoints]);
               }
+            } else if (type === 'CHECKPOINT_REVERTED') {
+              if (!isForActiveThread) return;
+              const cpId = payload?.checkpointId || payload?.id;
+              if (Array.isArray(payload?.checkpoints)) {
+                artStore.setCheckpoints(payload.checkpoints);
+              } else if (cpId) {
+                artStore.setCheckpoints(
+                  useArtifactStore.getState().checkpoints.filter((c) => c.id !== cpId)
+                );
+              }
+              if (cpId && useArtifactStore.getState().activeCheckpoint?.id === cpId) {
+                artStore.setActiveCheckpoint(null);
+              }
+              if (Array.isArray(payload?.messages)) {
+                store.hydrateMessagesFromServer(payload.messages);
+              }
+            } else if (type === 'THREAD_CREATED') {
+              const t = payload?.thread;
+              if (t && t.id && (!t.project_id || t.project_id === store.activeProjectId)) {
+                if (!store.threads.some((existing) => existing.id === t.id)) {
+                  store.setThreads([t, ...store.threads], store.sessionId);
+                }
+              }
+            } else if (type === 'THREAD_UPDATED') {
+              const t = payload?.thread;
+              if (t && t.id) {
+                if (t.title) store.renameSession(t.id, t.title);
+                if (t.status) store.setThreadStatus(t.id, t.status);
+              }
+            } else if (type === 'THREAD_DELETED') {
+              const deletedId = payload?.threadId || payload?.id;
+              if (deletedId && store.sessions.some((s) => s.id === deletedId)) {
+                store.deleteSession(deletedId);
+              }
+            } else if (type === 'THREAD_CLEARED') {
+              const clearedId = payload?.threadId || evtThreadId;
+              if (!clearedId || clearedId === activeThreadId) {
+                store.clearMessages();
+              }
+            } else if (type === 'THREAD_REWOUND') {
+              if (!isForActiveThread) return;
+              if (Array.isArray(payload?.messages)) {
+                store.hydrateMessagesFromServer(payload.messages, [], 'idle', null);
+              }
+              if (Array.isArray(payload?.checkpoints)) {
+                artStore.setCheckpoints(payload.checkpoints);
+              }
+            } else if (type === 'HARNESS_RELOADED') {
+              window.dispatchEvent(new CustomEvent('localgravity:harness-reloaded', { detail: payload }));
             } else if (type === 'VISION_CAPTURE') {
+              if (!isForActiveThread) return;
               if (payload?.base64DataUrl) {
                 artStore.setLatestVisionCapture(payload);
               }
             } else if (type === 'ARTIFACT_SYNC') {
+              if (!isForActiveThread) return;
               const syncId = payload.id || payload.artifact_name || 'art-' + Date.now();
               const syncType =
                 payload.type ||
@@ -586,11 +661,13 @@ export function useBrainSocket({
               }
             } else if (type === 'ARTIFACT_UPDATED') {
               const art = payload?.artifact;
+              const artThreadId = art?.threadId || art?.thread_id || evtThreadId;
+              if (artThreadId && artThreadId !== activeThreadId) return;
               if (art) {
                 const artId = art.id || art.title || 'art-' + Date.now();
                 artStore.upsertArtifact({
                   id: artId,
-                  threadId: art.threadId || art.thread_id || evtThreadId || activeThreadId,
+                  threadId: artThreadId || activeThreadId,
                   title: art.title,
                   type: art.type,
                   content: art.content || '',
@@ -622,12 +699,14 @@ export function useBrainSocket({
                 }
               }
             } else if (type === 'COUNTDOWN') {
+              if (!isForActiveThread) return;
               const rem = Number(payload?.secondsRemaining || 0);
               const tot = Number(payload?.totalSeconds || rem || 10);
               setTimerCountdown(rem);
               setTimerTotal(tot);
               setTimerLabel(payload?.label || 'Timer');
             } else if (type === 'TIMER_FIRED') {
+              if (!isForActiveThread) return;
               setTimerCountdown(0);
               if (payload?.prompt) {
                 store.addMessage({
@@ -649,6 +728,7 @@ export function useBrainSocket({
                 store.setBackgroundTasks(payload.allTasks);
               }
             } else if (type === 'CONTEXT_COMPACTED') {
+              if (!isForActiveThread) return;
               setLastCompaction({
                 previousTokens: payload?.previousTokens || 0,
                 compactedTokens: payload?.compactedTokens || 0,
@@ -678,8 +758,12 @@ export function useBrainSocket({
       } catch {
         if (!isDisposed) {
           useSessionStore.getState().setIsConnected(false);
-          setReconnectAttempt((prev) => prev + 1);
-          setReconnectCountdown(3);
+          setReconnectAttempt((prev) => {
+            const next = prev + 1;
+            const backoffSec = Math.min(8, Math.pow(2, Math.max(0, next - 1)));
+            setReconnectCountdown(backoffSec);
+            return next;
+          });
         }
       }
     };
@@ -705,32 +789,6 @@ export function useBrainSocket({
     resetTurnProtocolState();
   }, [hostUrl]);
 
-  // Reconnection countdown timer (ticks every second when disconnected)
-  const isCountingDown = !isConnected && reconnectCountdown > 0;
-  useEffect(() => {
-    if (isConnected) {
-      setReconnectCountdown(0);
-      setReconnectAttempt(0);
-      return;
-    }
-
-    if (!isCountingDown) return;
-
-    const timer = setInterval(() => {
-      setReconnectCountdown((curr) => (curr <= 1 ? 0 : curr - 1));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isConnected, isCountingDown]);
-
-  const prevReconnectCountdownRef = useRef(0);
-  useEffect(() => {
-    if (!isConnected && prevReconnectCountdownRef.current === 1 && reconnectCountdown === 0) {
-      handleManualReconnect();
-    }
-    prevReconnectCountdownRef.current = reconnectCountdown;
-  }, [isConnected, reconnectCountdown, handleManualReconnect]);
-
   // Scheduled Timer live countdown effect
   const hasActiveTimer = timerCountdown > 0;
   useEffect(() => {
@@ -741,12 +799,17 @@ export function useBrainSocket({
     return () => clearInterval(t);
   }, [hasActiveTimer]);
 
-  // Proactive HTTP health probe when disconnected: detects server recovery & auto-discovers port
+  // Consolidated exponential-backoff reconnection loop (1s -> 2s -> 4s -> 8s cap) with /health port discovery
   useEffect(() => {
-    if (isConnected) return;
+    if (isConnected) {
+      setReconnectCountdown(0);
+      setReconnectAttempt(0);
+      return;
+    }
     let isDisposed = false;
 
-    const probe = async () => {
+    const probeHostAndReconnect = async () => {
+      const normalizedHost = brainHost === 'localhost' ? '127.0.0.1' : brainHost;
       const candidatePorts = [brainPort, '3390', '3391', '3392', '3393'].filter(
         (v, i, a) => a.indexOf(v) === i
       );
@@ -754,15 +817,15 @@ export function useBrainSocket({
       for (const p of candidatePorts) {
         if (isDisposed) return;
         try {
-          const res = await fetch(`http://${brainHost}:${p}/health`, {
+          const res = await fetch(`http://${normalizedHost}:${p}/health`, {
             method: 'GET',
             signal: AbortSignal.timeout(900),
           });
           if (res.ok) {
             const data = await res.json();
             if (data?.status === 'ok') {
-              if (p !== brainPort) {
-                useSessionStore.getState().setBrainConnection(brainHost, p);
+              if (p !== brainPort || normalizedHost !== brainHost) {
+                useSessionStore.getState().setBrainConnection(normalizedHost, p);
               } else {
                 handleManualReconnect();
               }
@@ -771,14 +834,24 @@ export function useBrainSocket({
           }
         } catch {}
       }
+      if (!isDisposed) {
+        handleManualReconnect();
+      }
     };
 
-    const interval = setInterval(probe, 1500);
-    probe();
+    const timer = setInterval(() => {
+      setReconnectCountdown((curr) => {
+        if (curr <= 1) {
+          void probeHostAndReconnect();
+          return 0;
+        }
+        return curr - 1;
+      });
+    }, 1000);
 
     return () => {
       isDisposed = true;
-      clearInterval(interval);
+      clearInterval(timer);
     };
   }, [isConnected, brainHost, brainPort, handleManualReconnect]);
 

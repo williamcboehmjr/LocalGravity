@@ -162,7 +162,7 @@ export async function createDaemonServer(options?: {
   const broadcastSync = (event: Record<string, any>) => {
     const payload = JSON.stringify(event);
     for (const client of syncClients) {
-      if (client.readyState === 1) {
+      if (client.readyState === 1 && (client.bufferedAmount ?? 0) < 8 * 1024 * 1024) {
         try {
           client.send(payload);
         } catch {}
@@ -173,7 +173,7 @@ export async function createDaemonServer(options?: {
   terminal.onOutput((chunk, stream) => {
     const msg = JSON.stringify({ type: 'TERMINAL_OUTPUT', stream, chunk });
     for (const client of terminalClients) {
-      if (client.readyState === 1) {
+      if (client.readyState === 1 && (client.bufferedAmount ?? 0) < 8 * 1024 * 1024) {
         try {
           client.send(msg);
         } catch {}
@@ -302,21 +302,64 @@ export async function createDaemonServer(options?: {
         abortedCount++;
       }
     } else {
-      for (const [id, c] of activeAbortControllers.entries()) {
-        try {
-          c.abort();
-        } catch {}
-        activeAbortControllers.delete(id);
+      const activeIds = new Set<string>([
+        ...activeAbortControllers.keys(),
+        ...activeTurns.keys(),
+      ]);
+      for (const id of activeIds) {
+        const currentTurn = activeTurns.get(id);
+        const ctrl = activeAbortControllers.get(id);
+        const streams = id ? db.getActiveStreamsForThread(id) : [];
+        const tTurnId = currentTurn?.turn_id || streams[0]?.messageId || `aborted-${Date.now()}`;
+        const tMsgId = currentTurn?.message_id || streams[0]?.messageId || tTurnId;
+
+        if (ctrl) {
+          try {
+            ctrl.abort();
+          } catch {}
+          activeAbortControllers.delete(id);
+        }
         activeTurns.delete(id);
         if (id) {
-          for (const s of db.getActiveStreamsForThread(id)) {
+          for (const s of streams) {
             db.finalizeRunningToolExecutions(s.messageId);
             db.finalizeStreamingMessage(s.messageId);
           }
           db.updateThread(id, { status: 'idle' });
+          broadcastSync({
+            type: 'TURN_PHASE',
+            payload: {
+              seq: Number.MAX_SAFE_INTEGER,
+              thread_id: id,
+              threadId: id,
+              turn_id: tTurnId,
+              message_id: tMsgId,
+              phase: 'aborted',
+              is_active: false,
+              step: 0,
+              max_steps: 0,
+              status_label: 'Stopped',
+              thinking_finished: true,
+              timestamp: Date.now(),
+            },
+          });
         }
         abortedCount++;
       }
+
+      try {
+        const stoppedOrphanTools = db.db
+          .prepare(
+            "UPDATE tool_executions SET status = 'error', stderr_stream = CASE WHEN stderr_stream IS NULL OR stderr_stream = '' THEN 'Stopped by user' ELSE stderr_stream END WHERE status = 'running'"
+          )
+          .run();
+        const resetThreads = db.db
+          .prepare("UPDATE threads SET status = 'idle' WHERE status != 'idle'")
+          .run();
+        if (abortedCount === 0 && (stoppedOrphanTools.changes > 0 || resetThreads.changes > 0)) {
+          abortedCount++;
+        }
+      } catch {}
     }
 
     if (abortedCount > 0 || threadId) {
@@ -551,6 +594,9 @@ export async function createDaemonServer(options?: {
     });
     setTimeout(async () => {
       try {
+        taskMgr.disposeAll();
+        mcp.dispose();
+        terminal.dispose();
         ComfyCompanionManager.getInstance().stopCpuServer();
         stopManagedOllamaServer();
         await tabby.offloadGpu('restart');
@@ -569,6 +615,9 @@ export async function createDaemonServer(options?: {
     });
     setTimeout(async () => {
       try {
+        taskMgr.disposeAll();
+        mcp.dispose();
+        terminal.dispose();
         ComfyCompanionManager.getInstance().stopCpuServer();
         stopManagedOllamaServer();
         await tabby.offloadGpu('shutdown');
@@ -718,6 +767,7 @@ export async function createDaemonServer(options?: {
     readAutomations: automationStore.readAutomations,
     writeAutomations: automationStore.writeAutomations,
     broadcastSync,
+    activeAbortControllers,
     handlePromptTurn,
   });
 
@@ -739,6 +789,26 @@ export async function createDaemonServer(options?: {
 
   const handleWsConnection = (socket: WebSocket, initialThreadId?: string) => {
     syncClients.add(socket);
+    let isAlive = true;
+    socket.on('pong', () => {
+      isAlive = true;
+    });
+    socket.on('error', () => {});
+    const pingTimer = setInterval(() => {
+      if (socket.readyState !== 1) return;
+      if (!isAlive) {
+        try {
+          socket.terminate();
+        } catch {}
+        return;
+      }
+      isAlive = false;
+      try {
+        socket.ping();
+      } catch {}
+    }, 30_000);
+    pingTimer.unref?.();
+
     // Short 250ms grace window allows a reconnecting client (e.g. Computer C) to assert
     // its saved CLIENT_MODE_PREFERENCE before default Strata warming starts.
     const connectWarmTimer = setTimeout(() => {
@@ -877,6 +947,9 @@ export async function createDaemonServer(options?: {
           }
         } else if (type === 'PROMPT_SUBMIT') {
           const threadId = payload.thread_id || payload.session_id || targetThreadId;
+          if (threadId && activeAbortControllers.has(threadId)) {
+            await stopGenerationHandler(threadId);
+          }
           if (payload?.client_id && threadId) {
             EdgeBridgeManager.getInstance().bindThread(threadId, String(payload.client_id));
           }
@@ -940,7 +1013,25 @@ export async function createDaemonServer(options?: {
           const turnId = payload?.turn_id || payload?.turnId || payload?.message_id;
           await stopGenerationHandler(threadId, turnId);
         } else if (type === 'ARTIFACT_SYNC') {
-          broadcastSync({ type: 'ARTIFACT_SYNC', payload });
+          if (payload && typeof payload.content === 'string') {
+            artifactMgr.upsertArtifact({
+              id: payload.id || payload.artifactId,
+              threadId: payload.session_id || payload.thread_id || targetThreadId || 'default',
+              title: payload.title || payload.artifact_name || 'Artifact',
+              type: payload.type || payload.artifactType || 'report',
+              content: payload.content,
+              requestFeedback: payload.requestFeedback,
+              userFacing: payload.userFacing,
+            });
+          } else {
+            broadcastSync({ type: 'ARTIFACT_SYNC', payload });
+          }
+        } else if (type === 'TERMINAL_RESIZE') {
+          const cols = Number(payload?.cols ?? msg?.cols ?? 120);
+          const rows = Number(payload?.rows ?? msg?.rows ?? 30);
+          if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+            (terminal as any).resize?.(cols, rows);
+          }
         } else if (type === 'TASK_INPUT') {
           const taskId = payload?.task_id;
           if (!taskId) return;
@@ -960,12 +1051,15 @@ export async function createDaemonServer(options?: {
 
     socket.on('close', () => {
       clearTimeout(connectWarmTimer);
+      clearInterval(pingTimer);
       syncClients.delete(socket);
-      EdgeBridgeManager.getInstance().unregisterSocket(socket);
-      broadcastSync({
-        type: 'EDGE_HOSTS_UPDATE',
-        payload: { brainHost: os.hostname(), edgeHosts: EdgeBridgeManager.getInstance().listClients() },
-      });
+      const removedEdge = EdgeBridgeManager.getInstance().unregisterSocket(socket);
+      if (removedEdge) {
+        broadcastSync({
+          type: 'EDGE_HOSTS_UPDATE',
+          payload: { brainHost: os.hostname(), edgeHosts: EdgeBridgeManager.getInstance().listClients() },
+        });
+      }
     });
   };
 
@@ -977,12 +1071,20 @@ export async function createDaemonServer(options?: {
 
   app.get('/ws/terminal', { websocket: true }, (socket) => {
     terminalClients.add(socket);
+    socket.on('error', () => {});
     socket.send(JSON.stringify({ type: 'TERMINAL_HISTORY', chunk: terminal.getHistory() }));
     socket.on('message', (raw: Buffer) => {
       try {
         const msg = JSON.parse(raw.toString('utf-8'));
         if (msg.type === 'TERMINAL_INPUT' && typeof msg.data === 'string') terminal.writeInput(msg.data);
         else if (msg.type === 'TERMINAL_EXEC' && typeof msg.command === 'string') void terminal.executeCommand(msg.command);
+        else if (msg.type === 'TERMINAL_RESIZE') {
+          const cols = Number(msg.cols ?? msg.payload?.cols ?? 120);
+          const rows = Number(msg.rows ?? msg.payload?.rows ?? 30);
+          if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+            (terminal as any).resize?.(cols, rows);
+          }
+        }
       } catch {
         terminal.writeInput(raw.toString('utf-8'));
       }
@@ -1017,6 +1119,9 @@ export async function createDaemonServer(options?: {
 
   app.addHook('onClose', async () => {
     clearInterval(telemetryInterval);
+    taskMgr.disposeAll();
+    mcp.dispose();
+    terminal.dispose();
     ComfyCompanionManager.getInstance().stopCpuServer();
     stopManagedOllamaServer();
   });
@@ -1039,6 +1144,25 @@ export async function createDaemonServer(options?: {
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
   createDaemonServer()
     .then(async (ctx) => {
+      let shuttingDown = false;
+      const gracefulExit = async (signal: string) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.log(`[CentralBrain] Received ${signal}, cleaning up child processes and closing DB...`);
+        try {
+          BackgroundTaskManager.getInstance().disposeAll();
+          ctx.mcp.dispose();
+          ctx.terminal.dispose();
+          ComfyCompanionManager.getInstance().stopCpuServer();
+          stopManagedOllamaServer();
+          await ctx.app.close();
+          ctx.db.close();
+        } catch {}
+        process.exit(0);
+      };
+      process.once('SIGINT', () => void gracefulExit('SIGINT'));
+      process.once('SIGTERM', () => void gracefulExit('SIGTERM'));
+
       await ctx.app.listen({ port: ctx.ports.daemonPort, host: ctx.ports.daemonHost });
       console.log('==============================================================');
       console.log('🚀 LocalGravity 2.0 Fastify Headless Core Daemon Active');

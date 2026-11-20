@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import {
   ListTodo,
   PanelLeft,
@@ -81,19 +81,15 @@ export const App: React.FC = () => {
     selectedTier,
     thinkingBudget,
     messages,
-    addMessage,
-    updateLastAssistantMessage,
-    finalizeAssistantMessage,
-    appendStreamingThought,
     isGenerating,
     activeTurn,
-    startPendingTurn,
+    lastTurnWasAborted,
+    setLastTurnWasAborted,
     syncGenerating,
     setSwarmState,
     subagentTasks,
     backgroundTasks,
     setSelectedSubagentId,
-    autoNameSessionFromPrompt,
     messageQueue,
     enqueueMessage,
     dequeueMessage,
@@ -117,6 +113,7 @@ export const App: React.FC = () => {
     setActiveTab,
     parsedTasks,
     setCheckpoints,
+    setArtifacts,
   } = useArtifactStore();
 
   const [leftRailWidth, setLeftRailWidth] = useState(250);
@@ -194,6 +191,16 @@ export const App: React.FC = () => {
   const isTurnActive = selectIsTurnActive({ activeTurn, isGenerating });
   const activeStatusLabel = selectStatusLabel({ activeTurn });
   const pendingInterruptRef = useRef<QueuedMessage | null>(null);
+  const selectThreadReqCounterRef = useRef(0);
+  const selectThreadAbortRef = useRef<AbortController | null>(null);
+  const stopWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (stopWatchdogTimerRef.current) clearTimeout(stopWatchdogTimerRef.current);
+      selectThreadAbortRef.current?.abort();
+    };
+  }, []);
 
   // Initialize decoupled OS AppData state when running inside Tauri Desktop
   useEffect(() => {
@@ -245,93 +252,109 @@ export const App: React.FC = () => {
     onOpenRightDrawer: () => setShowRightDrawer(true),
   });
 
-  const handleSendPrompt = (
-    text: string,
-    images?: string[],
-    tierOverride?: ModelTier,
-    thinkingBudgetOverride?: ThinkingBudget,
-    attachments?: FileAttachmentItem[]
-  ) => {
-    const storeSnap = useSessionStore.getState();
-    const activeThreadId = storeSnap.sessionId;
-    const policy = storeSnap.executionPolicy;
-    const tier = tierOverride || selectedTier;
-    const budget = thinkingBudgetOverride || thinkingBudget;
+  const handleSendPrompt = useCallback(
+    (
+      text: string,
+      images?: string[],
+      tierOverride?: ModelTier,
+      thinkingBudgetOverride?: ThinkingBudget,
+      attachments?: FileAttachmentItem[]
+    ) => {
+      const storeSnap = useSessionStore.getState();
+      const activeThreadId = storeSnap.sessionId;
+      const policy = storeSnap.executionPolicy;
+      const tier = tierOverride || storeSnap.selectedTier;
+      const budget = thinkingBudgetOverride || storeSnap.thinkingBudget;
 
-    addMessage({
-      id: 'user-' + Date.now(),
-      role: 'user',
-      content: text,
-      images,
-      attachments,
-      timestamp: Date.now(),
-    });
+      storeSnap.addMessage({
+        id: 'user-' + Date.now(),
+        role: 'user',
+        content: text,
+        images,
+        attachments,
+        timestamp: Date.now(),
+      });
 
-    autoNameSessionFromPrompt(activeThreadId, text);
+      storeSnap.autoNameSessionFromPrompt(activeThreadId, text);
 
-    addMessage({
-      id: 'assistant-' + Date.now(),
-      role: 'assistant',
-      content: '',
-      thought: '',
-      tier,
-      thinkingBudget: budget,
-      modelName:
-        storeSnap.brainProvider === 'google_ai_studio'
-          ? getGoogleModelOption(storeSnap.selectedGoogleModel).name
-          : tier === 'low'
-          ? 'Qwen3.5-4B-EXL3-4.0bpw'
-          : tier === 'medium'
-          ? 'Qwen3.8-27B-EXL3-11.5GB'
-          : 'Swift 1.5 Flash-Next',
-      timestamp: Date.now(),
-      toolCalls: [],
-    });
+      storeSnap.addMessage({
+        id: 'assistant-' + Date.now(),
+        role: 'assistant',
+        content: '',
+        thought: '',
+        tier,
+        thinkingBudget: budget,
+        modelName:
+          storeSnap.brainProvider === 'google_ai_studio'
+            ? getGoogleModelOption(storeSnap.selectedGoogleModel).name
+            : tier === 'low'
+            ? 'Qwen3.5-4B-EXL3-4.0bpw'
+            : tier === 'medium'
+            ? 'Qwen3.8-27B-EXL3-11.5GB'
+            : 'Swift 1.5 Flash-Next',
+        timestamp: Date.now(),
+        toolCalls: [],
+      });
 
-    startPendingTurn();
+      storeSnap.startPendingTurn();
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          id: 'prompt-' + Date.now(),
-          type: 'PROMPT_SUBMIT',
-          payload: {
-            thread_id: activeThreadId,
-            session_id: activeThreadId,
-            client_id: getOrCreateEdgeClientId(),
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            id: 'prompt-' + Date.now(),
+            type: 'PROMPT_SUBMIT',
+            payload: {
+              thread_id: activeThreadId,
+              session_id: activeThreadId,
+              client_id: getOrCreateEdgeClientId(),
+              prompt: text,
+              images,
+              attachments,
+              tier,
+              thinking_budget: budget,
+              brain_provider: storeSnap.brainProvider,
+              google_model: storeSnap.selectedGoogleModel,
+              execution_policy: policy,
+              executionPolicy: policy,
+            },
+          })
+        );
+      } else {
+        fetch(`${storeSnap.apiBaseUrl}/api/threads/${encodeURIComponent(activeThreadId)}/prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             prompt: text,
-            images,
-            attachments,
             tier,
             thinking_budget: budget,
-            brain_provider: storeSnap.brainProvider,
             google_model: storeSnap.selectedGoogleModel,
+            attachments: attachments && attachments.length > 0 ? attachments : images,
             execution_policy: policy,
             executionPolicy: policy,
-          },
+          }),
         })
-      );
-    } else {
-      setTimeout(() => {
-        appendStreamingThought(
-          `1. Analyzing workspace request: "${text}"\n2. Routing to ${tier.toUpperCase()} tier (${budget.toUpperCase()} thinking)...`,
-          850,
-          38,
-          false
-        );
-      }, 300);
+          .then(async (res) => {
+            if (!res.ok) {
+              throw new Error(`Server returned HTTP ${res.status}`);
+            }
+          })
+          .catch((err) => {
+            const latestStore = useSessionStore.getState();
+            const errMsg = `Failed to reach Central Brain at ${latestStore.apiBaseUrl}: ${err?.message || 'Server unreachable'}. Check connection or Settings.`;
+            latestStore.applyLegacyTurnEnd({ thread_id: activeThreadId, error: errMsg }, 'error');
+            latestStore.syncGenerating(false);
+          });
+      }
+    },
+    [wsRef]
+  );
 
-      setTimeout(() => {
-        appendStreamingThought('\n3. Preparing execution plan...', 1420, 64, true);
-        updateLastAssistantMessage(
-          `Processed request on **${tier.toUpperCase()}** tier (**${budget.toUpperCase()}** thinking).\n\n> Connect to your PC Brain in **Settings** to run live inference.`,
-          42
-        );
-        finalizeAssistantMessage();
-        syncGenerating(false);
-      }, 1500);
-    }
-  };
+  const handleQuickSend = useCallback(
+    (prompt: string) => {
+      handleSendPrompt(prompt);
+    },
+    [handleSendPrompt]
+  );
 
   // Auto-drain queued / interrupted messages strictly after the current turn reaches terminal phase
   useEffect(() => {
@@ -339,6 +362,7 @@ export const App: React.FC = () => {
     if (pendingInterruptRef.current) {
       const nextInterrupt = pendingInterruptRef.current;
       pendingInterruptRef.current = null;
+      setLastTurnWasAborted(false);
       handleSendPrompt(
         nextInterrupt.text,
         nextInterrupt.images,
@@ -348,16 +372,20 @@ export const App: React.FC = () => {
       );
       return;
     }
+    if (lastTurnWasAborted || activeTurn?.phase === 'aborted') {
+      return;
+    }
     if (messageQueue.length > 0) {
       const next = dequeueMessage();
       if (next) {
         handleSendPrompt(next.text, next.images, next.tier, next.thinkingBudget, next.attachments);
       }
     }
-  }, [isTurnActive, messageQueue.length]);
+  }, [isTurnActive, messageQueue.length, lastTurnWasAborted, activeTurn?.phase, setLastTurnWasAborted, dequeueMessage, handleSendPrompt]);
 
   const handleStopGeneration = () => {
     const { sessionId: activeThreadId, activeTurn: curTurn } = useSessionStore.getState();
+    setLastTurnWasAborted(true);
     const stopTurnId =
       curTurn?.turnId && !curTurn.turnId.startsWith('pending-') ? curTurn.turnId : undefined;
     const stopPayload = {
@@ -380,12 +408,44 @@ export const App: React.FC = () => {
       console.warn('[App] WebSocket stop error:', e);
     }
 
+    if (stopWatchdogTimerRef.current) {
+      clearTimeout(stopWatchdogTimerRef.current);
+      stopWatchdogTimerRef.current = null;
+    }
+
+    const forceClearStuckStop = () => {
+      if (stopWatchdogTimerRef.current) {
+        clearTimeout(stopWatchdogTimerRef.current);
+        stopWatchdogTimerRef.current = null;
+      }
+      const st = useSessionStore.getState();
+      if (st.sessionId === activeThreadId && (st.isGenerating || st.activeTurn?.isActive)) {
+        st.finalizeAssistantMessage(st.activeTurn?.messageId);
+        useSessionStore.setState((s) => ({
+          isGenerating: false,
+          lastTurnWasAborted: true,
+          activeTurn: s.activeTurn
+            ? { ...s.activeTurn, isActive: false, phase: 'aborted', statusLabel: '' }
+            : null,
+        }));
+      }
+    };
+
     // One authoritative HTTP stop fallback
     fetch(`${apiBaseUrl}/api/threads/${activeThreadId}/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(stopPayload),
-    }).catch(() => {});
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data || !data.stopped || data.abortedCount === 0) {
+          forceClearStuckStop();
+        }
+      })
+      .catch(() => {
+        if (!wsOpen) forceClearStuckStop();
+      });
 
     if (wsOpen) {
       // Wait for server TURN_PHASE/TURN_ABORTED terminal event so queue drain cannot race
@@ -394,6 +454,9 @@ export const App: React.FC = () => {
           ? { activeTurn: { ...s.activeTurn, statusLabel: 'Stopping…' } }
           : s
       );
+      stopWatchdogTimerRef.current = setTimeout(() => {
+        forceClearStuckStop();
+      }, 4000);
     } else {
       syncGenerating(false);
     }
@@ -484,13 +547,36 @@ export const App: React.FC = () => {
     }
     pendingInterruptRef.current = null;
     setSwarmState(null);
+
+    selectThreadAbortRef.current?.abort();
+    const abortCtrl = new AbortController();
+    selectThreadAbortRef.current = abortCtrl;
+    const reqId = ++selectThreadReqCounterRef.current;
+
     try {
-      const [msgRes, swarmRes] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`),
-        fetch(`${apiBaseUrl}/api/swarm/${threadId}`).catch(() => null),
+      const [msgRes, swarmRes, artRes] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/threads/${threadId}/messages`, { signal: abortCtrl.signal }),
+        fetch(`${apiBaseUrl}/api/swarm/${threadId}`, { signal: abortCtrl.signal }).catch(() => null),
+        fetch(`${apiBaseUrl}/api/artifacts?thread_id=${encodeURIComponent(threadId)}`, {
+          signal: abortCtrl.signal,
+        }).catch(() => null),
       ]);
+      if (
+        abortCtrl.signal.aborted ||
+        reqId !== selectThreadReqCounterRef.current ||
+        useSessionStore.getState().sessionId !== threadId
+      ) {
+        return;
+      }
       if (msgRes.ok) {
         const data = await msgRes.json();
+        if (
+          abortCtrl.signal.aborted ||
+          reqId !== selectThreadReqCounterRef.current ||
+          useSessionStore.getState().sessionId !== threadId
+        ) {
+          return;
+        }
         hydrateMessagesFromServer(
           data.messages || [],
           data.activeStreams || [],
@@ -499,9 +585,32 @@ export const App: React.FC = () => {
         );
         if (data.checkpoints) setCheckpoints(data.checkpoints);
       }
-      if (swarmRes && swarmRes.ok && useSessionStore.getState().sessionId === threadId) {
+      if (
+        artRes &&
+        artRes.ok &&
+        !abortCtrl.signal.aborted &&
+        reqId === selectThreadReqCounterRef.current &&
+        useSessionStore.getState().sessionId === threadId
+      ) {
+        const artData = await artRes.json();
+        if (
+          Array.isArray(artData?.artifacts) &&
+          useSessionStore.getState().sessionId === threadId
+        ) {
+          setArtifacts(artData.artifacts);
+        }
+      }
+      if (
+        swarmRes &&
+        swarmRes.ok &&
+        !abortCtrl.signal.aborted &&
+        reqId === selectThreadReqCounterRef.current &&
+        useSessionStore.getState().sessionId === threadId
+      ) {
         const sData = await swarmRes.json();
-        setSwarmState(sData?.swarm ?? (sData?.id ? sData : null));
+        if (useSessionStore.getState().sessionId === threadId) {
+          setSwarmState(sData?.swarm ?? (sData?.id ? sData : null));
+        }
       }
     } catch {}
   };
@@ -545,7 +654,7 @@ export const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleArtifactSync = (newMarkdown: string) => {
+  const handleArtifactSync = (newMarkdown: string, artifactName: string = 'task.md') => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
@@ -553,7 +662,7 @@ export const App: React.FC = () => {
           type: 'ARTIFACT_SYNC',
           payload: {
             session_id: sessionId,
-            artifact_name: 'task.md',
+            artifact_name: artifactName,
             content: newMarkdown,
             version: Date.now(),
           },
@@ -915,11 +1024,13 @@ export const App: React.FC = () => {
               mobileTab === 'chat' ? 'flex' : 'hidden md:flex'
             }`}
           >
-            <ChatFeed onQuickSend={(p) => handleSendPrompt(p)} />
+            <ChatFeed onQuickSend={handleQuickSend} />
             <div className="shrink-0 max-w-3xl w-full mx-auto px-4 pb-4 pt-1 z-10">
               {/* Collapsible / Expandable Running Tasks & Subagents Bar (Antigravity-style) */}
               {(() => {
-                const runningSubagents = subagentTasks.filter((s) => s.status === 'running');
+                const runningSubagents = subagentTasks.filter(
+                  (s) => (!s.thread_id || s.thread_id === sessionId) && s.status === 'running'
+                );
                 const runningBgTasks = backgroundTasks.filter((t) => t.status === 'running');
                 const hasActivityItems =
                   totalTasks > 0 || runningSubagents.length > 0 || runningBgTasks.length > 0;
@@ -1076,7 +1187,7 @@ export const App: React.FC = () => {
 
           {mobileTab === 'tasks' && (
             <div className="flex-1 min-h-0 flex flex-col md:hidden bg-[#131314] overflow-hidden">
-              <TaskChecklist onSync={handleArtifactSync} />
+              <TaskChecklist onSync={(md) => handleArtifactSync(md, 'task.md')} />
             </div>
           )}
         </div>
@@ -1138,7 +1249,7 @@ export const App: React.FC = () => {
                       : activeTab === 'subagents'
                       ? 'Subagents'
                       : activeTab === 'tasks'
-                      ? 'Background Tasks'
+                      ? 'Task Checklist'
                       : activeTab === 'plan'
                       ? 'Artifacts'
                       : activeTab === 'swarm'
@@ -1174,8 +1285,13 @@ export const App: React.FC = () => {
                   {activeTab === 'preview' && <VisionPreviewTab />}
                   {activeTab === 'harness' && <HarnessWorkbenchTab />}
                   {activeTab === 'subagents' && <SubagentsTab />}
-                  {activeTab === 'tasks' && <TaskChecklist onSync={handleArtifactSync} />}
-                  {activeTab === 'plan' && <PlanViewer onProceedPlan={(p) => handleSendPrompt(p)} />}
+                  {activeTab === 'tasks' && <TaskChecklist onSync={(md) => handleArtifactSync(md, 'task.md')} />}
+                  {activeTab === 'plan' && (
+                    <PlanViewer
+                      onProceedPlan={(p) => handleSendPrompt(p)}
+                      onSyncArtifact={(doc, content) => handleArtifactSync(content, doc)}
+                    />
+                  )}
                   {activeTab === 'evidence' && <EvidenceDrawer />}
                   {activeTab === 'swarm' && <SwarmBoardTab />}
                 </div>

@@ -1,9 +1,20 @@
 export interface PrematureStopResult {
   shouldContinue: boolean;
   continuationPrompt: string;
+  isPremature: boolean;
+  reason?: string;
+  retryInstruction?: string;
 }
 
-const READ_ONLY_INSPECTION_TOOLS = new Set([
+export interface PrematureStopOptions {
+  slashCommand?: string | null;
+  finishReason?: string;
+  userPrompt?: string;
+  executedToolNames?: string[];
+  maxAutoContinues?: number;
+}
+
+export const READ_ONLY_INSPECTION_TOOLS = new Set([
   'read_file',
   'list_directory',
   'search_codebase',
@@ -16,30 +27,82 @@ const READ_ONLY_INSPECTION_TOOLS = new Set([
   'inspect_models',
   'inspect_system',
   'read_system_logs',
+  'search_web',
+  'search_models',
+  'browser_inspect',
+  'capture_screen',
+  'inspect_window',
+  'lsp_diagnostics',
+  'read_board',
+  'ask_question',
 ]);
+
+function makePremature(shouldContinue: boolean, prompt = '', reason?: string): PrematureStopResult {
+  return {
+    shouldContinue,
+    continuationPrompt: prompt,
+    isPremature: shouldContinue,
+    reason,
+    retryInstruction: prompt || undefined,
+  };
+}
 
 export function detectPrematureStop(
   stepContent: string,
   hasExecutedTools: boolean,
   autoContinueCount: number,
-  maxAutoContinues: number,
+  maxAutoContinuesOrOptions?: number | PrematureStopOptions,
   userPrompt?: string,
-  executedToolNames?: string[]
+  executedToolNames?: string[],
+  options?: PrematureStopOptions
 ): PrematureStopResult {
+  let maxAutoContinues = 5;
+  let resolvedOptions: PrematureStopOptions | undefined = options;
+
+  if (typeof maxAutoContinuesOrOptions === 'number') {
+    maxAutoContinues = maxAutoContinuesOrOptions;
+  } else if (maxAutoContinuesOrOptions && typeof maxAutoContinuesOrOptions === 'object') {
+    resolvedOptions = maxAutoContinuesOrOptions;
+    if (typeof maxAutoContinuesOrOptions.maxAutoContinues === 'number') {
+      maxAutoContinues = maxAutoContinuesOrOptions.maxAutoContinues;
+    }
+    if (userPrompt === undefined && maxAutoContinuesOrOptions.userPrompt !== undefined) {
+      userPrompt = maxAutoContinuesOrOptions.userPrompt;
+    }
+    if (executedToolNames === undefined && maxAutoContinuesOrOptions.executedToolNames !== undefined) {
+      executedToolNames = maxAutoContinuesOrOptions.executedToolNames;
+    }
+  }
+
+  const finishReason = resolvedOptions?.finishReason;
+  const slashCommand = resolvedOptions?.slashCommand ?? null;
+
+  if (finishReason === 'content_filter') {
+    return makePremature(false);
+  }
+
   // Never allow more than maxAutoContinues
   if (autoContinueCount >= maxAutoContinues) {
-    return { shouldContinue: false, continuationPrompt: '' };
+    return makePremature(false);
+  }
+
+  if (finishReason === 'length') {
+    return makePremature(
+      true,
+      'Your previous response was truncated due to the token limit (finish_reason=length). Continue directly from where you left off without repeating earlier text.',
+      'output_truncated_length'
+    );
   }
 
   const trimmed = (stepContent || '').trim();
 
   // 1. Model finished <think> but emitted 0 characters of output and 0 tool calls
   if (trimmed.length === 0) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: You finished thinking without executing a tool or delivering an answer. Please either invoke the tool you need or write out your complete solution now.',
-    };
+    return makePremature(
+      true,
+      '[ACTION REQUIRED]: You finished thinking without executing a tool or delivering an answer. Please either invoke the tool you need or write out your complete solution now.',
+      'empty_output'
+    );
   }
 
   // 1b. Raw unparsed tool markup leaked into prose without an executed tool call
@@ -53,20 +116,20 @@ export function detectPrematureStop(
     ) && /"arguments"\s*:/i.test(trimmed);
 
   if (hasLeakedXmlToolCall || hasLeakedJsonToolCall) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: Your raw tool markup was NOT executed because no structured tool call was emitted. Invoke the real structured tool call now without printing <tool_call> or JSON markup as prose.',
-    };
+    return makePremature(
+      true,
+      '[ACTION REQUIRED]: Your raw tool markup was NOT executed because no structured tool call was emitted. Invoke the real structured tool call now without printing <tool_call> or JSON markup as prose.',
+      'leaked_tool_markup'
+    );
   }
 
   // 2. Output is a transitional preamble ending with colon ":" (e.g. "Let me use write_file... verbatim:")
   if (trimmed.endsWith(':') && trimmed.length < 500 && !trimmed.includes('```')) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: Please proceed directly with the tool execution or output the planned content now.',
-    };
+    return makePremature(
+      true,
+      '[ACTION REQUIRED]: Please proceed directly with the tool execution or output the planned content now.',
+      'colon_preamble'
+    );
   }
 
   // 3. Output ends with or contains an unexecuted promise/declaration of intent
@@ -93,41 +156,54 @@ export function detectPrematureStop(
 
   if (intentHit) {
     const matchedSnippet = (actionIntentRegex.test(trailingSentence) ? trailingSentence : prevSentence || trailingSentence).slice(0, 100);
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        `[ACTION REQUIRED]: You stated you would take an action ("${matchedSnippet}"), but stopped without executing a tool. Please execute the tool call for the planned action now (e.g. read_file, list_directory, search_codebase, write_file, run_terminal, comfyui). Do NOT stop with a promise.`,
-    };
+    return makePremature(
+      true,
+      `[ACTION REQUIRED]: You stated you would take an action ("${matchedSnippet}"), but stopped without executing a tool. Please execute the tool call for the planned action now (e.g. read_file, list_directory, search_codebase, write_file, run_terminal, comfyui). Do NOT stop with a promise.`,
+      'action_intent_promise'
+    );
   }
 
   // 3b. UNGROUNDED "I CANNOT / AS AN AI / NO REAL-TIME ACCESS" GUARD (with word boundary, not trailing space)
   const helplessClaimRegex =
     /(i do not have access to real-time|i cannot browse the web|i don't have access to the internet|as an ai language model|as of my last update|i am not able to search|i don't have real-time information|i am unable to access the internet|i cannot search the web|i don't have access to current|i cannot view websites)\b/i;
   if (helplessClaimRegex.test(trimmed)) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
-        '[ACTION REQUIRED]: You DO have full, unrestricted live web search access via the "search_web" tool! Immediately invoke search_web(query=...) to look up the exact information instead of claiming inability.',
-    };
+    return makePremature(
+      true,
+      '[ACTION REQUIRED]: You DO have full, unrestricted live web search access via the "search_web" tool! Immediately invoke search_web(query=...) to look up the exact information instead of claiming inability.',
+      'helpless_claim'
+    );
   }
 
+  const isPlanOrGrillMode =
+    slashCommand === '/plan' ||
+    slashCommand === '/grill-me' ||
+    Boolean(userPrompt && /(?:^|\s)\/(?:plan|grill-me)(?=\s|$)/i.test(userPrompt));
+
+  const isPureQuestionPrompt = Boolean(
+    userPrompt && /^\s*(?:how|why|what|explain|can you explain)\b/i.test(userPrompt)
+  );
+
+  const isExemptFromMutationAndHedging = isPlanOrGrillMode || isPureQuestionPrompt;
+
   // 3c. UNNECESSARY PERMISSION / CONFIRMATION HEDGING GUARD
-  const userRequestedExecution =
-    Boolean(userPrompt) &&
-    (/\b(fix|implement|build|create|write|edit|update|finish|complete|publish|release|push|audit|refactor|add|remove|wire|hook|solve|execute|do|continue|proceed|go ahead|generate|draw|render)\b/i.test(
-      userPrompt!
-    ) ||
-      /^(yes|yep|yeah|sure|ok|okay|do it|go ahead|proceed|continue)\b/i.test(userPrompt!.trim()));
+  if (!isExemptFromMutationAndHedging) {
+    const userRequestedExecution =
+      Boolean(userPrompt) &&
+      (/\b(fix|implement|build|create|write|edit|update|finish|complete|publish|release|push|audit|refactor|add|remove|wire|hook|solve|execute|do|continue|proceed|go ahead|generate|draw|render)\b/i.test(
+        userPrompt!
+      ) ||
+        /^(yes|yep|yeah|sure|ok|okay|do it|go ahead|proceed|continue)\b/i.test(userPrompt!.trim()));
 
-  const permissionHedgingRegex =
-    /(?:would you like me to|do you want me to|want me to|should i|shall i|would you like to proceed|let me know if you(?:'d| would) like me to|if you want, i can|say the word|ready to (?:implement|proceed|apply|build|fix|generate)[^.?!]*\?)/i;
+    const permissionHedgingRegex =
+      /(?:would you like me to|do you want me to|want me to|should i|shall i|would you like to proceed|let me know if you(?:'d| would) like me to|if you want, i can|say the word|ready to (?:implement|proceed|apply|build|fix|generate)[^.?!]*\?)/i;
 
-  if (userRequestedExecution && (permissionHedgingRegex.test(trailingSentence) || permissionHedgingRegex.test(lastLine))) {
-    return {
-      shouldContinue: true,
-      continuationPrompt:
+    if (userRequestedExecution && (permissionHedgingRegex.test(trailingSentence) || permissionHedgingRegex.test(lastLine))) {
+      return makePremature(
+        true,
         '[ACTION REQUIRED]: The user already instructed you to complete this task. Do NOT stop to ask for permission or confirmation ("Want me to...?", "Should I...?"). Execute the implementation and verification tools now.',
-    };
+        'permission_hedging'
+      );
+    }
   }
 
   // 4. THEATRICAL SIMULATION / NO-MUTATION HALLUCINATION GUARD
@@ -136,7 +212,7 @@ export function detectPrematureStop(
     ? executedToolNames.some((n) => !READ_ONLY_INSPECTION_TOOLS.has(n))
     : hasExecutedTools;
 
-  if (!hasMutated) {
+  if (!hasMutated && !isExemptFromMutationAndHedging) {
     const roleplaySimulationRegex =
       /(reading through|now reading|now writing|npm run build|cargo check|clean compile|fixing compile errors|transcribing into|diffs at exact anchors|refactor #\d+ complete|zero call-site changes|applying edit \d|edit \d —|successfully updated [a-z0-9_./-]+\.(?:ts|tsx|rs))/i;
 
@@ -148,11 +224,11 @@ export function detectPrematureStop(
       roleplaySimulationRegex.test(trimmed) ||
       (userWantsAction && trimmed.includes('```') && (trimmed.includes('server/src') || trimmed.includes('client/src')))
     ) {
-      return {
-        shouldContinue: true,
-        continuationPrompt:
-          '[CRITICAL PROTOCOL VIOLATION — NO FILE MUTATIONS EXECUTED]: You wrote prose claiming edits or builds, but no mutation/execution tool ran on disk (write_file, edit_file, apply_diff, run_code_batch, or run_terminal). Fabricating execution in text is strictly forbidden. Invoke the real structured editing and build tools now.',
-      };
+      return makePremature(
+        true,
+        '[CRITICAL PROTOCOL VIOLATION — NO FILE MUTATIONS EXECUTED]: You wrote prose claiming edits or builds, but no mutation/execution tool ran on disk (write_file, edit_file, apply_diff, run_code_batch, or run_terminal). Fabricating execution in text is strictly forbidden. Invoke the real structured editing and build tools now.',
+        'no_mutation_violation'
+      );
     }
   }
 
@@ -169,13 +245,13 @@ export function detectPrematureStop(
         trimmed
       );
     if (promptWantsGeneration && proseFakedOrPromisedImage) {
-      return {
-        shouldContinue: true,
-        continuationPrompt:
-          '[ACTION REQUIRED]: You did not invoke the `comfyui` tool yet. Call `comfyui` now with `action="generate"` (or `"gemini_image"`) to generate the real image.',
-      };
+      return makePremature(
+        true,
+        '[ACTION REQUIRED]: You did not invoke the `comfyui` tool yet. Call `comfyui` now with `action="generate"` (or `"gemini_image"`) to generate the real image.',
+        'unexecuted_comfyui_promise'
+      );
     }
   }
 
-  return { shouldContinue: false, continuationPrompt: '' };
+  return makePremature(false);
 }

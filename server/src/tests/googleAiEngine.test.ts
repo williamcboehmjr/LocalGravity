@@ -267,9 +267,75 @@ async function runGoogleAiEngineTests() {
     assert.equal(capturedBodies[0].reasoning_effort, 'high');
     assert.equal(capturedBodies[0].tools, undefined);
     assert.equal(capturedBodies[1].model, 'gemini-4-neon');
-    assert.equal(capturedBodies[1].reasoning_effort, 'xhigh');
+    // Phase 2 executor budget is decoupled from planner xhigh budget (throttled to 'low' when no tool error)
+    assert.equal(capturedBodies[1].reasoning_effort, 'low');
     assert.ok(Array.isArray(capturedBodies[1].tools) && capturedBodies[1].tools.length === 1);
     assert.equal(carbonNeonRes.content, 'Response from gemini-4-neon');
+
+    // 6. Phase 2 non-double-counted thinkingTokens, chunk-split <thought> tags, and malformed tool call guard
+    const orchThinkingChunks: string[] = [];
+    let callIdx = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const targetUrl = String(url);
+      if (targetUrl.includes('/decisions')) {
+        return new Response('Decisions API offline in unit test', { status: 503 });
+      }
+      callIdx += 1;
+      const encoder = new TextEncoder();
+      const chunks =
+        callIdx === 1
+          ? [
+              'data: {"choices":[{"delta":{"content":"<thou"}}]}\n\n',
+              'data: {"choices":[{"delta":{"content":"ght>Plan step 1</th"}}]}\n\n',
+              'data: {"choices":[{"delta":{"content":"ought>Plan body"}}]}\n\n',
+              'data: [DONE]\n\n',
+            ]
+          : [
+              'data: {"choices":[{"delta":{"content":"<think>Exec note</think>Final answer."}}]}\n\n',
+              'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_bad","function":{"name":"read_file","arguments":"{broken_json"}}]}}]}\n\n',
+              'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+              'data: [DONE]\n\n',
+            ];
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(encoder.encode(c));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }) as typeof fetch;
+
+    const badToolExecCalls: any[] = [];
+    const parseErrors: any[] = [];
+    const orchPhase2Res = await engine.streamChatCompletion({
+      tier: 'high',
+      thinkingBudget: 'high',
+      messages: [{ role: 'user', content: 'Inspect and run complex plan' }],
+      tools: dummyTools,
+      onTokenDelta: () => {},
+      onThoughtDelta: (d) => orchThinkingChunks.push(d),
+      onToolCallRequest: async (name, args) => {
+        badToolExecCalls.push({ name, args });
+      },
+      onToolCallParseError: (info) => {
+        parseErrors.push(info);
+      },
+    });
+    assert.equal(badToolExecCalls.length, 0, 'Malformed tool call JSON must not invoke onToolCallRequest({})');
+    assert.equal(parseErrors.length, 1);
+    assert.equal(orchPhase2Res.malformedToolCalls?.length, 1);
+    assert.equal(orchPhase2Res.content, 'Final answer.');
+    // Verify thinkingTokens equals sum of individual emitted thought deltas (not double-counted)
+    const expectedSum = orchThinkingChunks.reduce(
+      (sum, c) => sum + Math.max(1, Math.ceil(c.length / 4)),
+      0
+    );
+    assert.equal(orchPhase2Res.thinkingTokens, expectedSum);
+    const execOccurrences = orchPhase2Res.thinkingContent.split('Exec note').length - 1;
+    assert.equal(execOccurrences, 1, 'Executor thinkingContent must not be duplicated');
 
     console.log('✅ GoogleAiEngine Unit Tests PASSED (all assertions including Gemini 4 Neon)');
   } finally {

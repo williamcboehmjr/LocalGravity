@@ -37,12 +37,17 @@ interface SubagentMessage {
 /** Subagents & Background Tasks tab with conversation inspector, logs, kill, and send_input support. */
 export const SubagentsTab: React.FC = () => {
   const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
-  const subagentTasks = useSessionStore((s) => s.subagentTasks);
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const allSubagentTasks = useSessionStore((s) => s.subagentTasks);
   const selectedSubagentId = useSessionStore((s) => s.selectedSubagentId);
   const setSelectedSubagentId = useSessionStore((s) => s.setSelectedSubagentId);
-  const storeBgTasks = useSessionStore((s) => (s as any).backgroundTasks) as BgTask[] | undefined;
+  const storeBgTasks = useSessionStore((s) => s.backgroundTasks) as BgTask[];
+  const setBackgroundTasks = useSessionStore((s) => s.setBackgroundTasks);
 
-  const [fetchedBgTasks, setFetchedBgTasks] = useState<BgTask[]>([]);
+  const subagentTasks = allSubagentTasks.filter(
+    (s) => !s.thread_id || s.thread_id === sessionId
+  );
+
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [subagentConvos, setSubagentConvos] = useState<Record<string, SubagentMessage[]>>({});
   const [loadingConvoId, setLoadingConvoId] = useState<string | null>(null);
@@ -50,8 +55,8 @@ export const SubagentsTab: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   const loadSubagentConversation = useCallback(
-    async (id: string) => {
-      setLoadingConvoId(id);
+    async (id: string, silent = false) => {
+      if (!silent) setLoadingConvoId(id);
       try {
         const res = await fetch(`${apiBaseUrl}/api/subagents/${encodeURIComponent(id)}/messages`);
         if (res.ok) {
@@ -61,7 +66,7 @@ export const SubagentsTab: React.FC = () => {
           }
         }
       } catch {}
-      setLoadingConvoId((curr) => (curr === id ? null : curr));
+      if (!silent) setLoadingConvoId((curr) => (curr === id ? null : curr));
     },
     [apiBaseUrl]
   );
@@ -69,9 +74,20 @@ export const SubagentsTab: React.FC = () => {
   useEffect(() => {
     if (selectedSubagentId) {
       setExpandedIds((prev) => ({ ...prev, [selectedSubagentId]: true }));
-      loadSubagentConversation(selectedSubagentId);
+      void loadSubagentConversation(selectedSubagentId);
     }
   }, [selectedSubagentId, loadSubagentConversation]);
+
+  const selectedSubagent = subagentTasks.find((s) => s.id === selectedSubagentId);
+  const isSelectedRunning = selectedSubagent?.status === 'running';
+
+  useEffect(() => {
+    if (!selectedSubagentId || !isSelectedRunning) return;
+    const timer = setInterval(() => {
+      void loadSubagentConversation(selectedSubagentId, true);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [selectedSubagentId, isSelectedRunning, loadSubagentConversation]);
 
   const loadTasks = useCallback(async () => {
     setRefreshing(true);
@@ -79,17 +95,17 @@ export const SubagentsTab: React.FC = () => {
       const res = await fetch(`${apiBaseUrl}/api/tasks`);
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.tasks)) setFetchedBgTasks(data.tasks);
+        if (Array.isArray(data.tasks)) setBackgroundTasks(data.tasks);
       }
     } catch {}
     setRefreshing(false);
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, setBackgroundTasks]);
 
   useEffect(() => {
-    loadTasks();
+    void loadTasks();
   }, [loadTasks]);
 
-  const bgTasks: BgTask[] = storeBgTasks && storeBgTasks.length > 0 ? storeBgTasks : fetchedBgTasks;
+  const bgTasks: BgTask[] = storeBgTasks || [];
 
   const toggleExpand = (id: string) =>
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));

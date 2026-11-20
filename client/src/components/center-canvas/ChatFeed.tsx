@@ -1,10 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import ReactMarkdown from 'react-markdown';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
+import ReactMarkdown, { type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeHighlight from 'rehype-highlight';
 import {
   ChevronRight,
   ChevronDown,
   Loader2,
+  AlertCircle,
+  Info,
   FileCode2,
   ExternalLink,
   Sparkles,
@@ -34,6 +39,97 @@ import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useArtifactStore, WorkbenchTab, ArtifactRecord } from '../../store/useArtifactStore';
 import { ThoughtAccordion } from './ThoughtAccordion';
 import { AgentEmbedWidget } from './AgentEmbedWidget';
+
+const OUTER_PIN_THRESHOLD_PX = 40;
+const NESTED_PIN_THRESHOLD_PX = 28;
+
+const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [
+  remarkGfm,
+  remarkMath,
+];
+
+const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [
+  [rehypeKatex, { throwOnError: false, errorColor: '#f87171' }],
+  [rehypeHighlight, { detect: false, plainText: ['diff', 'patch', 'txt', 'text', 'plaintext'] }],
+];
+
+const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'file:', 'sidecar:']);
+const SAFE_IMG_PROTOCOLS = new Set(['http:', 'https:']);
+const SAFE_DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|gif|webp|avif);base64,[A-Za-z0-9+/]+=*$/i;
+
+const safeUrlTransform: UrlTransform = (url, key, node) => {
+  if (!url || typeof url !== 'string') return '';
+  // Reject ASCII control characters (prevents \0, \t, \n, \r scheme obfuscation)
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001F\u007F]/.test(url)) return '';
+
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+
+  const isImg = node?.tagName === 'img' && key === 'src';
+
+  // Fragment-only links
+  if (trimmed.startsWith('#')) {
+    return isImg ? '' : trimmed;
+  }
+
+  // Single-slash relative paths (block protocol-relative //evil.com)
+  if (trimmed.startsWith('/')) {
+    return trimmed.startsWith('//') ? '' : trimmed;
+  }
+
+  // Strip internal whitespace when inspecting scheme
+  const compact = trimmed.replace(/\s+/g, '');
+  const schemeMatch = compact.match(/^([a-z][a-z0-9+.-]*):/i);
+
+  if (!schemeMatch) {
+    // Reject obfuscated/malformed scheme before first /, ?, #
+    const colon = compact.indexOf(':');
+    if (colon !== -1) {
+      const slash = compact.indexOf('/');
+      const q = compact.indexOf('?');
+      const hash = compact.indexOf('#');
+      const beforeSep =
+        (slash === -1 || colon < slash) &&
+        (q === -1 || colon < q) &&
+        (hash === -1 || colon < hash);
+      if (beforeSep) return '';
+    }
+    // Safe scheme-less relative path (e.g. server/src/index.ts#L10)
+    return trimmed;
+  }
+
+  const protocol = `${schemeMatch[1].toLowerCase()}:`;
+  if (protocol === 'data:') {
+    // Only safe raster base64 images on <img src>, never SVG/HTML or <a>
+    return isImg && SAFE_DATA_IMAGE_RE.test(compact) ? compact : '';
+  }
+
+  if (isImg) {
+    return SAFE_IMG_PROTOCOLS.has(protocol) ? trimmed : '';
+  }
+
+  return SAFE_LINK_PROTOCOLS.has(protocol) ? trimmed : '';
+};
+
+function resolveServerAssetUrl(url: string | undefined, apiBaseUrl: string): string | undefined {
+  if (!url) return url;
+  if (/^\/api\/(?:uploads|mcp-outputs)\//i.test(url)) {
+    const base = (apiBaseUrl || '').replace(/\/+$/, '');
+    return base ? `${base}${url}` : url;
+  }
+  return url;
+}
+
+function extractReactText(node: React.ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractReactText).join('');
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) {
+    return extractReactText(node.props.children);
+  }
+  return '';
+}
 
 function shortenPath(rawPath: string): string {
   if (!rawPath) return '.';
@@ -560,6 +656,7 @@ const ToolExecutionRow: React.FC<{
   const { prefix, target, detail, isFileRow, diffStats } = formatCompactToolLabel(item);
   const hasOutput = Boolean(item.output && item.output.trim().length > 0);
   const isInteractiveExpand = !isFileRow && hasOutput;
+  const isError = item.status === 'error';
 
   const handleRowClick = () => {
     if (isFileRow) {
@@ -573,7 +670,13 @@ const ToolExecutionRow: React.FC<{
 
   return (
     <div className="py-[3px] select-none">
-      <div className="flex items-center justify-between gap-2 text-[13.5px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors max-w-full">
+      <div
+        className={`flex items-center justify-between gap-2 text-[13.5px] transition-colors max-w-full ${
+          isError
+            ? 'text-rose-300 hover:text-rose-200'
+            : 'text-[#8E8E93] hover:text-[#E8EAED]'
+        }`}
+      >
         <button
           type="button"
           onClick={handleRowClick}
@@ -582,15 +685,22 @@ const ToolExecutionRow: React.FC<{
           {item.status === 'running' && (
             <Loader2 className="w-3.5 h-3.5 text-[#8AB4F8] animate-spin shrink-0" />
           )}
+          {isError && (
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          )}
 
-          <span className="text-[#8E8E93] font-normal shrink-0">{prefix}</span>
+          <span className={`font-normal shrink-0 ${isError ? 'text-rose-400' : 'text-[#8E8E93]'}`}>
+            {prefix}
+          </span>
 
           {isFileRow && <FileTypeBadge filename={target} />}
 
-          <span className="text-[#D4D4D8] truncate">{target}</span>
+          <span className={`truncate ${isError ? 'text-rose-200' : 'text-[#D4D4D8]'}`}>
+            {target}
+          </span>
 
           {detail && (
-            <span className="text-[#8E8E93] shrink-0 font-normal">
+            <span className={`shrink-0 font-normal ${isError ? 'text-rose-300/80' : 'text-[#8E8E93]'}`}>
               {detail}
             </span>
           )}
@@ -627,7 +737,13 @@ const ToolExecutionRow: React.FC<{
       </div>
 
       {userOpen && hasOutput && (
-        <div className="mt-1 ml-3 pl-3 border-l border-[#26282C] font-mono text-[12px] text-[#BDC1C6] overflow-x-auto bg-[#101113] p-2.5 rounded-lg max-h-56 select-text leading-relaxed">
+        <div
+          className={`mt-1 ml-3 pl-3 border-l font-mono text-[12px] overflow-x-auto overflow-y-auto overscroll-contain p-2.5 rounded-lg max-h-56 select-text leading-relaxed ${
+            isError
+              ? 'border-rose-500/40 bg-rose-950/20 text-rose-200'
+              : 'border-[#26282C] bg-[#101113] text-[#BDC1C6]'
+          }`}
+        >
           <pre className="whitespace-pre-wrap">{item.output}</pre>
         </div>
       )}
@@ -662,6 +778,8 @@ const StepTimeline: React.FC<{
   isActive: boolean;
   statusLabel?: string;
   onOpenInWorkbench: (item: ToolCallItemData) => void;
+  onInspectChange?: (panelId: string, paused: boolean) => void;
+  onCollapseReset?: (panelId: string) => void;
 }> = ({
   thought,
   thoughtElapsedMs,
@@ -671,9 +789,44 @@ const StepTimeline: React.FC<{
   isActive,
   statusLabel,
   onOpenInWorkbench,
+  onInspectChange,
+  onCollapseReset,
 }) => {
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyContentRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  const isPinnedRef = useRef(true);
+  const prevScrollTopRef = useRef(0);
+  const isProgrammaticScrollRef = useRef(false);
+  const programmaticRafRef = useRef<number | null>(null);
+  const prevIsActiveRef = useRef(isActive);
+  const userExpandedRef = useRef(userExpanded);
+  userExpandedRef.current = userExpanded;
+
+  const pinToBottom = useCallback((el: HTMLDivElement | null) => {
+    if (!el || el.clientHeight === 0) return;
+    isProgrammaticScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    prevScrollTopRef.current = el.scrollTop;
+    if (programmaticRafRef.current !== null) {
+      cancelAnimationFrame(programmaticRafRef.current);
+    }
+    programmaticRafRef.current = requestAnimationFrame(() => {
+      isProgrammaticScrollRef.current = false;
+      programmaticRafRef.current = null;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (programmaticRafRef.current !== null) {
+        cancelAnimationFrame(programmaticRafRef.current);
+      }
+      onInspectChange?.(panelId, false);
+    };
+  }, [onInspectChange, panelId]);
 
   const steps: TimelineStep[] = [];
   if (thought || thoughtStreaming) steps.push({ kind: 'thought', key: 'thought' });
@@ -684,11 +837,70 @@ const StepTimeline: React.FC<{
   // Open live steps while active; collapse to `Worked for Xs ›` once finished unless user opened it.
   const expanded = userExpanded ?? isActive;
 
+  // Reset userExpanded to null ONLY when isActive transitions true -> false
   useEffect(() => {
-    if (expanded && isActive && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    if (prevIsActiveRef.current && !isActive) {
+      setUserExpanded(null);
+      isPinnedRef.current = true;
+      onInspectChange?.(panelId, false);
     }
-  }, [steps.length, expanded, isActive, thought.length]);
+    prevIsActiveRef.current = isActive;
+  }, [isActive, onInspectChange, panelId]);
+
+  // Independent ResizeObserver auto-scroll for Working timeline body while expanded & active
+  useEffect(() => {
+    if (!expanded || !isActive) return;
+    const el = bodyRef.current;
+    const content = bodyContentRef.current;
+    if (!el || !content) return;
+    if (isPinnedRef.current) {
+      pinToBottom(el);
+    }
+    const ro = new ResizeObserver(() => {
+      if (isPinnedRef.current) {
+        pinToBottom(el);
+      }
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [expanded, isActive, pinToBottom]);
+
+  const handleBodyScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el || el.clientHeight === 0) return;
+    const curTop = el.scrollTop;
+    const prevTop = prevScrollTopRef.current;
+    prevScrollTopRef.current = curTop;
+    const distanceFromBottom = el.scrollHeight - curTop - el.clientHeight;
+    const atBottom = distanceFromBottom <= NESTED_PIN_THRESHOLD_PX;
+    const scrolledUp = curTop < prevTop - 1;
+
+    if (scrolledUp && !atBottom) {
+      isPinnedRef.current = false;
+      onInspectChange?.(panelId, true);
+    } else if (isProgrammaticScrollRef.current) {
+      return;
+    } else if (atBottom) {
+      isPinnedRef.current = true;
+      if (userExpandedRef.current !== true) {
+        onInspectChange?.(panelId, false);
+      }
+    } else {
+      isPinnedRef.current = false;
+    }
+  }, [onInspectChange, panelId]);
+
+  const handleToggle = () => {
+    const nextExpanded = !expanded;
+    setUserExpanded(nextExpanded);
+    isPinnedRef.current = true;
+    if (nextExpanded) {
+      onInspectChange?.(panelId, true);
+      requestAnimationFrame(() => pinToBottom(bodyRef.current));
+    } else {
+      onCollapseReset?.(panelId);
+    }
+  };
 
   if (steps.length === 0 && !isActive) return null;
 
@@ -725,7 +937,7 @@ const StepTimeline: React.FC<{
     <div className="my-1">
       <button
         type="button"
-        onClick={() => setUserExpanded(!expanded)}
+        onClick={handleToggle}
         disabled={steps.length === 0 && !isActive}
         className="inline-flex items-center gap-1.5 py-0.5 text-[13.5px] text-[#8E8E93] hover:text-[#E8EAED] transition-colors cursor-pointer select-none disabled:cursor-default"
       >
@@ -741,33 +953,41 @@ const StepTimeline: React.FC<{
       </button>
 
       {expanded && (steps.length > 0 || isActive) && (
-        <div ref={bodyRef} className="mt-1 space-y-0.5 max-h-96 overflow-y-auto">
-          {steps.map((s) => {
-            if (s.kind === 'thought') {
+        <div
+          ref={bodyRef}
+          onScroll={handleBodyScroll}
+          className="mt-1 max-h-96 overflow-y-auto overscroll-contain"
+        >
+          <div ref={bodyContentRef} className="space-y-0.5">
+            {steps.map((s) => {
+              if (s.kind === 'thought') {
+                return (
+                  <ThoughtAccordion
+                    key={s.key}
+                    thought={thought}
+                    elapsedMs={thoughtElapsedMs}
+                    tokenCount={thoughtTokens}
+                    isStreaming={thoughtStreaming}
+                    defaultOpen={false}
+                    onInspectChange={onInspectChange}
+                    onCollapseReset={onCollapseReset}
+                  />
+                );
+              }
               return (
-                <ThoughtAccordion
+                <ToolExecutionRow
                   key={s.key}
-                  thought={thought}
-                  elapsedMs={thoughtElapsedMs}
-                  tokenCount={thoughtTokens}
-                  isStreaming={thoughtStreaming}
-                  defaultOpen={false}
+                  item={s.tool}
+                  onOpenInWorkbench={onOpenInWorkbench}
                 />
               );
-            }
-            return (
-              <ToolExecutionRow
-                key={s.key}
-                item={s.tool}
-                onOpenInWorkbench={onOpenInWorkbench}
-              />
-            );
-          })}
-          {isActive && (
-            <div className="pt-1.5 text-[13.5px] text-[#8E8E93] animate-pulse select-none">
-              Working
-            </div>
-          )}
+            })}
+            {isActive && (
+              <div className="pt-1.5 text-[13.5px] text-[#8E8E93] animate-pulse select-none">
+                Working
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -848,8 +1068,14 @@ function parseSidecarHref(href: string): { id: string; view: string } | null {
 
 function fileUriToPath(href: string): { path: string; startLine?: number; endLine?: number } {
   const [base, hash = ''] = href.split('#');
-  let p = decodeURIComponent(base.replace(/^file:\/\/\/?/i, ''));
-  if (/^[a-zA-Z]:/.test(p) === false && !p.startsWith('/')) p = '/' + p;
+  const isFileUri = /^file:\/\//i.test(base);
+  let p = isFileUri ? base.replace(/^file:\/\/\/?/i, '') : base;
+  try {
+    p = decodeURIComponent(p);
+  } catch {
+    /* keep raw p */
+  }
+  if (isFileUri && /^[a-zA-Z]:/.test(p) === false && !p.startsWith('/')) p = '/' + p;
   if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1);
   const lm = hash.match(/^L(\d+)(?:-L?(\d+))?/i);
   return {
@@ -859,19 +1085,24 @@ function fileUriToPath(href: string): { path: string; startLine?: number; endLin
   };
 }
 
-const CodeBlockWithCopy: React.FC<{ language: string; codeText: string; className?: string }> = ({
-  language,
-  codeText,
-  className,
-}) => {
+const CodeBlockWithCopy: React.FC<{
+  language: string;
+  codeText: string;
+  className?: string;
+  children?: React.ReactNode;
+}> = ({ language, codeText, className, children }) => {
   const [copied, setCopied] = useState(false);
+  const normalizedCode = codeText.replace(/\n$/, '');
+  const isDiff = /^(diff|patch)$/i.test(language);
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(codeText.replace(/\n$/, ''));
+    navigator.clipboard.writeText(normalizedCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
+
   return (
-    <div className="my-4 rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518]">
+    <div className="not-prose my-4 rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518]">
       <div className="px-4 py-1.5 bg-[#1C1D20] border-b border-[#2D2F34] text-[12px] font-mono text-[#9AA0A6] flex items-center justify-between select-none">
         <span className="uppercase tracking-wider text-[11px] text-[#8AB4F8]">{language || 'code'}</span>
         <button
@@ -893,9 +1124,33 @@ const CodeBlockWithCopy: React.FC<{ language: string; codeText: string; classNam
           )}
         </button>
       </div>
-      <pre className="p-4 text-[14.5px] sm:text-[15px] font-mono overflow-x-auto text-[#E8EAED] leading-relaxed">
-        <code className={className}>{codeText}</code>
-      </pre>
+      {isDiff ? (
+        <pre className="py-3 text-[13.5px] sm:text-[14px] font-mono overflow-x-auto leading-relaxed">
+          <code>
+            {normalizedCode.split(/\r?\n/).map((line, i) => {
+              let lineClass = 'text-[#D4D4D8]';
+              if (line.startsWith('+++') || line.startsWith('---')) {
+                lineClass = 'text-[#9AA0A6] font-semibold bg-[#1C1D20]/70';
+              } else if (line.startsWith('@@')) {
+                lineClass = 'text-[#38BDF8] bg-[#38BDF8]/10';
+              } else if (line.startsWith('+')) {
+                lineClass = 'text-[#4ADE80] bg-emerald-500/12 border-l-2 border-emerald-400/70';
+              } else if (line.startsWith('-')) {
+                lineClass = 'text-[#F87171] bg-rose-500/12 border-l-2 border-rose-400/70';
+              }
+              return (
+                <span key={i} className={`block px-4 whitespace-pre ${lineClass}`}>
+                  {line || ' '}
+                </span>
+              );
+            })}
+          </code>
+        </pre>
+      ) : (
+        <pre className="p-4 text-[14.5px] sm:text-[15px] font-mono overflow-x-auto text-[#E8EAED] leading-relaxed">
+          <code className={className}>{children ?? codeText}</code>
+        </pre>
+      )}
     </div>
   );
 };
@@ -908,17 +1163,20 @@ interface AskQuestionItem {
 
 function extractOrchestratorPlan(
   thought: string
-): { plannerName: string; planBody: string } | null {
+): { plannerName: string; executorName: string; planBody: string } | null {
   if (!thought) return null;
   const match = thought.match(
-    /\[([^\]]*Formulating Plan[^\]]*)\]\s*([\s\S]*?)\[Orchestrator Hand-off → Flipping to Gemini 4 Hydrogen for Plan Execution\]/
+    /\[([^\]]*Formulating Plan[^\]]*)\]\s*([\s\S]*?)\[Orchestrator Hand-off → Flipping to ([^\]]+?) for Plan Execution\]/
   );
   if (!match) return null;
   const header = match[1].trim();
   const planBody = match[2].trim();
   if (!planBody) return null;
   const plannerName = header.replace(/•.*$/, '').trim() || 'Orchestrator Planner';
-  return { plannerName, planBody };
+  const rawExecutor = match[3].trim();
+  const executorName =
+    rawExecutor.replace(/^Gemini\s+4\s+/i, '').trim() || rawExecutor || 'Hydrogen';
+  return { plannerName, executorName, planBody };
 }
 
 interface ExtractedMediaItem {
@@ -965,7 +1223,7 @@ function extractMcpImages(
     while ((m = re.exec(text)) !== null) {
       const rel = m[0].replace(/[).,;:!?]+$/, '');
       if (!isValidMediaOutputUrl(rel)) continue;
-      const fullUrl = rel.startsWith('http') ? rel : `${apiBaseUrl}${rel}`;
+      const fullUrl = resolveServerAssetUrl(rel, apiBaseUrl) || rel;
       if (seen.has(fullUrl)) continue;
       seen.add(fullUrl);
       const label = rel.split('/').pop() || 'Generated Media';
@@ -986,9 +1244,17 @@ function extractMcpImages(
 const McpMediaCard: React.FC<{ item: ExtractedMediaItem }> = ({ item }) => {
   const [loadError, setLoadError] = useState(false);
 
+  useEffect(() => {
+    setLoadError(false);
+  }, [item.url]);
+
   return (
     <div className="rounded-xl overflow-hidden border border-[#2D2F34] bg-[#141518] shadow-md group">
-      {item.mediaKind === 'video' ? (
+      {loadError ? (
+        <div className="p-4 text-center text-[11px] text-[#7E828A] bg-[#0c0d0e]">
+          Media preview unavailable ({item.label})
+        </div>
+      ) : item.mediaKind === 'video' ? (
         <video
           controls
           playsInline
@@ -999,10 +1265,6 @@ const McpMediaCard: React.FC<{ item: ExtractedMediaItem }> = ({ item }) => {
         />
       ) : item.mediaKind === 'audio' ? (
         <audio controls src={item.url} onError={() => setLoadError(true)} className="w-full p-3" />
-      ) : loadError ? (
-        <div className="p-4 text-center text-[11px] text-[#7E828A] bg-[#0c0d0e]">
-          Media preview unavailable ({item.label})
-        </div>
       ) : (
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="block">
           <img
@@ -1067,8 +1329,10 @@ function extractAskQuestions(toolCalls: ToolCallItemData[]): AskQuestionItem[] {
 
 const OrchestratorPlanCard: React.FC<{
   plannerName: string;
+  executorName?: string;
   planBody: string;
-}> = ({ plannerName, planBody }) => {
+  apiBaseUrl: string;
+}> = ({ plannerName, executorName = 'Hydrogen', planBody, apiBaseUrl }) => {
   const [open, setOpen] = useState(false);
   return (
     <div className="my-2 rounded-xl border border-indigo-500/30 bg-indigo-950/20 overflow-hidden">
@@ -1083,7 +1347,7 @@ const OrchestratorPlanCard: React.FC<{
             Orchestrator Execution Plan
           </span>
           <span className="px-2 py-0.5 rounded-full text-[10.5px] font-mono bg-indigo-500/15 text-indigo-300 border border-indigo-400/25 shrink-0">
-            {plannerName} → Hydrogen
+            {plannerName} → {executorName}
           </span>
         </div>
         {open ? (
@@ -1093,8 +1357,41 @@ const OrchestratorPlanCard: React.FC<{
         )}
       </button>
       {open && (
-        <div className="px-4 py-3 border-t border-indigo-500/20 text-[13px] text-[#D4D4D8] prose prose-invert max-w-none leading-relaxed max-h-72 overflow-y-auto">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{planBody}</ReactMarkdown>
+        <div className="px-4 py-3 border-t border-indigo-500/20 text-[13px] text-[#D4D4D8] prose prose-invert max-w-none leading-relaxed max-h-72 overflow-y-auto overscroll-contain">
+          <ReactMarkdown
+            remarkPlugins={REMARK_PLUGINS}
+            rehypePlugins={REHYPE_PLUGINS}
+            urlTransform={safeUrlTransform}
+            components={{
+              a({ href, children }) {
+                if (!href) {
+                  return (
+                    <span className="text-[#9AA0A6] underline decoration-dotted" title="Blocked unsafe link">
+                      {children}
+                    </span>
+                  );
+                }
+                return (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="localgravity-link">
+                    {children}
+                  </a>
+                );
+              },
+              img({ src, alt }) {
+                const resolvedSrc = resolveServerAssetUrl(src, apiBaseUrl);
+                if (!resolvedSrc) return null;
+                return (
+                  <img
+                    src={resolvedSrc}
+                    alt={alt || ''}
+                    className="max-w-full rounded-xl border border-[#2D2F34] my-2"
+                  />
+                );
+              },
+            }}
+          >
+            {planBody}
+          </ReactMarkdown>
         </div>
       )}
     </div>
@@ -1201,9 +1498,10 @@ const AskQuestionCard: React.FC<{
 
 const AssistantMarkdownBlock: React.FC<{
   markdown: string;
+  apiBaseUrl: string;
   onOpenFile: (url: string) => void;
   onOpenSidecar: (tab: WorkbenchTab) => void;
-}> = ({ markdown, onOpenFile, onOpenSidecar }) => (
+}> = ({ markdown, apiBaseUrl, onOpenFile, onOpenSidecar }) => (
   <div className="text-[14px] text-[#E8EAED] leading-[1.65] pt-0.5 prose prose-invert max-w-none">
     {splitAgentEmbeds(markdown).map((seg, segIdx) =>
       seg.kind === 'embed' ? (
@@ -1215,8 +1513,9 @@ const AssistantMarkdownBlock: React.FC<{
       ) : !seg.text.trim() ? null : (
         <ReactMarkdown
           key={`md-${segIdx}`}
-          remarkPlugins={[remarkGfm]}
-          urlTransform={(u) => u}
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          urlTransform={safeUrlTransform}
           components={{
             p({ children }) {
               return <p className="my-2.5 leading-[1.65] text-[14px] text-[#E8EAED]">{children}</p>;
@@ -1250,6 +1549,13 @@ const AssistantMarkdownBlock: React.FC<{
             },
             a({ href, children }) {
               const url = href || '';
+              if (!url) {
+                return (
+                  <span className="text-[#9AA0A6] underline decoration-dotted" title="Blocked unsafe link">
+                    {children}
+                  </span>
+                );
+              }
               if (
                 /^file:\/\//i.test(url) ||
                 /^(?:server|client|scripts|tray|skills|tools)\/[^\s)#]+(?:#L\d+(?:-L?\d+)?)?$/i.test(
@@ -1286,10 +1592,22 @@ const AssistantMarkdownBlock: React.FC<{
                   </button>
                 );
               }
+              const resolvedUrl = resolveServerAssetUrl(url, apiBaseUrl) || url;
               return (
-                <a href={url} target="_blank" rel="noopener noreferrer" className="localgravity-link">
+                <a href={resolvedUrl} target="_blank" rel="noopener noreferrer" className="localgravity-link">
                   {children}
                 </a>
+              );
+            },
+            img({ src, alt }) {
+              const resolvedSrc = resolveServerAssetUrl(src, apiBaseUrl);
+              if (!resolvedSrc) return null;
+              return (
+                <img
+                  src={resolvedSrc}
+                  alt={alt || ''}
+                  className="max-w-full rounded-xl border border-[#2D2F34] my-2"
+                />
               );
             },
             blockquote({ children }) {
@@ -1312,16 +1630,36 @@ const AssistantMarkdownBlock: React.FC<{
             td({ children }) {
               return <td className="px-4 py-2.5 border-b border-[#242528] text-[#D4D4D8]">{children}</td>;
             },
-            code({ className, children, ...props }: any) {
-              const match = /language-(\w+)/.exec(className || '');
-              const codeStr = String(children || '');
-              const isBlock = Boolean(match) || codeStr.includes('\n');
+            pre({ node, children }) {
+              const hasCodeChild = node?.children?.some(
+                (c) => c.type === 'element' && c.tagName === 'code'
+              );
+              if (hasCodeChild) return <>{children}</>;
+              return (
+                <pre className="not-prose my-4 p-4 rounded-xl border border-[#2D2F34] bg-[#141518] text-[14.5px] sm:text-[15px] font-mono overflow-x-auto text-[#E8EAED] leading-relaxed">
+                  {children}
+                </pre>
+              );
+            },
+            code({ node, className, children, ...props }) {
+              const match = /language-([^\s]+)/.exec(className || '');
+              const codeStr = extractReactText(children);
+              const isMultiLineNode = Boolean(
+                node?.position && node.position.start.line !== node.position.end.line
+              );
+              const isBlock =
+                Boolean(match) ||
+                /\bhljs\b/.test(className || '') ||
+                codeStr.includes('\n') ||
+                isMultiLineNode;
               return isBlock ? (
                 <CodeBlockWithCopy
                   language={match?.[1] || 'code'}
                   codeText={codeStr}
                   className={className}
-                />
+                >
+                  {children}
+                </CodeBlockWithCopy>
               ) : (
                 <code className="localgravity-code-badge" {...props}>
                   {children}
@@ -1347,6 +1685,7 @@ interface ChatMessageRowProps {
   streamingElapsedMs?: number;
   streamingTokens?: number;
   turnStatusLabel?: string;
+  turnError?: string;
   apiBaseUrl: string;
   artifacts: ArtifactRecord[];
   isCopied: boolean;
@@ -1362,6 +1701,8 @@ interface ChatMessageRowProps {
   onBranchMessage: (msgId: string) => void;
   onRewindMessage: (msgId: string) => void;
   onOpenArtifact: (artifact: ArtifactRecord) => void;
+  onNestedInspectChange?: (panelId: string, paused: boolean) => void;
+  onNestedCollapseReset?: (panelId: string) => void;
 }
 
 const ChatMessageRow = React.memo<ChatMessageRowProps>(({
@@ -1374,6 +1715,7 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
   streamingElapsedMs,
   streamingTokens,
   turnStatusLabel,
+  turnError,
   apiBaseUrl,
   artifacts,
   isCopied,
@@ -1389,6 +1731,8 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
   onBranchMessage,
   onRewindMessage,
   onOpenArtifact,
+  onNestedInspectChange,
+  onNestedCollapseReset,
 }) => {
   if (msg.role === 'user') {
     return (
@@ -1401,19 +1745,22 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
               {msg.attachments
                 ? msg.attachments
                     .filter((a) => a.isImage || (a.type && a.type.startsWith('image/')) || (a.savedPath && /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(a.savedPath)))
-                    .map((att, i) => (
-                      <img
-                        key={i}
-                        src={att.url || att.base64DataUrl}
-                        alt={att.name || 'image'}
-                        className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34] shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => att.url && window.open(att.url, '_blank')}
-                      />
-                    ))
+                    .map((att, i) => {
+                      const resolvedUrl = resolveServerAssetUrl(att.url, apiBaseUrl);
+                      return (
+                        <img
+                          key={i}
+                          src={resolvedUrl || att.base64DataUrl}
+                          alt={att.name || 'image'}
+                          className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34] shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
+                          onClick={() => resolvedUrl && window.open(resolvedUrl, '_blank')}
+                        />
+                      );
+                    })
                 : msg.images?.map((img, i) => (
                     <img
                       key={i}
-                      src={img}
+                      src={resolveServerAssetUrl(img, apiBaseUrl)}
                       alt="attachment"
                       className="w-24 h-24 object-cover rounded-xl border border-[#2D2F34]"
                     />
@@ -1446,6 +1793,53 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
             </div>
           )}
           <div className="whitespace-pre-wrap leading-[1.7]">{msg.content}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.role === 'system') {
+    return (
+      <div className="w-full px-1">
+        <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border border-[#2B2D33] bg-[#141518]/80 text-[#9AA0A6] text-[13px] leading-relaxed">
+          <Info className="w-4 h-4 text-[#8AB4F8] shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1 prose prose-invert max-w-none text-[13px] [&>p]:my-0 [&>p+p]:mt-1.5">
+            <ReactMarkdown
+              remarkPlugins={REMARK_PLUGINS}
+              rehypePlugins={REHYPE_PLUGINS}
+              urlTransform={safeUrlTransform}
+              components={{
+                a({ href, children }) {
+                  if (!href) {
+                    return (
+                      <span className="text-[#9AA0A6] underline decoration-dotted" title="Blocked unsafe link">
+                        {children}
+                      </span>
+                    );
+                  }
+                  const resolved = resolveServerAssetUrl(href, apiBaseUrl) || href;
+                  return (
+                    <a href={resolved} target="_blank" rel="noopener noreferrer" className="localgravity-link">
+                      {children}
+                    </a>
+                  );
+                },
+                img({ src, alt }) {
+                  const resolvedSrc = resolveServerAssetUrl(src, apiBaseUrl);
+                  if (!resolvedSrc) return null;
+                  return (
+                    <img
+                      src={resolvedSrc}
+                      alt={alt || ''}
+                      className="max-w-full rounded-xl border border-[#2D2F34] my-2"
+                    />
+                  );
+                },
+              }}
+            >
+              {msg.content || ''}
+            </ReactMarkdown>
+          </div>
         </div>
       </div>
     );
@@ -1509,9 +1903,12 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
             toolCalls={seg.tools}
             isActive={false}
             onOpenInWorkbench={onOpenInWorkbench}
+            onInspectChange={onNestedInspectChange}
+            onCollapseReset={onNestedCollapseReset}
           />
           <AssistantMarkdownBlock
             markdown={seg.note}
+            apiBaseUrl={apiBaseUrl}
             onOpenFile={onOpenFile}
             onOpenSidecar={onOpenSidecar}
           />
@@ -1528,12 +1925,16 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
         isActive={isCurrentlyGenerating}
         statusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
         onOpenInWorkbench={onOpenInWorkbench}
+        onInspectChange={onNestedInspectChange}
+        onCollapseReset={onNestedCollapseReset}
       />
 
       {orchestratorPlan && (
         <OrchestratorPlanCard
           plannerName={orchestratorPlan.plannerName}
+          executorName={orchestratorPlan.executorName}
           planBody={orchestratorPlan.planBody}
+          apiBaseUrl={apiBaseUrl}
         />
       )}
 
@@ -1557,6 +1958,7 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
         <div className="space-y-3">
           <AssistantMarkdownBlock
             markdown={content}
+            apiBaseUrl={apiBaseUrl}
             onOpenFile={onOpenFile}
             onOpenSidecar={onOpenSidecar}
           />
@@ -1576,6 +1978,16 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(({
                 onOpen={() => onOpenArtifact(a)}
               />
             ))}
+        </div>
+      )}
+
+      {turnError && (
+        <div
+          role="alert"
+          className="my-2 flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border border-rose-500/40 bg-rose-950/30 text-rose-200 text-[13px] leading-relaxed"
+        >
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1 break-words">{turnError}</div>
         </div>
       )}
 
@@ -1672,34 +2084,190 @@ interface ChatFeedProps {
 }
 
 export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
-  const {
-    messages,
-    currentStreamingThought,
-    currentThoughtElapsedMs,
-    currentThoughtTokens,
-    isThinkingFinished,
-    activeModelName,
-    brainProvider,
-    selectedGoogleModel,
-    branchFromMessage,
-    rewindToMessage,
-  } = useSessionStore();
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const workspacePath = useSessionStore((s) => s.workspacePath);
+  const messages = useSessionStore((s) => s.messages);
+  const currentStreamingThought = useSessionStore((s) => s.currentStreamingThought);
+  const currentThoughtElapsedMs = useSessionStore((s) => s.currentThoughtElapsedMs);
+  const currentThoughtTokens = useSessionStore((s) => s.currentThoughtTokens);
+  const isThinkingFinished = useSessionStore((s) => s.isThinkingFinished);
+  const activeModelName = useSessionStore((s) => s.activeModelName);
+  const brainProvider = useSessionStore((s) => s.brainProvider);
+  const selectedGoogleModel = useSessionStore((s) => s.selectedGoogleModel);
+  const branchFromMessage = useSessionStore((s) => s.branchFromMessage);
+  const rewindToMessage = useSessionStore((s) => s.rewindToMessage);
   const activeTurn = useSessionStore((s) => s.activeTurn);
   const turnActive = useSessionStore(selectIsTurnActive);
   const turnStatusLabel = useSessionStore(selectStatusLabel);
-  const { tokensPerSec } = useTelemetryStore();
+  const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
+
+  const tokensPerSec = useTelemetryStore((s) => s.tokensPerSec);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
-  const { setActiveTab, setActiveFile, artifacts, setActiveArtifactId, setActiveArtifactDoc } =
-    useArtifactStore();
-  const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
+  const setActiveTab = useArtifactStore((s) => s.setActiveTab);
+  const setActiveFile = useArtifactStore((s) => s.setActiveFile);
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const setActiveArtifactId = useArtifactStore((s) => s.setActiveArtifactId);
+  const setActiveArtifactDoc = useArtifactStore((s) => s.setActiveArtifactDoc);
+
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isPinnedRef = useRef(true);
+  const outerManualPauseRef = useRef(false);
+  const pausedPanelsRef = useRef<Set<string>>(new Set());
+  const prevScrollTopRef = useRef(0);
+  const isProgrammaticScrollRef = useRef(false);
+  const programmaticRafRef = useRef<number | null>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const pinOuterToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.clientHeight === 0) return;
+    isProgrammaticScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    prevScrollTopRef.current = el.scrollTop;
+    if (programmaticRafRef.current !== null) {
+      cancelAnimationFrame(programmaticRafRef.current);
+    }
+    programmaticRafRef.current = requestAnimationFrame(() => {
+      isProgrammaticScrollRef.current = false;
+      programmaticRafRef.current = null;
+    });
+  }, []);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    return () => {
+      if (programmaticRafRef.current !== null) {
+        cancelAnimationFrame(programmaticRafRef.current);
+      }
+    };
+  }, []);
+
+  const shouldAutoScroll = useCallback(
+    () =>
+      isPinnedRef.current &&
+      !outerManualPauseRef.current &&
+      pausedPanelsRef.current.size === 0,
+    []
+  );
+
+  const syncJumpButton = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.clientHeight === 0) return;
+    const hasOverflow = el.scrollHeight > el.clientHeight + OUTER_PIN_THRESHOLD_PX;
+    const awayFromBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight > OUTER_PIN_THRESHOLD_PX;
+    const paused =
+      outerManualPauseRef.current ||
+      pausedPanelsRef.current.size > 0 ||
+      (hasOverflow && awayFromBottom);
+    setShowJumpToLatest(paused);
+  }, []);
+
+  const handleNestedInspectChange = useCallback(
+    (panelId: string, paused: boolean) => {
+      if (paused) {
+        pausedPanelsRef.current.add(panelId);
+      } else {
+        pausedPanelsRef.current.delete(panelId);
+      }
+      syncJumpButton();
+      if (shouldAutoScroll()) {
+        requestAnimationFrame(() => pinOuterToBottom());
+      }
+    },
+    [pinOuterToBottom, shouldAutoScroll, syncJumpButton]
+  );
+
+  const handleNestedCollapseReset = useCallback(
+    (_panelId: string) => {
+      pausedPanelsRef.current.clear();
+      outerManualPauseRef.current = false;
+      isPinnedRef.current = true;
+      setShowJumpToLatest(false);
+      requestAnimationFrame(() => pinOuterToBottom());
+    },
+    [pinOuterToBottom]
+  );
+
+  const handleJumpToLatest = useCallback(() => {
+    pausedPanelsRef.current.clear();
+    outerManualPauseRef.current = false;
+    isPinnedRef.current = true;
+    setShowJumpToLatest(false);
+    pinOuterToBottom();
+  }, [pinOuterToBottom]);
+
+  const handleFeedScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.clientHeight === 0) return;
+    const curTop = el.scrollTop;
+    const prevTop = prevScrollTopRef.current;
+    prevScrollTopRef.current = curTop;
+    const distanceFromBottom = el.scrollHeight - curTop - el.clientHeight;
+    const atBottom = distanceFromBottom <= OUTER_PIN_THRESHOLD_PX;
+    const scrolledUp = curTop < prevTop - 1;
+
+    if (scrolledUp && !atBottom) {
+      isPinnedRef.current = false;
+      outerManualPauseRef.current = true;
+      setShowJumpToLatest(true);
+    } else if (isProgrammaticScrollRef.current) {
+      return;
+    } else if (atBottom) {
+      isPinnedRef.current = true;
+      outerManualPauseRef.current = false;
+      syncJumpButton();
+    } else {
+      isPinnedRef.current = false;
+      syncJumpButton();
     }
-  }, [messages.length, currentStreamingThought, turnActive, turnStatusLabel]);
+  }, [syncJumpButton]);
+
+  // Observe both outer feed content wrapper and viewport container for streaming/layout resizes
+  useEffect(() => {
+    const container = scrollRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const ro = new ResizeObserver(() => {
+      if (container.clientHeight === 0) return;
+      if (shouldAutoScroll()) {
+        pinOuterToBottom();
+      } else {
+        syncJumpButton();
+      }
+    });
+    ro.observe(content);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [pinOuterToBottom, shouldAutoScroll, syncJumpButton]);
+
+  const latestUserMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].id;
+    }
+    return undefined;
+  }, [messages]);
+
+  const prevSessionIdRef = useRef(sessionId);
+  const prevLatestUserMsgIdRef = useRef(latestUserMsgId);
+
+  // Reset manual pauses and pin to bottom on thread switch or new user prompt submission
+  useEffect(() => {
+    const sessionChanged = prevSessionIdRef.current !== sessionId;
+    const newUserMessage =
+      Boolean(latestUserMsgId) && latestUserMsgId !== prevLatestUserMsgIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    prevLatestUserMsgIdRef.current = latestUserMsgId;
+
+    if (sessionChanged || newUserMessage) {
+      pausedPanelsRef.current.clear();
+      outerManualPauseRef.current = false;
+      isPinnedRef.current = true;
+      setShowJumpToLatest(false);
+      requestAnimationFrame(() => pinOuterToBottom());
+    }
+  }, [sessionId, latestUserMsgId, pinOuterToBottom]);
 
   const lastAssistantIdx = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -1710,40 +2278,76 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
 
   const openFileInEditor = useCallback(
     async (href: string) => {
-      const { path: filePath } = fileUriToPath(href);
-      let content = '';
+      const { path: filePath, startLine, endLine } = fileUriToPath(href);
       try {
-        const res = await fetch(`${apiBaseUrl}/api/workspace/file?path=${encodeURIComponent(filePath)}`);
-        if (res.ok) {
-          const data = await res.json();
-          content = data.content ?? '';
+        const params = new URLSearchParams({ path: filePath });
+        if (workspacePath && workspacePath.trim()) {
+          params.set('root_path', workspacePath);
         }
-      } catch {}
-      setActiveFile(filePath, content);
-      setActiveTab('editor');
-      window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
+        const res = await fetch(`${apiBaseUrl}/api/workspace/file?${params.toString()}`);
+        if (!res.ok) {
+          console.warn(`[ChatFeed] Failed to open file (${res.status}):`, filePath);
+          return;
+        }
+        const data = await res.json();
+        if (typeof data?.content !== 'string') {
+          console.warn('[ChatFeed] Invalid workspace file response:', filePath);
+          return;
+        }
+        setActiveFile(filePath, data.content);
+        setActiveTab('editor');
+        window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
+        if (startLine && startLine > 0) {
+          const revealDetail = { path: filePath, startLine, endLine };
+          try {
+            sessionStorage.setItem(
+              'localgravity:pendingEditorReveal',
+              JSON.stringify(revealDetail)
+            );
+          } catch {}
+          window.dispatchEvent(
+            new CustomEvent('localgravity:reveal-editor-line', { detail: revealDetail })
+          );
+        }
+      } catch (err) {
+        console.warn('[ChatFeed] Error opening file in editor:', filePath, err);
+      }
     },
-    [apiBaseUrl, setActiveFile, setActiveTab]
+    [apiBaseUrl, workspacePath, setActiveFile, setActiveTab]
   );
 
   const handleOpenInWorkbench = useCallback(
     (tc: ToolCallItemData) => {
       const cmd = tc.command.toLowerCase();
-      let parsedPath = '';
-      const tryExtractPath = (rawJson?: string) => {
-        if (!rawJson) return '';
+      const tryExtractFileArgs = (
+        rawJson?: string
+      ): { path: string; startLine?: number; endLine?: number } => {
+        if (!rawJson) return { path: '' };
         try {
           const parsed = JSON.parse(rawJson);
-          return String(parsed?.path || parsed?.Path || parsed?.target || parsed?.Target || '');
+          const path = String(
+            parsed?.path || parsed?.Path || parsed?.target || parsed?.Target || ''
+          );
+          const sRaw = parsed?.start_line ?? parsed?.StartLine;
+          const eRaw = parsed?.end_line ?? parsed?.EndLine;
+          const startLine = sRaw !== undefined ? Number(sRaw) : undefined;
+          const endLine = eRaw !== undefined ? Number(eRaw) : undefined;
+          return {
+            path,
+            startLine: startLine && !Number.isNaN(startLine) ? startLine : undefined,
+            endLine: endLine && !Number.isNaN(endLine) ? endLine : undefined,
+          };
         } catch {
-          return '';
+          return { path: '' };
         }
       };
-      parsedPath = tryExtractPath(tc.argumentsJson);
-      if (!parsedPath && tc.command) {
+
+      let extracted = tryExtractFileArgs(tc.argumentsJson);
+      if (!extracted.path && tc.command) {
         const m = tc.command.match(/^[a-zA-Z0-9_:-]+\(([\s\S]*)\)$/);
-        if (m?.[1]) parsedPath = tryExtractPath(m[1]);
+        if (m?.[1]) extracted = tryExtractFileArgs(m[1]);
       }
+
       const isFileTool =
         cmd.includes('write_file') ||
         cmd.includes('edit_file') ||
@@ -1751,8 +2355,16 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
         cmd.includes('patch_json') ||
         cmd.includes('code_outline') ||
         cmd.includes('read_file');
-      if (parsedPath && isFileTool) {
-        void openFileInEditor(parsedPath);
+      if (extracted.path && isFileTool) {
+        const lineSuffix =
+          extracted.startLine && extracted.startLine > 0
+            ? `#L${extracted.startLine}${
+                extracted.endLine && extracted.endLine >= extracted.startLine
+                  ? `-L${extracted.endLine}`
+                  : ''
+              }`
+            : '';
+        void openFileInEditor(`${extracted.path}${lineSuffix}`);
         return;
       }
       if (isFileTool) {
@@ -1789,6 +2401,14 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
     [rewindToMessage]
   );
 
+  const handleOpenSidecar = useCallback(
+    (tab: WorkbenchTab) => {
+      setActiveTab(tab);
+      window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
+    },
+    [setActiveTab]
+  );
+
   const handleOpenArtifact = useCallback(
     (a: ArtifactRecord) => {
       setActiveArtifactId(a.id);
@@ -1802,16 +2422,29 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
           : a.id
       );
       setActiveTab('plan');
+      window.dispatchEvent(new CustomEvent('localgravity:open-right-drawer'));
     },
     [setActiveArtifactId, setActiveArtifactDoc, setActiveTab]
   );
 
+  const threadArtifacts = useMemo(
+    () => artifacts.filter((a) => !a.threadId || a.threadId === sessionId),
+    [artifacts, sessionId]
+  );
+
+  const matchedTurnMsg = useMemo(
+    () => Boolean(activeTurn?.messageId && messages.some((m) => m.id === activeTurn.messageId)),
+    [activeTurn?.messageId, messages]
+  );
+
   return (
-    <div
-      ref={scrollRef}
-      className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6 bg-[#0c0d0e]"
-    >
-      <div className="max-w-3xl mx-auto space-y-6 px-1 sm:px-4">
+    <div className="relative flex-1 min-h-0 flex flex-col bg-[#0c0d0e]">
+      <div
+        ref={scrollRef}
+        onScroll={handleFeedScroll}
+        className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6 bg-[#0c0d0e]"
+      >
+        <div ref={contentRef} className="max-w-3xl mx-auto space-y-6 px-1 sm:px-4">
         {messages.length === 0 && (
           <div className="min-h-[55vh] flex flex-col items-center justify-center text-center p-6 space-y-5 select-none">
             <div className="w-12 h-12 rounded-2xl bg-[#1A1B1E] border border-[#2D2F34] flex items-center justify-center text-[#9AA0A6] shadow-md">
@@ -1938,8 +2571,8 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
         )}
 
         {messages.map((msg, index) => {
-          const isCurrentTurnMsg = activeTurn?.messageId
-            ? msg.id === activeTurn.messageId
+          const isCurrentTurnMsg = matchedTurnMsg
+            ? msg.id === activeTurn?.messageId
             : index === lastAssistantIdx && msg.role === 'assistant';
           const isCurrentlyGenerating = isCurrentTurnMsg && turnActive;
           const thoughtDone = isCurrentlyGenerating
@@ -1962,25 +2595,49 @@ export const ChatFeed: React.FC<ChatFeedProps> = ({ onQuickSend }) => {
               streamingElapsedMs={isCurrentlyGenerating ? currentThoughtElapsedMs : undefined}
               streamingTokens={isCurrentlyGenerating ? currentThoughtTokens : undefined}
               turnStatusLabel={isCurrentlyGenerating ? turnStatusLabel : undefined}
+              turnError={isCurrentTurnMsg ? activeTurn?.error : undefined}
               apiBaseUrl={apiBaseUrl}
-              artifacts={artifacts}
+              artifacts={threadArtifacts}
               isCopied={copiedMsgId === msg.id}
               brainProvider={brainProvider}
               selectedGoogleModel={selectedGoogleModel}
               activeModelName={activeModelName}
               liveTokensPerSec={isCurrentlyGenerating ? tokensPerSec : 0}
               onOpenFile={openFileInEditor}
-              onOpenSidecar={setActiveTab}
+              onOpenSidecar={handleOpenSidecar}
               onOpenInWorkbench={handleOpenInWorkbench}
               onQuickSend={onQuickSend}
               onCopyMessage={handleCopyMessage}
               onBranchMessage={handleBranchMessage}
               onRewindMessage={handleRewindMessage}
               onOpenArtifact={handleOpenArtifact}
+              onNestedInspectChange={handleNestedInspectChange}
+              onNestedCollapseReset={handleNestedCollapseReset}
             />
           );
         })}
+
+        {lastAssistantIdx === -1 && activeTurn?.error && (
+          <div
+            role="alert"
+            className="my-2 flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border border-rose-500/40 bg-rose-950/30 text-rose-200 text-[13px] leading-relaxed"
+          >
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1 break-words">{activeTurn.error}</div>
+          </div>
+        )}
+        </div>
       </div>
+
+      {showJumpToLatest && (
+        <button
+          type="button"
+          onClick={handleJumpToLatest}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#1C1D20]/95 hover:bg-[#26282D] border border-[#3C4043] text-[#E8EAED] text-[12px] font-medium shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+        >
+          <span>↓ Jump to latest</span>
+        </button>
+      )}
     </div>
   );
 };

@@ -543,24 +543,27 @@ export class LocalGravityDB {
   }
 
   public deleteThread(id: string): void {
+    this.streamManager.discardForThread(id);
     this.db.prepare('DELETE FROM threads WHERE id = ?').run(id);
   }
 
   public clearThreadMessages(threadId: string): void {
+    this.streamManager.discardForThread(threadId);
     this.db.prepare('DELETE FROM messages WHERE thread_id = ?').run(threadId);
     this.updateThread(threadId, { status: 'idle' });
   }
 
   public compactThreadMessages(threadId: string, keepRecentCount = 4, summaryContent = ''): number {
     const msgs = this.db
-      .prepare('SELECT id, role, content FROM messages WHERE thread_id = ? ORDER BY created_at ASC')
-      .all(threadId) as Array<{ id: string; role: string; content: string }>;
+      .prepare('SELECT id, role, content, created_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC')
+      .all(threadId) as Array<{ id: string; role: string; content: string; created_at: string }>;
 
     if (msgs.length <= keepRecentCount) {
       return 0;
     }
 
     const toPrune = msgs.slice(0, msgs.length - keepRecentCount);
+    const kept = msgs.slice(msgs.length - keepRecentCount);
     const pruneIds = toPrune.map((m) => m.id);
 
     const tx = this.db.transaction(() => {
@@ -571,7 +574,10 @@ export class LocalGravityDB {
         delMsg.run(id);
       }
       if (summaryContent) {
-        const now = new Date(Date.now() - 60000).toISOString();
+        const summaryCreatedAt =
+          kept.length > 0
+            ? new Date(Math.max(0, Date.parse(kept[0].created_at) - 1)).toISOString()
+            : new Date().toISOString();
         this.db
           .prepare(
             `INSERT INTO messages (
@@ -579,7 +585,7 @@ export class LocalGravityDB {
               thinking_tokens, output_tokens, attachments, created_at
             ) VALUES (?, ?, 'system', ?, '', 0, 0, 0, '[]', ?)`
           )
-          .run(crypto.randomUUID(), threadId, summaryContent, now);
+          .run(crypto.randomUUID(), threadId, summaryContent, summaryCreatedAt);
       }
     });
     tx();
@@ -709,7 +715,6 @@ export class LocalGravityDB {
       throw new Error(`Message ${messageId} not found in thread ${threadId}`);
     }
 
-    const targetCreatedAt = orderedMsgs[targetIdx].created_at;
     const pruneMsgs = orderedMsgs.slice(targetIdx + 1);
     const pruneIds = pruneMsgs.map((m) => m.id);
     const pruneIdSet = new Set(pruneIds);
@@ -717,19 +722,19 @@ export class LocalGravityDB {
     const revertedFiles: string[] = [];
     const cpsToDelete: string[] = [];
 
-    if (pruneIds.length > 0 || revertFiles) {
+    if (pruneIds.length > 0) {
       const allCps = this.db
         .prepare('SELECT * FROM file_checkpoints WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC')
         .all(threadId) as FileCheckpointRecord[];
 
       for (const cp of allCps) {
-        if (pruneIdSet.has(cp.message_id) || cp.created_at > targetCreatedAt) {
-          cpsToDelete.push(cp.id);
+        if (pruneIdSet.has(cp.message_id)) {
           if (revertFiles) {
             try {
               const res = this.revertFileCheckpoint(cp.id);
               if (res.reverted) {
                 revertedFiles.push(res.filePath);
+                cpsToDelete.push(cp.id);
               }
             } catch (err) {
               console.warn(`[DB] Failed to revert checkpoint ${cp.id}:`, err);
@@ -769,7 +774,7 @@ export class LocalGravityDB {
   // ==================== MESSAGES ====================
   public listMessages(threadId: string): Array<MessageRecord & { tool_executions: ToolExecutionRecord[] }> {
     const msgs = this.db
-      .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC')
+      .prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC')
       .all(threadId) as MessageRecord[];
 
     const tools = this.db
@@ -884,6 +889,10 @@ export class LocalGravityDB {
     this.streamManager.finalize(messageId);
   }
 
+  public discardStreamsForThread(threadId: string): void {
+    this.streamManager.discardForThread(threadId);
+  }
+
   public getActiveStreamsForThread(threadId: string): InFlightStreamBuffer[] {
     return this.streamManager.getActiveForThread(threadId);
   }
@@ -977,7 +986,7 @@ export class LocalGravityDB {
          SET status = 'error',
              exit_code = COALESCE(exit_code, 1),
              stdout_stream = COALESCE(stdout_stream, ''),
-             stderr_stream = COALESCE(stderr_stream, 'Interrupted or finalized before completion')
+             stderr_stream = CASE WHEN stderr_stream IS NULL OR stderr_stream = '' THEN 'Interrupted or finalized before completion' ELSE stderr_stream END
          WHERE message_id = ? AND status = 'running'`
       )
       .run(messageId);
@@ -1002,13 +1011,23 @@ export class LocalGravityDB {
     const id = input.id || crypto.randomUUID();
     const record: FileCheckpointRecord = {
       id,
-      thread_id: input.thread_id,
-      message_id: input.message_id,
+      thread_id: input.thread_id || '',
+      message_id: input.message_id || '',
       file_path: input.file_path.replace(/\\/g, '/'),
       previous_content_blob: input.previous_content_blob,
       new_content_blob: input.new_content_blob,
       created_at: new Date().toISOString(),
     };
+
+    if (!input.thread_id || !input.message_id) {
+      return record;
+    }
+    const msgExists = this.db
+      .prepare('SELECT 1 FROM messages WHERE id = ? AND thread_id = ?')
+      .get(input.message_id, input.thread_id);
+    if (!msgExists) {
+      return record;
+    }
 
     this.db
       .prepare(
@@ -1025,7 +1044,7 @@ export class LocalGravityDB {
 
   public listFileCheckpoints(threadId: string): FileCheckpointRecord[] {
     return this.db
-      .prepare('SELECT * FROM file_checkpoints WHERE thread_id = ? ORDER BY created_at DESC')
+      .prepare('SELECT * FROM file_checkpoints WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC')
       .all(threadId) as FileCheckpointRecord[];
   }
 
@@ -1069,35 +1088,62 @@ export class LocalGravityDB {
     messages: MessageRecord[];
     checkpoints: FileCheckpointRecord[];
   } {
-    const cp = this.getFileCheckpoint(checkpointId);
+    const cp = this.db
+      .prepare('SELECT rowid, * FROM file_checkpoints WHERE id = ?')
+      .get(checkpointId) as (FileCheckpointRecord & { rowid: number }) | undefined;
     if (!cp) {
       throw new Error(`Checkpoint ${checkpointId} not found`);
     }
 
+    const revertedCheckpointIds: string[] = [];
+
     // Roll back any newer checkpoints on this thread in reverse chronological order first
     const newerCheckpoints = this.db
-      .prepare('SELECT id FROM file_checkpoints WHERE thread_id = ? AND created_at > ? ORDER BY created_at DESC')
-      .all(cp.thread_id, cp.created_at) as Array<{ id: string }>;
+      .prepare(
+        'SELECT id FROM file_checkpoints WHERE thread_id = ? AND (created_at > ? OR (created_at = ? AND rowid > ?)) ORDER BY created_at DESC, rowid DESC'
+      )
+      .all(cp.thread_id, cp.created_at, cp.created_at, cp.rowid) as Array<{ id: string }>;
     for (const newer of newerCheckpoints) {
-      this.revertFileCheckpoint(newer.id);
+      const res = this.revertFileCheckpoint(newer.id);
+      if (res.reverted) {
+        revertedCheckpointIds.push(newer.id);
+      }
     }
 
     // Revert the selected checkpoint itself
-    this.revertFileCheckpoint(checkpointId);
+    const targetRes = this.revertFileCheckpoint(checkpointId);
+    if (targetRes.reverted) {
+      revertedCheckpointIds.push(checkpointId);
+    }
 
-    // Delete this checkpoint and all subsequent checkpoints on the thread
-    this.db
-      .prepare('DELETE FROM file_checkpoints WHERE thread_id = ? AND created_at >= ?')
-      .run(cp.thread_id, cp.created_at);
-
-    // Delete messages created after this checkpoint's turn message (or timestamp)
     const msgRow = cp.message_id
-      ? (this.db.prepare('SELECT created_at FROM messages WHERE id = ?').get(cp.message_id) as { created_at: string } | undefined)
+      ? (this.db
+          .prepare('SELECT rowid, created_at FROM messages WHERE id = ?')
+          .get(cp.message_id) as { rowid: number; created_at: string } | undefined)
       : undefined;
-    const cutoff = msgRow?.created_at || cp.created_at;
-    this.db
-      .prepare('DELETE FROM messages WHERE thread_id = ? AND created_at > ?')
-      .run(cp.thread_id, cutoff);
+
+    const tx = this.db.transaction(() => {
+      const delCp = this.db.prepare('DELETE FROM file_checkpoints WHERE id = ?');
+      for (const id of revertedCheckpointIds) {
+        delCp.run(id);
+      }
+
+      if (msgRow) {
+        this.db
+          .prepare(
+            'DELETE FROM messages WHERE thread_id = ? AND (created_at > ? OR (created_at = ? AND rowid > ?))'
+          )
+          .run(cp.thread_id, msgRow.created_at, msgRow.created_at, msgRow.rowid);
+      } else {
+        this.db
+          .prepare('DELETE FROM messages WHERE thread_id = ? AND created_at > ?')
+          .run(cp.thread_id, cp.created_at);
+      }
+      this.db
+        .prepare("UPDATE threads SET status = 'idle', updated_at = ? WHERE id = ?")
+        .run(new Date().toISOString(), cp.thread_id);
+    });
+    tx();
 
     return {
       reverted: true,

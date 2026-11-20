@@ -76,6 +76,21 @@ function isAbortLikeError(err: any): boolean {
   );
 }
 
+export function formatToolExecutionOutput(stdout: string, stderr: string, exitCode: number): string {
+  const out = (stdout || '').trim();
+  const err = (stderr || '').trim();
+  let combined = '';
+  if (out && err) {
+    combined = `${out}\n[stderr]\n${err}`;
+  } else {
+    combined = out || err || 'Success (no output)';
+  }
+  if (exitCode !== 0 && !combined.includes(`[exit_code: ${exitCode}]`)) {
+    combined = combined ? `${combined}\n[exit_code: ${exitCode}]` : `[exit_code: ${exitCode}]`;
+  }
+  return combined;
+}
+
 export function createPromptTurnHandler(deps: PromptTurnDeps) {
   const { db, tabby, mcp, skills, tools, harness, attachmentManager, broadcastSync, activeAbortControllers, activeTurns, repoRoot } = deps;
 
@@ -232,8 +247,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   .join('\n')
               : ''),
         }));
-        const cRes = autoCompactMessages(mockMsgs, 100, 4);
-        const prunedCount = db.compactThreadMessages(thread.id, 6, cRes.summary);
+        const cRes = autoCompactMessages(mockMsgs, 42000, 4, { forceCompact: true, pruneBudgetChars: 42000 });
+        const prunedCount = db.compactThreadMessages(thread.id, 6, cRes.distilledMemory || cRes.summary);
         const summaryNote =
           `✅ **Context Compacted (/compact)**\n\n` +
           `Compacted **${msgCount}** historical messages in thread **${thread.title}** (${cRes.previousTokens} → ${cRes.compactedTokens} est. tokens, pruned ${prunedCount} older turns into Working Memory).\n` +
@@ -363,6 +378,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       const MAX_TOOL_STEPS = slashInfo.maxToolSteps;
       const MAX_AUTO_CONTINUES = slashInfo.maxAutoContinues;
       let step = 0;
+      let totalStep = 0;
       let autoContinueCount = 0;
       let cumulativeOutputTokens = 0;
       let cumulativeThinkingTokens = 0;
@@ -415,14 +431,19 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         return await tabby.streamChatCompletion(infParams);
       };
 
+      const compactThreshold =
+        brainProviderCfg.provider === 'google_ai_studio' ? 140000 : 42000;
+
       while (step < MAX_TOOL_STEPS) {
         step++;
-        turnStep = step;
+        totalStep++;
+        turnStep = totalStep;
         const isLastWindow = stepWindowCount + 1 >= MAX_STEP_WINDOWS;
         const isFinalStep = isLastWindow && step === MAX_TOOL_STEPS;
         phaseEmitter.setStepState(step, MAX_TOOL_STEPS, false);
 
         let stepThinkingClosed = false;
+        let streamedTokensThisStep = false;
         const closeThinking = () => {
           if (stepThinkingClosed) return;
           stepThinkingClosed = true;
@@ -443,10 +464,68 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           id: string;
           toolName: string;
           arguments: any;
+          rawArguments?: string;
           output: string;
           screenshotBase64?: string;
           hadError?: boolean;
         }> = [];
+        const recordedParseErrorKeys = new Set<string>();
+
+        const recordMalformedToolCall = (info: {
+          toolName: string;
+          rawArguments: string;
+          error: string;
+          callId?: string;
+        }) => {
+          const toolName = (info.toolName || 'unknown_tool').trim();
+          const rawArgs = String(info.rawArguments || '');
+          const dedupeKey = `${info.callId || ''}:${toolName}:${rawArgs}`;
+          if (recordedParseErrorKeys.has(dedupeKey)) return;
+          recordedParseErrorKeys.add(dedupeKey);
+
+          closeThinking();
+          hasExecutedTools = true;
+          usedToolsInTurn.add(toolName);
+          const errMsg = `Malformed tool call arguments for "${toolName}": ${info.error}. Raw arguments: ${rawArgs.slice(0, 400)}. Please re-invoke "${toolName}" with valid JSON arguments.`;
+          const toolExec = db.createToolExecution({
+            message_id: assistantMsg.id,
+            thread_id: thread!.id,
+            tool_name: toolName,
+            mcp_server: toolName.startsWith('mcp_') ? 'mcp' : null,
+            arguments_json: rawArgs || '{}',
+          });
+          db.updateToolExecution(toolExec.id, {
+            stdout_stream: '',
+            stderr_stream: errMsg,
+            exit_code: 1,
+            status: 'error',
+            duration_ms: 0,
+          });
+          send({
+            type: 'TOOL_EVENT',
+            payload: {
+              session_id: thread!.id,
+              thread_id: thread!.id,
+              message_id: assistantMsg.id,
+              tool_execution_id: toolExec.id,
+              tool_name: toolName,
+              command: `${toolName}(${rawArgs.slice(0, 120)})`,
+              arguments: {},
+              output: `${errMsg}\n[exit_code: 1]`,
+              exit_code: 1,
+              duration_ms: 0,
+              status: 'error',
+            },
+          });
+          executedToolsThisStep.push({
+            id: info.callId || toolExec.id,
+            toolName,
+            arguments: {},
+            rawArguments: rawArgs || '{}',
+            output: `${errMsg}\n[exit_code: 1]`,
+            hadError: true,
+          });
+        };
 
         const includeSwarmBoardTools =
           slashInfo.command === '/swarm' || SwarmManager.getInstance().hasActiveSwarm(thread.id);
@@ -457,6 +536,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               slashCommand: slashInfo.command,
               forceLean: slashInfo.command === '/lean',
               forceComfyStudio: isComfyStudioTurn,
+              includeSwarmBoardTools,
               builtinTools: BUILTIN_TOOLS_SCHEMA,
               skillTools: SKILL_TOOLS_SCHEMA,
               mcpTools: mcp.exportOpenAiTools(),
@@ -478,14 +558,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           brainProviderCfg.provider !== 'google_ai_studio' &&
           isStrataOrchestratorTier(params.tier);
         const orchestratorStep = isLocalOrchestrator
-          ? computeOrchestratorStepConfig(params.tier, step, lastStepHadToolError)
+          ? computeOrchestratorStepConfig(params.tier, totalStep, lastStepHadToolError)
           : null;
-        const adaptiveCot = computeAdaptiveThinkingConfig(effectiveThinkingBudget, step);
+        const adaptiveCot = computeAdaptiveThinkingConfig(effectiveThinkingBudget, totalStep);
         send({
           type: 'ADAPTIVE_COT_STATE',
           payload: {
             threadId: thread!.id,
-            stepIndex: step,
+            stepIndex: totalStep,
             budget: effectiveThinkingBudget,
             reasoningEffort: orchestratorStep ? orchestratorStep.reasoningEffort : adaptiveCot.reasoningEffort,
             reasoningBudgetTokens: orchestratorStep
@@ -507,15 +587,13 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             session_id: thread!.id,
             thread_id: thread!.id,
             message_id: assistantMsg.id,
-            chunk: step > 1 ? `\n\n[Step ${step} (${adaptiveCot.modeLabel})]: ` : '',
+            chunk: totalStep > 1 ? `\n\n[Step ${totalStep} (${adaptiveCot.modeLabel})]: ` : '',
             elapsed_ms: Date.now() - turnStartMs,
             token_count: cumulativeThinkingTokens,
             is_finished: false,
           },
         });
 
-        const compactThreshold =
-          brainProviderCfg.provider === 'google_ai_studio' && params.tier === 'high' ? 140000 : 42000;
         const compactRes = autoCompactMessages(chatMessages, compactThreshold, 6);
         if (compactRes.didCompact) {
           chatMessages.splice(0, chatMessages.length, ...compactRes.messages);
@@ -534,12 +612,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
 
         emitPhase(
           'prefilling',
-          step === 1 ? 'Processing prompt...' : `Evaluating tool outputs (Step ${step}/${MAX_TOOL_STEPS})...`
+          totalStep === 1 ? 'Processing prompt...' : `Evaluating tool outputs (Step ${step}/${MAX_TOOL_STEPS})...`
         );
         const result = await runInferenceStep({
           tier: params.tier,
           thinkingBudget: effectiveThinkingBudget,
-          stepIndex: step,
+          stepIndex: totalStep,
           hadToolError: lastStepHadToolError,
           messages: compactRes.messages,
           tools: activeTools,
@@ -572,6 +650,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           },
           onTokenDelta: (delta, _tokenCount, measuredTokPerSec) => {
             closeThinking();
+            if (delta) streamedTokensThisStep = true;
             if (isFinalStep && hasExecutedTools) emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
             else emitPhase('streaming_prose', 'Writing response...');
             cumulativeOutputTokens += Math.max(1, Math.ceil(delta.length / 4));
@@ -593,6 +672,11 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               },
             });
           },
+          onToolCallParseError: isFinalStep
+            ? undefined
+            : (info) => {
+                recordMalformedToolCall(info);
+              },
           onToolCallRequest: isFinalStep
             ? undefined
             : async (toolName, toolArgs) => {
@@ -635,9 +719,9 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                       role: slashInfo.subagentRole,
                       command: slashInfo.command || 'autonomous',
                       status: 'running',
-                      step,
+                      step: totalStep,
                       maxSteps: MAX_TOOL_STEPS,
-                      summary: `Step ${step}: ${toolName}(${toolArgs.path || toolArgs.command || toolArgs.url || ''})`.slice(0, 90),
+                      summary: `Step ${totalStep}: ${toolName}(${toolArgs.path || toolArgs.command || toolArgs.url || ''})`.slice(0, 90),
                       timestamp: Date.now(),
                     },
                   });
@@ -688,26 +772,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                     },
                   });
 
-                  const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
-                    workspaceRoot: project.root_path,
-                    toolName,
-                    command: cmdFormatted,
-                    exitCode: execResult.exitCode,
-                    stdout: execResult.stdout,
-                    stderr: execResult.stderr,
-                  });
-
-                  if (ppcCycle) {
-                    send({
-                      type: 'HARNESS_PPC_COMPLETED',
-                      payload: {
-                        cycle: ppcCycle,
-                        components: harness.listHarnessComponents(project.root_path),
-                      },
-                    });
-                  }
-
                   const finalStatus = execResult.exitCode === 0 ? 'success' : 'error';
+                  const formattedOutput = formatToolExecutionOutput(
+                    execResult.stdout,
+                    execResult.stderr,
+                    execResult.exitCode
+                  );
                   db.updateToolExecution(toolExec.id, {
                     stdout_stream: execResult.stdout,
                     stderr_stream: execResult.stderr,
@@ -726,7 +796,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                       tool_name: toolName,
                       command: cmdFormatted,
                       arguments: toolArgs,
-                      output: execResult.stdout || execResult.stderr,
+                      output: formattedOutput,
                       exit_code: execResult.exitCode,
                       duration_ms: execResult.durationMs,
                       status: finalStatus,
@@ -738,10 +808,33 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                     id: toolExec.id,
                     toolName,
                     arguments: toolArgs,
-                    output: execResult.stdout || execResult.stderr || 'Success (no output)',
+                    output: formattedOutput,
                     screenshotBase64: execResult.screenshotBase64,
                     hadError: finalStatus === 'error',
                   });
+
+                  try {
+                    const ppcCycle = await harness.recordToolOutcomeAndMaybeRunPPC({
+                      workspaceRoot: project.root_path,
+                      toolName,
+                      command: cmdFormatted,
+                      exitCode: execResult.exitCode,
+                      stdout: execResult.stdout,
+                      stderr: execResult.stderr,
+                    });
+
+                    if (ppcCycle) {
+                      send({
+                        type: 'HARNESS_PPC_COMPLETED',
+                        payload: {
+                          cycle: ppcCycle,
+                          components: harness.listHarnessComponents(project.root_path),
+                        },
+                      });
+                    }
+                  } catch {
+                    // Non-fatal PPC recording
+                  }
                 } catch (toolErr: any) {
                   const errStr = toolErr?.message || String(toolErr);
                   db.updateToolExecution(toolExec.id, {
@@ -761,7 +854,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                       tool_name: toolName,
                       command: cmdFormatted,
                       arguments: toolArgs,
-                      output: `Tool execution failed: ${errStr}`,
+                      output: `Tool execution failed: ${errStr}\n[exit_code: 1]`,
                       exit_code: 1,
                       duration_ms: 0,
                       status: 'error',
@@ -771,12 +864,18 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                     id: toolExec.id,
                     toolName,
                     arguments: toolArgs,
-                    output: `Tool error: ${errStr}`,
+                    output: `Tool error: ${errStr}\n[exit_code: 1]`,
                     hadError: true,
                   });
                 }
               },
         });
+
+        if (!isFinalStep && Array.isArray(result.malformedToolCalls) && result.malformedToolCalls.length > 0) {
+          for (const malformed of result.malformedToolCalls) {
+            recordMalformedToolCall(malformed);
+          }
+        }
 
         if (abortController.signal.aborted) {
           break;
@@ -792,7 +891,8 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               autoContinueCount,
               MAX_AUTO_CONTINUES,
               promptStr,
-              Array.from(usedToolsInTurn)
+              Array.from(usedToolsInTurn),
+              { slashCommand: slashInfo.command, finishReason: result.finishReason }
             );
             if (autoCheck.shouldContinue) {
               autoContinueCount++;
@@ -822,7 +922,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                     role: slashInfo.subagentRole,
                     command: slashInfo.command || 'autonomous',
                     status: 'running',
-                    step,
+                    step: totalStep,
                     maxSteps: MAX_TOOL_STEPS,
                     summary: `Auto-continuing (#${autoContinueCount}): ${(stepText || 'proceeding to next action').slice(0, 75)}`,
                     timestamp: Date.now(),
@@ -848,21 +948,25 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           break;
         }
 
-        if (stepText) {
-          collectedStepNotes.push(stepText);
+        if (stepText || streamedTokensThisStep) {
+          if (stepText) {
+            collectedStepNotes.push(stepText);
+          }
           db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
-          send({
-            type: 'STEP_NOTE_COMMITTED',
-            payload: {
-              session_id: thread.id,
-              thread_id: thread.id,
-              message_id: assistantMsg.id,
-              step,
-              note: stepText,
-              committed_content: committedFinalContent,
-              is_auto_continue: false,
-            },
-          });
+          if (stepText) {
+            send({
+              type: 'STEP_NOTE_COMMITTED',
+              payload: {
+                session_id: thread.id,
+                thread_id: thread.id,
+                message_id: assistantMsg.id,
+                step,
+                note: stepText,
+                committed_content: committedFinalContent,
+                is_auto_continue: false,
+              },
+            });
+          }
         }
 
         lastStepHadToolError = executedToolsThisStep.some((t) => Boolean(t.hadError));
@@ -872,7 +976,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           consecutiveErrorSteps = 0;
         }
         const currentSig = executedToolsThisStep
-          .map((t) => `${t.toolName}:${JSON.stringify(t.arguments)}`)
+          .map((t) => `${t.toolName}:${t.rawArguments ?? JSON.stringify(t.arguments)}`)
           .join('|');
         if (currentSig && currentSig === lastToolSignature) {
           repeatedSignatureCount++;
@@ -888,7 +992,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           type: 'function',
           function: {
             name: t.toolName,
-            arguments: JSON.stringify(t.arguments),
+            arguments: t.rawArguments ?? JSON.stringify(t.arguments),
           },
         }));
 
@@ -898,6 +1002,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           tool_calls: toolCallsArray,
         });
 
+        // Push all role: 'tool' messages contiguously FIRST
         for (const t of executedToolsThisStep) {
           chatMessages.push({
             role: 'tool',
@@ -905,6 +1010,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             name: t.toolName,
             content: t.output,
           });
+        }
+
+        // Only push screenshot role: 'user' messages AFTER all role: 'tool' messages
+        for (const t of executedToolsThisStep) {
           if (t.screenshotBase64) {
             chatMessages.push({
               role: 'user',
@@ -922,14 +1031,26 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
           }
         }
 
+        // Stuck-loop detection evaluated on EVERY step
+        if (consecutiveErrorSteps >= 4 || repeatedSignatureCount >= 4) {
+          hitStuckLoop = true;
+          break;
+        }
+        if (consecutiveErrorSteps >= 2 || repeatedSignatureCount >= 2) {
+          chatMessages.push({
+            role: 'user',
+            content:
+              `[System Recovery Hint]: The last ${Math.max(consecutiveErrorSteps, repeatedSignatureCount)} tool attempts repeated the same call or failed with errors. Do NOT repeat the exact same failing call; inspect the error output and adjust your arguments or strategy.`,
+          });
+        }
+
         if (!abortController.signal.aborted && step >= MAX_TOOL_STEPS) {
-          if (consecutiveErrorSteps >= 4 || repeatedSignatureCount >= 4) {
-            hitStuckLoop = true;
-            break;
-          }
           if (!isLastWindow) {
             stepWindowCount++;
-            const windowCompact = autoCompactMessages(chatMessages, 100, 6);
+            const windowCompact = autoCompactMessages(chatMessages, compactThreshold, 6, {
+              forceCompact: true,
+              pruneBudgetChars: compactThreshold,
+            });
             if (windowCompact.didCompact) {
               chatMessages.splice(0, chatMessages.length, ...windowCompact.messages);
               send({
@@ -976,7 +1097,7 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
             session_id: thread.id,
             thread_id: thread.id,
             message_id: assistantMsg.id,
-            step,
+            step: totalStep,
             note: limitNotice.trim(),
             committed_content: finalText,
             is_auto_continue: false,
@@ -1021,13 +1142,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
       }
 
       if (!committedFinalContent.trim()) {
-        const substantialNote = [...collectedStepNotes].reverse().find((n) => n.trim().length >= 40);
-        let fallbackText = substantialNote || '';
-
-        if (!fallbackText && hasExecutedTools && !abortController.signal.aborted) {
+        if (hasExecutedTools && !abortController.signal.aborted) {
           emitPhase('synthesizing_final_prose', 'Synthesizing final response...');
           try {
-            const synthMessages = [
+            const rawSynthMessages = [
               ...chatMessages,
               {
                 role: 'user',
@@ -1035,11 +1153,12 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
                   'Please summarize the results and provide your complete, clear final answer for the user based on the tool outputs above. Do not call any tools.',
               },
             ];
+            const compactedSynth = autoCompactMessages(rawSynthMessages, compactThreshold, 6);
             const synthResult = await runInferenceStep({
               tier: params.tier,
               thinkingBudget: effectiveThinkingBudget,
-              stepIndex: step + 1,
-              messages: synthMessages,
+              stepIndex: totalStep + 1,
+              messages: compactedSynth.messages,
               tools: undefined,
               abortSignal: abortController.signal,
               onThoughtDelta: () => {},
@@ -1073,12 +1192,14 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
         }
 
         if (!committedFinalContent.trim()) {
+          const substantialNote = [...collectedStepNotes].reverse().find((n) => n.trim().length >= 40);
+          let fallbackText = substantialNote || '';
           if (!fallbackText && collectedStepNotes.length > 0) {
             fallbackText = collectedStepNotes[collectedStepNotes.length - 1];
           }
           committedFinalContent =
             fallbackText ||
-            `Completed all actions across ${step} autonomous step${step === 1 ? '' : 's'}.`;
+            `Completed all actions across ${totalStep} autonomous step${totalStep === 1 ? '' : 's'}.`;
           cumulativeOutputTokens += Math.max(1, Math.ceil(committedFinalContent.length / 4));
           db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
           send({
@@ -1093,11 +1214,10 @@ export function createPromptTurnHandler(deps: PromptTurnDeps) {
               is_finished: false,
             },
           });
-        } else {
-          db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
         }
       }
 
+      db.resetStreamingMessageContent(assistantMsg.id, committedFinalContent);
       db.finalizeRunningToolExecutions(assistantMsg.id);
       db.finalizeStreamingMessage(assistantMsg.id);
       const updatedThread = db.updateThread(thread.id, { status: 'idle' });

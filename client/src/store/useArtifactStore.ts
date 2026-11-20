@@ -4,6 +4,7 @@ export interface TaskItem {
   id: string;
   text: string;
   completed: boolean;
+  inProgress?: boolean;
   category?: string;
 }
 
@@ -103,19 +104,22 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
   let currentCategory = 'General';
 
   lines.forEach((line, index) => {
-    const headerMatch = line.match(/^#{1,3}\s+(.+)$/);
+    const headerMatch = line.match(/^\s*#{1,3}\s+(.+)$/);
     if (headerMatch) {
       currentCategory = headerMatch[1].trim();
       return;
     }
 
-    const taskMatch = line.match(/^[-*]\s+\[([ xX/])\]\s+(.+)$/);
+    const taskMatch = line.match(/^(\s*[-*]\s+\[)([ xX/])(\]\s+)(.+)$/);
     if (taskMatch) {
-      const isChecked = taskMatch[1].toLowerCase() === 'x';
+      const mark = taskMatch[2].toLowerCase();
+      const isChecked = mark === 'x';
+      const isInProgress = mark === '/';
       items.push({
         id: `task-${index}`,
-        text: taskMatch[2].trim(),
+        text: taskMatch[4].trim(),
         completed: isChecked,
+        inProgress: isInProgress,
         category: currentCategory,
       });
     }
@@ -125,27 +129,8 @@ function parseTasksFromMarkdown(md: string): TaskItem[] {
 }
 
 const initialTaskMd = '';
-
-const initialPlanMd = `# LocalGravity 2.0 (LocalGravity Clone Architecture)
-
-> [!IMPORTANT]
-> **Main Inference Engine:** Strata (\`http://127.0.0.1:8080\`) running **Qwen 3.8 Flash-Next** (\`qwen3.8-flash-next-iq3_s\`, 64k context, \`--vision\` multimodal active).
-
-## System Architecture
-- **Central Brain**: Fastify Headless Core on port \`3390\` + WebSocket Multiplexer (\`/ws/sync\`, \`/ws/terminal\`)
-- **Primary Model**: **Qwen 3.8 Flash-Next High** (Strata IQ3_S Sparse MoE + Vision Tower + Speculative Decoding \`--spec 6\`)
-- **Persistence**: SQLite WAL Hierarchy (\`Projects -> Threads -> Messages -> Tool Executions -> File Checkpoints\`)
-- **19 Workstation Tools**: Full filesystem, AST symbol search, Git workflow, PowerShell terminal, Playwright browser, Windows screen capture, and \`inspect_models\` self-diagnostics.`;
-
-const initialWalkthroughMd = `# Verification & Walkthrough (walkthrough.md)
-
-> [!TIP]
-> All verification artifacts, live screenshots, and end-to-end test results are tracked here.
-
-## Verified Capabilities
-1. **Strata + Qwen 3.8 Flash-Next Vision**: Confirmed \`"images": true\` on \`http://127.0.0.1:8080/v1/models\` and round-trip RGB image recognition.
-2. **Instant Stop Button**: Halts token generation immediately across WebSocket, \`promptTurn.ts\`, and Strata \`fetch\` stream.
-3. **19 Autonomous Tools**: \`inspect_models\` allows the agent to self-diagnose and test vision without guessing.`;
+const initialPlanMd = '';
+const initialWalkthroughMd = '';
 
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
   activeTab: 'none',
@@ -174,7 +159,28 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       parsedTasks: parseTasksFromMarkdown(md),
     }),
   toggleTask: (taskId) => {
-    const { parsedTasks } = get();
+    const { taskMarkdown, parsedTasks } = get();
+    const lineIdxMatch = taskId.match(/^task-(\d+)$/);
+    if (lineIdxMatch && taskMarkdown) {
+      const lineIdx = Number(lineIdxMatch[1]);
+      const lines = taskMarkdown.split('\n');
+      if (lineIdx >= 0 && lineIdx < lines.length) {
+        const line = lines[lineIdx];
+        const taskMatch = line.match(/^(\s*[-*]\s+\[)([ xX/])(\]\s+.*)$/);
+        if (taskMatch) {
+          const wasChecked = taskMatch[2].toLowerCase() === 'x';
+          const nextMark = wasChecked ? ' ' : 'x';
+          lines[lineIdx] = `${taskMatch[1]}${nextMark}${taskMatch[3]}`;
+          const newMd = lines.join('\n');
+          set({
+            taskMarkdown: newMd,
+            parsedTasks: parseTasksFromMarkdown(newMd),
+          });
+          return newMd;
+        }
+      }
+    }
+
     const updated = parsedTasks.map((t) =>
       t.id === taskId ? { ...t, completed: !t.completed } : t
     );

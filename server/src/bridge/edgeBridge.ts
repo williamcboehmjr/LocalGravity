@@ -13,6 +13,7 @@ export interface EdgeClientInfo {
 }
 
 interface PendingRequest {
+  clientId: string;
   resolve: (result: BuiltinToolResult) => void;
   timeout: NodeJS.Timeout;
   startedAt: number;
@@ -67,15 +68,30 @@ export class EdgeBridgeManager {
     return record;
   }
 
-  public unregisterSocket(socket: WebSocket): void {
+  public unregisterSocket(socket: WebSocket): boolean {
     const clientId = this.socketToClientId.get(socket);
-    if (!clientId) return;
+    if (!clientId) return false;
     this.socketToClientId.delete(socket);
+    let removed = false;
     const current = this.clients.get(clientId);
     if (current && current.socket === socket) {
       this.clients.delete(clientId);
+      removed = true;
       console.log(`[EdgeBridge] Disconnected client "${clientId}" (${current.hostname})`);
     }
+    for (const [reqId, entry] of this.pending.entries()) {
+      if (entry.clientId === clientId) {
+        clearTimeout(entry.timeout);
+        this.pending.delete(reqId);
+        entry.resolve({
+          stdout: '',
+          stderr: `Remote host (${current?.hostname || clientId}) disconnected before tool completion.`,
+          exitCode: 1,
+          durationMs: Date.now() - entry.startedAt,
+        });
+      }
+    }
+    return removed;
   }
 
   public bindThread(threadId: string, clientId?: string): void {
@@ -195,6 +211,7 @@ export class EdgeBridgeManager {
       }, timeoutMs);
 
       this.pending.set(requestId, {
+        clientId: client.clientId,
         startedAt,
         timeout,
         resolve: (res) => {

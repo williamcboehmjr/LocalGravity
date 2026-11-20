@@ -23,6 +23,8 @@ export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTaskInfo>();
   private processes = new Map<string, ChildProcess>();
   private timers = new Map<string, NodeJS.Timeout>();
+  private throttleTimers = new Map<string, NodeJS.Timeout>();
+  private lastEmitAt = new Map<string, number>();
   private listeners = new Set<TaskEventListener>();
   private seq = 1;
 
@@ -43,6 +45,36 @@ export class BackgroundTaskManager {
       try {
         listener({ type, payload });
       } catch {}
+    }
+  }
+
+  private clearThrottle(taskId: string) {
+    const t = this.throttleTimers.get(taskId);
+    if (t) {
+      clearTimeout(t);
+      this.throttleTimers.delete(taskId);
+    }
+  }
+
+  private emitTaskUpdatedThrottled(task: BackgroundTaskInfo) {
+    const now = Date.now();
+    const last = this.lastEmitAt.get(task.taskId) || 0;
+    const elapsed = now - last;
+    if (elapsed >= 200) {
+      this.clearThrottle(task.taskId);
+      this.lastEmitAt.set(task.taskId, now);
+      this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
+      return;
+    }
+    if (!this.throttleTimers.has(task.taskId)) {
+      const waitMs = Math.max(10, 200 - elapsed);
+      const timer = setTimeout(() => {
+        this.throttleTimers.delete(task.taskId);
+        this.lastEmitAt.set(task.taskId, Date.now());
+        this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
+      }, waitMs);
+      timer.unref?.();
+      this.throttleTimers.set(task.taskId, timer);
     }
   }
 
@@ -90,15 +122,16 @@ export class BackgroundTaskManager {
 
     child.stdout?.on('data', (chunk) => {
       this.appendLog(task, chunk.toString());
-      this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
+      this.emitTaskUpdatedThrottled(task);
     });
 
     child.stderr?.on('data', (chunk) => {
       this.appendLog(task, `[stderr] ${chunk.toString()}`);
-      this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
+      this.emitTaskUpdatedThrottled(task);
     });
 
     child.on('close', (code) => {
+      this.clearThrottle(taskId);
       this.processes.delete(taskId);
       if (task.status === 'cancelled') return;
       task.exitCode = code ?? 0;
@@ -108,6 +141,7 @@ export class BackgroundTaskManager {
     });
 
     child.on('error', (err) => {
+      this.clearThrottle(taskId);
       this.processes.delete(taskId);
       this.appendLog(task, `[error] ${err.message}`);
       task.exitCode = 1;
@@ -116,6 +150,7 @@ export class BackgroundTaskManager {
       this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
     });
 
+    this.lastEmitAt.set(taskId, Date.now());
     this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
     return { ...task };
   }
@@ -172,9 +207,25 @@ export class BackgroundTaskManager {
   }
 
   public listTasks(): BackgroundTaskInfo[] {
-    return Array.from(this.tasks.values())
-      .slice(-25)
-      .map((t) => ({ ...t, recentLogs: [...t.recentLogs] }));
+    const all = Array.from(this.tasks.values());
+    const running = all.filter((t) => t.status === 'running');
+    const recent = all.slice(-25);
+    const seen = new Set<string>();
+    const combined: BackgroundTaskInfo[] = [];
+
+    for (const t of running) {
+      if (!seen.has(t.taskId)) {
+        seen.add(t.taskId);
+        combined.push({ ...t, recentLogs: [...t.recentLogs] });
+      }
+    }
+    for (const t of recent) {
+      if (!seen.has(t.taskId)) {
+        seen.add(t.taskId);
+        combined.push({ ...t, recentLogs: [...t.recentLogs] });
+      }
+    }
+    return combined;
   }
 
   public getTask(taskId: string): BackgroundTaskInfo | null {
@@ -182,15 +233,28 @@ export class BackgroundTaskManager {
     return t ? { ...t, recentLogs: [...t.recentLogs] } : null;
   }
 
+  private terminateProcess(proc: ChildProcess): void {
+    try {
+      if (process.platform === 'win32' && proc.pid) {
+        spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+      } else {
+        proc.kill();
+      }
+    } catch {}
+  }
+
   public killTask(taskId: string): boolean {
     const task = this.tasks.get(taskId);
-    if (!task) return false;
+    if (!task || task.status !== 'running') return false;
+
+    this.clearThrottle(taskId);
 
     const proc = this.processes.get(taskId);
     if (proc) {
-      try {
-        proc.kill();
-      } catch {}
+      this.terminateProcess(proc);
       this.processes.delete(taskId);
     }
 
@@ -205,6 +269,33 @@ export class BackgroundTaskManager {
     task.recentLogs.push('Task cancelled by user/agent.');
     this.emit('BACKGROUND_TASK_UPDATED', { task: { ...task }, allTasks: this.listTasks() });
     return true;
+  }
+
+  public disposeAll(): void {
+    for (const timer of this.throttleTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.throttleTimers.clear();
+
+    for (const [taskId, proc] of this.processes.entries()) {
+      this.terminateProcess(proc);
+      this.processes.delete(taskId);
+      const task = this.tasks.get(taskId);
+      if (task && task.status === 'running') {
+        task.status = 'cancelled';
+        task.completedAt = Date.now();
+      }
+    }
+
+    for (const [taskId, timer] of this.timers.entries()) {
+      clearTimeout(timer);
+      this.timers.delete(taskId);
+      const task = this.tasks.get(taskId);
+      if (task && task.status === 'running') {
+        task.status = 'cancelled';
+        task.completedAt = Date.now();
+      }
+    }
   }
 
   public sendInputToTask(taskId: string, input: string): boolean {

@@ -7,10 +7,23 @@ export interface PrunableMessage {
 const BASE64_DATA_URL_REGEX = /data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g;
 
 /**
- * Measures text-only character length of a message's content, stripping inline base64
- * payloads and ignoring non-text multimodal parts (e.g., image_url).
+ * Measures character length of a message's content or a full message object,
+ * stripping raw inline base64 payloads while accounting for image_url parts (~2000 chars each)
+ * and serialized tool_calls JSON length when a full message object is passed.
  */
-export function measureMessageTextLength(content: any): number {
+export function measureMessageTextLength(contentOrMessage: any): number {
+  if (
+    contentOrMessage &&
+    typeof contentOrMessage === 'object' &&
+    !Array.isArray(contentOrMessage) &&
+    ('role' in contentOrMessage || 'content' in contentOrMessage || 'tool_calls' in contentOrMessage)
+  ) {
+    return measureMessageLength(contentOrMessage);
+  }
+  return measureContentLengthOnly(contentOrMessage, false);
+}
+
+function measureContentLengthOnly(content: any, countImageCost: boolean): number {
   if (typeof content === 'string') {
     return content.replace(BASE64_DATA_URL_REGEX, '').length;
   }
@@ -19,12 +32,30 @@ export function measureMessageTextLength(content: any): number {
     for (const part of content) {
       if (part && part.type === 'text' && typeof part.text === 'string') {
         len += part.text.replace(BASE64_DATA_URL_REGEX, '').length;
+      } else if (countImageCost && part && part.type === 'image_url') {
+        len += 2000;
       }
     }
     return len;
   }
   if (content == null) return 0;
   return String(content).replace(BASE64_DATA_URL_REGEX, '').length;
+}
+
+export function measureMessageLength(m: PrunableMessage | any): number {
+  if (!m || typeof m !== 'object') {
+    return measureContentLengthOnly(m, false);
+  }
+  if (Array.isArray(m)) {
+    return measureContentLengthOnly(m, true);
+  }
+  let total = measureContentLengthOnly(m.content, true);
+  if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+    try {
+      total += JSON.stringify(m.tool_calls).replace(BASE64_DATA_URL_REGEX, '').length;
+    } catch {}
+  }
+  return total;
 }
 
 export function extractMessageText(content: any): string {
@@ -65,7 +96,7 @@ export function pruneChatMessages(
   // Protect the most recent step's tool outputs (last 4 messages) so the model ALWAYS sees the full output of tools it just called!
   const recentProtectedBoundary = Math.max(1, pruned.length - 4);
 
-  let total = pruned.reduce((acc, m) => acc + measureMessageTextLength(m.content), 0);
+  let total = pruned.reduce((acc, m) => acc + measureMessageLength(m), 0);
   if (total <= maxTotalChars) return pruned;
 
   // Stage 1: Compact older historical tool outputs (from 2+ steps ago)
@@ -117,11 +148,17 @@ export function pruneChatMessages(
     const target = pruned[idx];
     if (!target) return;
     const dropped = pruned.splice(idx, 1)[0];
-    total -= measureMessageTextLength(dropped.content);
+    total -= measureMessageLength(dropped);
     if (target.role === 'assistant' && Array.isArray(target.tool_calls) && target.tool_calls.length > 0) {
       while (idx < pruned.length && pruned[idx].role === 'tool') {
         const droppedTool = pruned.splice(idx, 1)[0];
-        total -= measureMessageTextLength(droppedTool.content);
+        total -= measureMessageLength(droppedTool);
+      }
+    } else if (target.role === 'user') {
+      // Never leave an orphaned tool message at idx after dropping a user message
+      while (idx < pruned.length && pruned[idx].role === 'tool') {
+        const droppedTool = pruned.splice(idx, 1)[0];
+        total -= measureMessageLength(droppedTool);
       }
     }
   };
@@ -129,12 +166,23 @@ export function pruneChatMessages(
   while (pruned.length > 3 && total > maxTotalChars) {
     const item = pruned[1];
     const userCount = pruned.filter((m) => m.role === 'user').length;
-    if (item.role === 'user' && userCount <= 1) {
-      // Do NOT drop the sole remaining user message!
+    if (item.role === 'user' && (userCount <= 1 || item.content?.toString?.().startsWith?.('[CONTEXT AUTO-COMPACTED'))) {
+      // Do NOT drop the sole remaining user message or the distilled working memory block!
       // Instead, look for older completed assistant+tool groups ahead to drop as an atomic unit.
       let droppedSomething = false;
-      for (let j = 2; j < pruned.length - 2; j++) {
+      for (let j = 2; j < pruned.length - 1; j++) {
         if (pruned[j].role === 'assistant') {
+          const isToolCallGroup = Array.isArray(pruned[j].tool_calls) && pruned[j].tool_calls.length > 0;
+          let groupEnd = j + 1;
+          if (isToolCallGroup) {
+            while (groupEnd < pruned.length && pruned[groupEnd].role === 'tool') {
+              groupEnd++;
+            }
+          }
+          // Protect the most recent assistant+tool group when there are no earlier assistant+tool groups
+          if (j === 2 && groupEnd >= pruned.length - 1) {
+            break;
+          }
           dropGroupAt(j);
           droppedSomething = true;
           break;

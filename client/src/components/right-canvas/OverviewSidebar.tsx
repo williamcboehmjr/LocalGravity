@@ -34,8 +34,14 @@ export const OverviewSidebar: React.FC<OverviewSidebarProps> = ({ onCloseDrawer 
     setActiveArtifactId,
     setActiveArtifactDoc,
   } = useArtifactStore();
-  const subagentTasks = useSessionStore((s) => s.subagentTasks);
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const allSubagentTasks = useSessionStore((s) => s.subagentTasks);
+  const setSelectedSubagentId = useSessionStore((s) => s.setSelectedSubagentId);
   const backgroundTasks = useSessionStore((s) => s.backgroundTasks);
+
+  const subagentTasks = allSubagentTasks.filter(
+    (s) => !s.thread_id || s.thread_id === sessionId
+  );
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [subagentsExpanded, setSubagentsExpanded] = useState(false);
@@ -196,7 +202,10 @@ export const OverviewSidebar: React.FC<OverviewSidebarProps> = ({ onCloseDrawer 
                   <button
                     key={sub.id}
                     type="button"
-                    onClick={() => setActiveTab('subagents')}
+                    onClick={() => {
+                      setSelectedSubagentId(sub.id);
+                      setActiveTab('subagents');
+                    }}
                     className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#202227] transition-colors cursor-pointer"
                   >
                     <span className="flex items-center gap-2 min-w-0">
@@ -245,7 +254,7 @@ export const OverviewSidebar: React.FC<OverviewSidebarProps> = ({ onCloseDrawer 
                   <button
                     key={task.taskId}
                     type="button"
-                    onClick={() => setActiveTab('harness')}
+                    onClick={() => setActiveTab('subagents')}
                     className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-[#202227] transition-colors cursor-pointer"
                   >
                     <span className="text-[12.5px] text-[#D4D4D8] truncate">{task.title}</span>

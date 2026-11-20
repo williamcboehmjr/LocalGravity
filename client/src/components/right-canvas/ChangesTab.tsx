@@ -7,6 +7,26 @@ const MonacoDiffViewer = React.lazy(() =>
   import('../center-canvas/MonacoDiffViewer').then((m) => ({ default: m.MonacoDiffViewer }))
 );
 
+function detectLanguageFromPath(filePath: string): string {
+  const lower = (filePath || '').toLowerCase();
+  if (lower.endsWith('.ts') || lower.endsWith('.tsx') || lower.endsWith('.mts') || lower.endsWith('.cts'))
+    return 'typescript';
+  if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.mjs') || lower.endsWith('.cjs'))
+    return 'javascript';
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.md')) return 'markdown';
+  if (lower.endsWith('.css') || lower.endsWith('.scss')) return 'css';
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
+  if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
+  if (lower.endsWith('.rs')) return 'rust';
+  if (lower.endsWith('.go')) return 'go';
+  if (lower.endsWith('.sh') || lower.endsWith('.bash') || lower.endsWith('.ps1')) return 'shell';
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.toml') || lower.endsWith('.ini')) return 'ini';
+  return 'plaintext';
+}
+
 /** Review / Files Changed tab using checkpoints + inline MonacoDiffViewer + 1-click revert. */
 export const ChangesTab: React.FC = () => {
   const { checkpoints, setCheckpoints, activeCheckpoint, setActiveCheckpoint } = useArtifactStore();
@@ -36,12 +56,20 @@ export const ChangesTab: React.FC = () => {
 
   const handleRewindAll = async (cp: FileCheckpointItem, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    const name = cp.file_path.split(/[/\\]/).pop() || cp.file_path;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(
+        `Rewind thread and revert "${name}" plus all newer file checkpoints and messages? This action cannot be undone.`
+      )
+    ) {
+      return;
+    }
     setRevertingId(cp.id);
     try {
       const res = await fetch(`${apiBaseUrl}/api/checkpoints/${cp.id}/rewind`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        const name = cp.file_path.split(/[/\\]/).pop() || cp.file_path;
         setNotice(`Rewound files & chat to ${name}`);
         if (Array.isArray(data.checkpoints)) {
           setCheckpoints(data.checkpoints);
@@ -83,8 +111,8 @@ export const ChangesTab: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          <div className="space-y-1.5">
+        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 space-y-3">
+          <div className="space-y-1.5 shrink-0 max-h-48 overflow-y-auto">
             {checkpoints.map((cp) => {
               const fileName = cp.file_path.split(/[/\\]/).pop() || cp.file_path;
               const isSelected = selected?.id === cp.id;
@@ -139,6 +167,7 @@ export const ChangesTab: React.FC = () => {
               <MonacoDiffViewer
                 originalContent={selected.previous_content_blob ?? ''}
                 modifiedContent={selected.new_content_blob}
+                language={detectLanguageFromPath(selected.file_path)}
                 filePath={selected.file_path}
                 onReject={() => handleRevert(selected)}
               />

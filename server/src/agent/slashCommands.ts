@@ -111,7 +111,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         cleanPrompt: body || 'Restart LocalGravity Central Brain and reload runtime state.',
         modeDirective:
           '=== SLASH COMMAND ACTIVE: /restart (SUPERVISED SELF-RESTART) ===\n' +
-          'The user requested a self-restart. Acknowledge that you are signaling the Windows Taskbar Supervisor to recycle the server and reconnect.',
+          'The user requested a self-restart. Immediately call the `restart_brain` tool to signal the Windows Taskbar Supervisor to recycle the server and reconnect.',
         maxToolSteps: 5,
         maxAutoContinues: 0,
         subagentRole: 'System Supervisor',
@@ -119,10 +119,10 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
     case 'browser':
       return {
         command: '/browser',
-        cleanPrompt: body || 'Use headless Playwright browser automation to inspect or research the target.',
+        cleanPrompt: body || 'Use browser inspection automation to inspect or research the target.',
         modeDirective:
-          '=== SLASH COMMAND ACTIVE: /browser (PLAYWRIGHT WEB AUTOMATION AGENT) ===\n' +
-          'Immediately use the `browse_url` tool (Playwright headless browser) to navigate to the URL or search target, extract the live DOM text, and synthesize the findings.',
+          '=== SLASH COMMAND ACTIVE: /browser (WEB INSPECTION AGENT) ===\n' +
+          'Immediately use the `browser_inspect` tool to navigate to the URL or search target, extract the live DOM text, and synthesize the findings.',
         maxToolSteps: 25,
         maxAutoContinues: 2,
         subagentRole: 'Browser Agent',
@@ -133,7 +133,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         cleanPrompt: body || 'Persist the key lessons and architectural rules from our session into Harness² memory.',
         modeDirective:
           '=== SLASH COMMAND ACTIVE: /learn (PERSIST TO HARNESS² MEMORY) ===\n' +
-          'Read `.localgravity/harness/memory.md` (or `skills.md`), distill the user\'s instruction or lesson into a clear, permanent engineering rule, write the updated file back to disk using `write_file`, and confirm what was learned.',
+          'Read `.localgravity/harness/memory.md` (or `.localgravity/harness/skills/<name>.md`), distill the user\'s instruction or lesson into a clear, permanent engineering rule, write the updated file back to disk using `write_file`, and confirm what was learned.',
         maxToolSteps: 20,
         maxAutoContinues: 2,
         subagentRole: 'Harness² Learner',
@@ -144,7 +144,7 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
         cleanPrompt: body || 'Design and configure a scheduled background automation task.',
         modeDirective:
           '=== SLASH COMMAND ACTIVE: /schedule (BACKGROUND AUTOMATION DESIGNER) ===\n' +
-          'Design a scheduled automation workflow for the user\'s request, specifying the cron schedule, execution command, and persistence in `.localgravity/harness/scripts.md`.',
+          'Use the `schedule` tool to set countdown timers or design a scheduled automation workflow for the user\'s request, specifying the cron schedule, execution command, and persistence in `.localgravity/harness/scripts.md`.',
         maxToolSteps: 20,
         maxAutoContinues: 2,
         subagentRole: 'Automation Scheduler',
@@ -152,10 +152,10 @@ export function parseAntigravitySlashCommand(rawPrompt: string): SlashCommandPar
     case 'vision':
       return {
         command: '/vision',
-        cleanPrompt: body || 'Verify Strata Qwen 3.8 Flash-Next multimodal vision pipeline and inspect the current desktop screen.',
+        cleanPrompt: body || 'Verify the active multimodal vision pipeline and inspect the current desktop screen.',
         modeDirective:
-          '=== SLASH COMMAND ACTIVE: /vision (STRATA MULTIMODAL VISION & SCREEN INSPECTOR) ===\n' +
-          'Call `inspect_models` with `{"action": "test_vision"}` or `capture_screen` to inspect the live visual state using Qwen 3.8 Flash-Next Vision on Strata port 8080, and report the exact visual findings.',
+          '=== SLASH COMMAND ACTIVE: /vision (MULTIMODAL VISION & SCREEN INSPECTOR) ===\n' +
+          'Call `capture_screen`, `inspect_window`, or `inspect_models` with `{"action": "test_vision"}` to inspect the live visual state using the active brain provider (Google AI Studio Gemini multimodal vision or local Strata Qwen 3.8 Flash-Next Vision on port 8080), and report the exact visual findings.',
         maxToolSteps: 15,
         maxAutoContinues: 1,
         subagentRole: 'Vision Specialist',

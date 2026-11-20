@@ -49,7 +49,6 @@ export const SessionList: React.FC<SessionListProps> = ({
     sessionId,
     switchSession,
     createNewProject,
-    deleteSession,
     renameSession,
     isGenerating,
     workspacePath,
@@ -235,12 +234,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={async (e) => {
+                  onClick={(e) => {
                     e.stopPropagation();
-                    try {
-                      await fetch(`${apiBaseUrl}/api/threads/${s.id}`, { method: 'DELETE' });
-                    } catch {}
-                    deleteSession(s.id);
                     onDeleteThread?.(s.id);
                   }}
                   className="p-0.5 rounded hover:bg-[#323236] text-[#8E8E93] hover:text-rose-400"

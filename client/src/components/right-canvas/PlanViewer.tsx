@@ -33,12 +33,14 @@ export const PlanViewer: React.FC<PlanViewerProps> = ({ onProceedPlan, onSyncArt
     artifacts,
     activeArtifactId,
     setActiveArtifactId,
+    upsertArtifact,
     clearArtifactFeedback,
   } = useArtifactStore();
   const apiBaseUrl = useSessionStore((s) => s.apiBaseUrl);
 
   const [isEditing, setIsEditing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
 
   const htmlArtifacts = artifacts.filter((a) => a.type === 'html');
   const selectedHtmlArtifact: ArtifactRecord | undefined = htmlArtifacts.find(
@@ -49,6 +51,7 @@ export const PlanViewer: React.FC<PlanViewerProps> = ({ onProceedPlan, onSyncArt
   const activeRecord: ArtifactRecord | undefined = selectedHtmlArtifact
     ? selectedHtmlArtifact
     : artifacts.find((a) => {
+        if (activeArtifactId && a.id === activeArtifactId) return true;
         if (activeArtifactDoc === 'plan.md') return a.type === 'plan';
         if (activeArtifactDoc === 'walkthrough.md') return a.type === 'walkthrough';
         if (activeArtifactDoc === 'task.md') return a.type === 'task';
@@ -57,16 +60,26 @@ export const PlanViewer: React.FC<PlanViewerProps> = ({ onProceedPlan, onSyncArt
 
   const activeContent = selectedHtmlArtifact
     ? selectedHtmlArtifact.content
+    : activeRecord?.content &&
+      activeArtifactDoc !== 'plan.md' &&
+      activeArtifactDoc !== 'walkthrough.md' &&
+      activeArtifactDoc !== 'task.md'
+    ? activeRecord.content
     : activeArtifactDoc === 'plan.md'
-    ? planMarkdown
+    ? planMarkdown || activeRecord?.content || ''
     : activeArtifactDoc === 'walkthrough.md'
-    ? walkthroughMarkdown
-    : taskMarkdown;
+    ? walkthroughMarkdown || activeRecord?.content || ''
+    : activeArtifactDoc === 'task.md'
+    ? taskMarkdown || activeRecord?.content || ''
+    : activeRecord?.content ?? taskMarkdown;
 
   const handleContentChange = (val: string) => {
     if (activeArtifactDoc === 'plan.md') setPlanMarkdown(val);
     else if (activeArtifactDoc === 'walkthrough.md') setWalkthroughMarkdown(val);
     else if (activeArtifactDoc === 'task.md') setTaskMarkdown(val);
+    if (activeRecord) {
+      upsertArtifact({ ...activeRecord, content: val, updatedAt: Date.now() });
+    }
     onSyncArtifact?.(activeArtifactDoc, val);
   };
 
@@ -87,7 +100,33 @@ export const PlanViewer: React.FC<PlanViewerProps> = ({ onProceedPlan, onSyncArt
         });
       } catch {}
     }
-    onProceedPlan?.('Approved. Proceed with executing the implementation plan step-by-step.');
+    const extra = feedbackText.trim();
+    setFeedbackText('');
+    onProceedPlan?.(
+      extra
+        ? `Approved with notes: ${extra}\n\nProceed with executing the implementation plan step-by-step.`
+        : 'Approved. Proceed with executing the implementation plan step-by-step.'
+    );
+  };
+
+  const handleRequestChanges = async () => {
+    const notes = feedbackText.trim();
+    if (activeRecord?.id) {
+      clearArtifactFeedback(activeRecord.id);
+      try {
+        await fetch(`${apiBaseUrl}/api/artifacts/${encodeURIComponent(activeRecord.id)}/feedback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: false, feedback: notes }),
+        });
+      } catch {}
+    }
+    setFeedbackText('');
+    onProceedPlan?.(
+      notes
+        ? `Please update the implementation plan with these requested changes before proceeding:\n${notes}`
+        : 'Please revise the implementation plan and request review again before executing.'
+    );
   };
 
   const showProceedBanner = Boolean(activeRecord?.requestFeedback && onProceedPlan);
@@ -209,21 +248,44 @@ export const PlanViewer: React.FC<PlanViewerProps> = ({ onProceedPlan, onSyncArt
 
       {/* RequestFeedback Approval Banner — shown ONLY when artifact.requestFeedback === true */}
       {showProceedBanner && (
-        <div className="px-3.5 py-2.5 bg-[#18191D] border-b border-[#25272C] flex items-center justify-between gap-2 shrink-0 select-none">
-          <div className="flex items-center gap-2 min-w-0">
-            <Sparkles className="w-3.5 h-3.5 text-[#8AB4F8] shrink-0" />
-            <span className="text-[11.5px] text-[#C4C7C5] truncate">
-              Review requested: approve to proceed with execution
-            </span>
+        <div className="px-3.5 py-2.5 bg-[#18191D] border-b border-[#25272C] space-y-2 shrink-0 select-none">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="w-3.5 h-3.5 text-[#8AB4F8] shrink-0" />
+              <span className="text-[11.5px] text-[#C4C7C5] truncate">
+                Review requested: approve or request changes
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleRequestChanges}
+                className="px-2.5 py-1 rounded-lg bg-[#242529] hover:bg-[#2E3036] border border-[#34363C] text-[#E8EAED] font-medium text-[11.5px] transition-colors cursor-pointer shrink-0"
+              >
+                Request Changes
+              </button>
+              <button
+                type="button"
+                onClick={handleProceed}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#8AB4F8] hover:bg-[#A8C7FA] text-[#101114] font-semibold text-[11.5px] transition-colors shadow-xs cursor-pointer shrink-0"
+              >
+                <Play className="w-3 h-3 fill-current" />
+                <span>Proceed</span>
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleProceed}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#8AB4F8] hover:bg-[#A8C7FA] text-[#101114] font-semibold text-[11.5px] transition-colors shadow-xs cursor-pointer shrink-0"
-          >
-            <Play className="w-3 h-3 fill-current" />
-            <span>Proceed</span>
-          </button>
+          <input
+            type="text"
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && feedbackText.trim()) {
+                handleRequestChanges();
+              }
+            }}
+            placeholder="Optional feedback or change requests..."
+            className="w-full bg-[#101114] border border-[#2C2D32] focus:border-[#8AB4F8] rounded-lg px-2.5 py-1 text-[11.5px] text-[#E8EAED] placeholder:text-[#6E6E73] outline-none"
+          />
         </div>
       )}
 

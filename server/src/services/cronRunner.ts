@@ -36,6 +36,7 @@ export function startAutomationCronRunner(opts: {
   readAutomations: () => AutomationRecord[];
   writeAutomations: (items: AutomationRecord[]) => void;
   broadcastSync: (event: Record<string, any>) => void;
+  activeAbortControllers?: Map<string, AbortController>;
   handlePromptTurn: (params: {
     threadId: string;
     prompt: string;
@@ -55,21 +56,25 @@ export function startAutomationCronRunner(opts: {
         if (!matchesCronExpression(item.cron, now)) continue;
         item.lastRunAt = now.toISOString();
         changed = true;
+        const threads = opts.db.listThreads();
+        const targetThread = threads[0] || { id: 'thread-default' };
         opts.broadcastSync({
           type: 'TIMER_FIRED',
           payload: {
             taskId: item.id,
             automationId: item.id,
+            thread_id: targetThread.id,
             title: item.name,
             prompt: item.prompt,
             timestamp: Date.now(),
           },
         });
-        const threads = opts.db.listThreads();
-        const targetId = threads[0]?.id || 'thread-default';
+        if (opts.activeAbortControllers?.has(targetThread.id)) {
+          continue;
+        }
         void opts
           .handlePromptTurn({
-            threadId: targetId,
+            threadId: targetThread.id,
             prompt: item.prompt,
             tier: item.tier || 'high',
             thinkingBudget: 'fast',

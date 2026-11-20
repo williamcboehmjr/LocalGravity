@@ -58,11 +58,31 @@ export const execute: BuiltinToolHandler = async (args, ctx) => {
   }
 
   if (action === 'kill') {
-    const taskId = String(args.task_id || args.taskId || '').trim();
+    const taskId = String(args.task_id || args.taskId || args.TaskId || '').trim();
     const ok = manager.killTask(taskId);
     return {
       stdout: ok ? `Task ${taskId} cancelled.` : '',
-      stderr: ok ? '' : `Task "${taskId}" not found.`,
+      stderr: ok ? '' : `Task "${taskId}" not found or is not running.`,
+      exitCode: ok ? 0 : 1,
+      durationMs: Date.now() - startMs,
+    };
+  }
+
+  if (action === 'send_input') {
+    const taskId = String(args.task_id || args.taskId || args.TaskId || '').trim();
+    const input = String(args.input ?? args.Input ?? '');
+    if (!taskId) {
+      return {
+        stdout: '',
+        stderr: 'manage_task(action="send_input") requires a non-empty "task_id" / "TaskId" argument.',
+        exitCode: 1,
+        durationMs: Date.now() - startMs,
+      };
+    }
+    const ok = manager.sendInputToTask(taskId, input);
+    return {
+      stdout: ok ? `Sent input to task ${taskId}.` : '',
+      stderr: ok ? '' : `Failed to send input to task "${taskId}" (not found or not running).`,
       exitCode: ok ? 0 : 1,
       durationMs: Date.now() - startMs,
     };

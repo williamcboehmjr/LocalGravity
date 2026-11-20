@@ -93,6 +93,10 @@ export const TaskChecklist: React.FC<TaskChecklistProps> = ({ onSync }) => {
                       <button type="button" className="mt-0.5 shrink-0 text-[#8AB4F8]">
                         {task.completed ? (
                           <CheckSquare className="w-4 h-4 fill-[#8AB4F8]/20" />
+                        ) : task.inProgress ? (
+                          <span className="inline-flex items-center justify-center w-4 h-4 rounded border border-amber-400/70 bg-amber-500/15 text-amber-300 font-mono text-[10px] font-bold">
+                            /
+                          </span>
                         ) : (
                           <Square className="w-4 h-4 text-[#6E6E73] group-hover:text-[#A0A0A6]" />
                         )}

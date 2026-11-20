@@ -140,6 +140,13 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
   const action = String(args.action || 'read').toLowerCase();
   const keyPath = args.key_path ? String(args.key_path).trim() : '';
 
+  const FORBIDDEN_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const validateKeyPath = (kp: string): string[] | null => {
+    const parts = kp.split('.');
+    if (parts.some((p) => !p || FORBIDDEN_JSON_KEYS.has(p))) return null;
+    return parts;
+  };
+
   if (action === 'read') {
     if (!keyPath) {
       return {
@@ -149,7 +156,15 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
         durationMs: Math.round(performance.now() - startMs),
       };
     }
-    const parts = keyPath.split('.');
+    const parts = validateKeyPath(keyPath);
+    if (!parts) {
+      return {
+        stdout: '',
+        stderr: `Invalid or forbidden key_path: "${keyPath}"`,
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - startMs),
+      };
+    }
     let curr = json;
     for (const p of parts) {
       if (curr == null || typeof curr !== 'object') {
@@ -175,7 +190,15 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
         durationMs: Math.round(performance.now() - startMs),
       };
     }
-    const parts = keyPath.split('.');
+    const parts = validateKeyPath(keyPath);
+    if (!parts) {
+      return {
+        stdout: '',
+        stderr: `Invalid or forbidden key_path: "${keyPath}"`,
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - startMs),
+      };
+    }
     let curr = json;
     for (let i = 0; i < parts.length - 1; i++) {
       if (!curr[parts[i]] || typeof curr[parts[i]] !== 'object') {
@@ -183,8 +206,20 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
       }
       curr = curr[parts[i]];
     }
+    const priorContent = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf-8') : null;
     curr[parts[parts.length - 1]] = args.value;
-    fs.writeFileSync(targetPath, JSON.stringify(json, null, 2) + '\n', 'utf-8');
+    const nextContent = JSON.stringify(json, null, 2) + '\n';
+    if (ctx.threadId && priorContent !== null) {
+      const cp = exec.db.createFileCheckpoint({
+        thread_id: ctx.threadId,
+        message_id: ctx.messageId || '',
+        file_path: targetPath,
+        previous_content_blob: priorContent,
+        new_content_blob: nextContent,
+      });
+      ctx.onFileCheckpointCreated?.(cp);
+    }
+    fs.writeFileSync(targetPath, nextContent, 'utf-8');
     return {
       stdout: `Successfully updated "${keyPath}" in ${targetPath}`,
       stderr: '',
@@ -202,7 +237,15 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
         durationMs: Math.round(performance.now() - startMs),
       };
     }
-    const parts = keyPath.split('.');
+    const parts = validateKeyPath(keyPath);
+    if (!parts) {
+      return {
+        stdout: '',
+        stderr: `Invalid or forbidden key_path: "${keyPath}"`,
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - startMs),
+      };
+    }
     let curr = json;
     for (let i = 0; i < parts.length - 1; i++) {
       if (!curr[parts[i]] || typeof curr[parts[i]] !== 'object') {
@@ -210,8 +253,20 @@ const handlePatchJson: BuiltinToolHandler = async (args, ctx, exec) => {
       }
       curr = curr[parts[i]];
     }
+    const priorContent = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf-8') : null;
     delete curr[parts[parts.length - 1]];
-    fs.writeFileSync(targetPath, JSON.stringify(json, null, 2) + '\n', 'utf-8');
+    const nextContent = JSON.stringify(json, null, 2) + '\n';
+    if (ctx.threadId && priorContent !== null) {
+      const cp = exec.db.createFileCheckpoint({
+        thread_id: ctx.threadId,
+        message_id: ctx.messageId || '',
+        file_path: targetPath,
+        previous_content_blob: priorContent,
+        new_content_blob: nextContent,
+      });
+      ctx.onFileCheckpointCreated?.(cp);
+    }
+    fs.writeFileSync(targetPath, nextContent, 'utf-8');
     return {
       stdout: `Successfully deleted "${keyPath}" from ${targetPath}`,
       stderr: '',
@@ -264,6 +319,25 @@ const handleManageFiles: BuiltinToolHandler = async (args, ctx, exec) => {
   }
 
   if (action === 'delete') {
+    const rawSource = args.source !== undefined && args.source !== null ? String(args.source).trim() : '';
+    if (!rawSource || rawSource === '.') {
+      return {
+        stdout: '',
+        stderr: 'Refusing to delete: source path is required and cannot be empty or ".".',
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - startMs),
+      };
+    }
+    const resolvedSrc = path.resolve(srcPath).toLowerCase();
+    const resolvedWs = path.resolve(ctx.workspaceRoot).toLowerCase();
+    if (resolvedSrc === resolvedWs) {
+      return {
+        stdout: '',
+        stderr: `Refusing to delete workspace root directory: ${srcPath}`,
+        exitCode: 1,
+        durationMs: Math.round(performance.now() - startMs),
+      };
+    }
     if (!fs.existsSync(srcPath)) {
       return {
         stdout: `File does not exist: ${srcPath}`,

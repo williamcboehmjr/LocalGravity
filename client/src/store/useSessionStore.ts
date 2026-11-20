@@ -301,8 +301,7 @@ export const resetTurnProtocolState = () => {
 
 const findAssistantIdx = (list: ChatMessage[], messageId?: string): number => {
   if (messageId) {
-    const i = list.findIndex((m) => m.id === messageId);
-    if (i !== -1) return i;
+    return list.findIndex((m) => m.id === messageId);
   }
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].role === 'assistant') return i;
@@ -340,6 +339,8 @@ interface SessionState extends ComfySlice {
   activeModelName: string;
   messages: ChatMessage[];
   messageQueue: QueuedMessage[];
+  messageQueues: Record<string, QueuedMessage[]>;
+  lastTurnWasAborted: boolean;
   currentStreamingThought: string;
   currentThoughtElapsedMs: number;
   currentThoughtTokens: number;
@@ -395,7 +396,7 @@ interface SessionState extends ComfySlice {
     command: string,
     output?: string,
     status?: 'running' | 'success' | 'error',
-    meta?: { id?: string; toolName?: string; durationMs?: number; exitCode?: number | null; appendOutput?: boolean; messageId?: string }
+    meta?: { id?: string; toolName?: string; argumentsJson?: string; durationMs?: number; exitCode?: number | null; appendOutput?: boolean; messageId?: string }
   ) => void;
   finalizeAssistantMessage: (messageId?: string) => void;
   commitAssistantStepNote: (note: string, committedContent?: string, messageId?: string) => void;
@@ -405,6 +406,7 @@ interface SessionState extends ComfySlice {
   startPendingTurn: () => void;
   applyLegacyTurnStart: (payload: any) => void;
   applyLegacyTurnEnd: (payload: any, phase: 'completed' | 'aborted' | 'error') => void;
+  setLastTurnWasAborted: (aborted: boolean) => void;
   syncGenerating: (busy: boolean) => void;
   setThreadStatus: (threadId: string, status: ThreadItem['status']) => void;
   setSwarmState: (swarm: SwarmState | null) => void;
@@ -562,6 +564,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   activeModelName: 'swift-1.5-iq2_xs',
   messages: [],
   messageQueue: [],
+  messageQueues: {},
+  lastTurnWasAborted: false,
   currentStreamingThought: '',
   currentThoughtElapsedMs: 0,
   currentThoughtTokens: 0,
@@ -587,11 +591,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       saveLastLocation(state.activeProjectId, targetId);
       const targetThread = state.threads.find((t) => t.id === targetId);
       const targetBusy = targetThread?.status === 'thinking' || targetThread?.status === 'executing_tool';
+      const nextQueues = { ...state.messageQueues, [state.sessionId]: state.messageQueue };
       set({
         threadHistoryIndex: nextIdx,
         sessionId: targetId,
         messages: [],
+        messageQueues: nextQueues,
+        messageQueue: nextQueues[targetId] || [],
+        lastTurnWasAborted: false,
         currentStreamingThought: '',
+        currentThoughtElapsedMs: 0,
+        currentThoughtTokens: 0,
+        isThinkingFinished: false,
         isGenerating: targetBusy,
         activeTurn: null,
         swarmState: null,
@@ -608,11 +619,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       saveLastLocation(state.activeProjectId, targetId);
       const targetThread = state.threads.find((t) => t.id === targetId);
       const targetBusy = targetThread?.status === 'thinking' || targetThread?.status === 'executing_tool';
+      const nextQueues = { ...state.messageQueues, [state.sessionId]: state.messageQueue };
       set({
         threadHistoryIndex: nextIdx,
         sessionId: targetId,
         messages: [],
+        messageQueues: nextQueues,
+        messageQueue: nextQueues[targetId] || [],
+        lastTurnWasAborted: false,
         currentStreamingThought: '',
+        currentThoughtElapsedMs: 0,
+        currentThoughtTokens: 0,
+        isThinkingFinished: false,
         isGenerating: targetBusy,
         activeTurn: null,
         swarmState: null,
@@ -697,10 +715,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         candidateId = threads[0].id;
       }
       saveLastLocation(state.activeProjectId, candidateId);
+      const nextQueues = { ...state.messageQueues, [state.sessionId]: state.messageQueue };
       return {
         threads,
         sessions: mappedSessions.length > 0 ? mappedSessions : state.sessions,
         sessionId: candidateId,
+        messageQueues: nextQueues,
+        messageQueue: candidateId === state.sessionId ? state.messageQueue : (nextQueues[candidateId] || []),
       };
     }),
 
@@ -760,9 +781,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
 
-      const activeStream = activeStreams[0];
+      const matchingStreams = Array.isArray(activeStreams)
+        ? activeStreams.filter((s: any) => {
+            const stId = s?.threadId ?? s?.thread_id;
+            return !stId || stId === prev.sessionId;
+          })
+        : [];
+      const activeStream = matchingStreams[0];
       const serverBusy = threadStatus === 'thinking' || threadStatus === 'executing_tool';
-      const normalized: ChatMessage[] = activeStream || serverBusy
+      let normalized: ChatMessage[] = activeStream || serverBusy
         ? converted
         : converted.map((m) => {
             if (m.toolCalls && m.toolCalls.some((tc) => tc.status === 'running')) {
@@ -778,6 +805,49 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             return m;
           });
 
+      if (activeStream) {
+        const streamMsgId = activeStream.messageId ?? activeStream.message_id;
+        let streamIdx = streamMsgId
+          ? normalized.findIndex((m) => m.id === streamMsgId)
+          : -1;
+        if (streamIdx === -1 && normalized.length > 0 && normalized[normalized.length - 1].role === 'assistant') {
+          streamIdx = normalized.length - 1;
+        }
+        if (streamIdx !== -1) {
+          const target = normalized[streamIdx];
+          normalized = normalized.map((m, idx) =>
+            idx === streamIdx
+              ? {
+                  ...target,
+                  content:
+                    activeStream.content && activeStream.content.length >= (target.content || '').length
+                      ? activeStream.content
+                      : target.content,
+                  thought: activeStream.thinkingContent || target.thought,
+                  thoughtElapsedMs: activeStream.thinkingDurationMs || target.thoughtElapsedMs,
+                  thoughtTokenCount: activeStream.thinkingTokens || target.thoughtTokenCount,
+                  outputTokens: activeStream.outputTokens ?? target.outputTokens,
+                }
+              : m
+          );
+        } else if (streamMsgId && (activeStream.content || activeStream.thinkingContent)) {
+          normalized = [
+            ...normalized,
+            {
+              id: streamMsgId,
+              role: 'assistant',
+              content: activeStream.content || '',
+              thought: activeStream.thinkingContent || undefined,
+              thoughtElapsedMs: activeStream.thinkingDurationMs || 0,
+              thoughtTokenCount: activeStream.thinkingTokens || 0,
+              outputTokens: activeStream.outputTokens || 0,
+              timestamp: Date.now(),
+              toolCalls: [],
+            },
+          ];
+        }
+      }
+
       const lastMsg = normalized[normalized.length - 1];
       const hasRunningTool = Boolean(
         activeStream &&
@@ -791,6 +861,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           prev.activeTurn.turnId.startsWith(PENDING_PREFIX) &&
           Date.now() - Number(prev.activeTurn.turnId.slice(PENDING_PREFIX.length)) < 4000
       );
+      if (hasPendingOptimistic && prev.messages.length > 0) {
+        const serverIds = new Set(normalized.map((m) => m.id));
+        const unconfirmedOptimistic = prev.messages.filter(
+          (m) =>
+            !serverIds.has(m.id) &&
+            (m.id.startsWith('user-') || m.id.startsWith('assistant-')) &&
+            !normalized.some((sm) => sm.role === m.role && sm.content && sm.content === m.content)
+        );
+        if (unconfirmedOptimistic.length > 0) {
+          normalized = [...normalized, ...unconfirmedOptimistic];
+        }
+      }
       const hydratedTurn: ActiveTurnState | null = serverActiveTurn && (serverActiveTurn.turn_id || serverActiveTurn.turnId)
         ? {
             turnId: serverActiveTurn.turn_id || serverActiveTurn.turnId,
@@ -911,7 +993,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   updateLastAssistantMessage: (delta, outputTokens, tokensPerSec, messageId) =>
     set((state) => {
       const list = [...state.messages];
-      const idx = findAssistantIdx(list, messageId);
+      let idx = findAssistantIdx(list, messageId);
+      if (idx === -1 && messageId) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i].role === 'assistant' && list[i].id.startsWith('assistant-')) {
+            list[i] = { ...list[i], id: messageId };
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) {
+          list.push({
+            id: messageId,
+            role: 'assistant',
+            content: delta,
+            outputTokens,
+            tokensPerSec: tokensPerSec && tokensPerSec > 0 ? tokensPerSec : undefined,
+            timestamp: Date.now(),
+            toolCalls: [],
+          });
+          return { messages: list };
+        }
+      }
       if (idx !== -1) {
         const last = { ...list[idx] };
         last.content += delta;
@@ -926,7 +1029,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   updateLastAssistantTool: (command, output, status = 'success', meta) =>
     set((state) => {
       const list = [...state.messages];
-      const idx = findAssistantIdx(list, meta?.messageId);
+      let idx = findAssistantIdx(list, meta?.messageId);
+      if (idx === -1 && meta?.messageId) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i].role === 'assistant' && list[i].id.startsWith('assistant-')) {
+            list[i] = { ...list[i], id: meta.messageId };
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) {
+          list.push({
+            id: meta.messageId,
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            toolCalls: [],
+          });
+          idx = list.length - 1;
+        }
+      }
       if (idx !== -1) {
         const last = { ...list[idx] };
         last.toolCommand = command;
@@ -934,13 +1056,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         last.toolStatus = status;
 
         const existingCalls = last.toolCalls ? [...last.toolCalls] : [];
-        const matchIdx = existingCalls.findIndex(
-          (c) => (meta?.id && c.id === meta.id) || c.command === command
+        const matchIdx = existingCalls.findIndex((c) =>
+          meta?.id ? c.id === meta.id : c.command === command && c.status === 'running'
         );
         if (matchIdx !== -1) {
           const prevOut = existingCalls[matchIdx].output || '';
           existingCalls[matchIdx] = {
             ...existingCalls[matchIdx],
+            toolName: meta?.toolName ?? existingCalls[matchIdx].toolName,
+            argumentsJson: meta?.argumentsJson ?? existingCalls[matchIdx].argumentsJson,
             output:
               output !== undefined
                 ? meta?.appendOutput
@@ -956,6 +1080,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             id: meta?.id || 'tc-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
             toolName: meta?.toolName,
             command,
+            argumentsJson: meta?.argumentsJson,
             output,
             status,
             durationMs: meta?.durationMs,
@@ -972,7 +1097,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   commitAssistantStepNote: (note, committedContent, messageId) =>
     set((state) => {
       const list = [...state.messages];
-      const idx = findAssistantIdx(list, messageId);
+      let idx = findAssistantIdx(list, messageId);
+      if (idx === -1 && messageId) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i].role === 'assistant' && list[i].id.startsWith('assistant-')) {
+            list[i] = { ...list[i], id: messageId };
+            idx = i;
+            break;
+          }
+        }
+      }
       if (idx !== -1) {
         const last = { ...list[idx] };
         const notes = last.stepNotes ? [...last.stepNotes] : [];
@@ -1037,7 +1171,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   finalizeAssistantMessage: (messageId) =>
     set((state) => {
       const list = [...state.messages];
-      const idx = findAssistantIdx(list, messageId);
+      let idx = findAssistantIdx(list, messageId);
+      if (idx === -1 && messageId) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i].role === 'assistant' && list[i].id.startsWith('assistant-')) {
+            list[i] = { ...list[i], id: messageId };
+            idx = i;
+            break;
+          }
+        }
+      }
       // Legacy fallback only: under TURN_PHASE the phase event owns isGenerating.
       const genPatch = phaseProtocolSeen ? {} : { isGenerating: false };
       if (idx !== -1) {
@@ -1073,9 +1216,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => {
       if (!content) return state;
       const list = [...state.messages];
-      const idx = findAssistantIdx(list, messageId);
+      let idx = findAssistantIdx(list, messageId);
+      if (idx === -1 && messageId) {
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (list[i].role === 'assistant' && list[i].id.startsWith('assistant-')) {
+            list[i] = { ...list[i], id: messageId };
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) {
+          list.push({
+            id: messageId,
+            role: 'assistant',
+            content,
+            timestamp: Date.now(),
+            toolCalls: [],
+          });
+          return { messages: list };
+        }
+      }
       if (idx === -1) return state;
-      if ((list[idx].content || '').trim().length >= content.trim().length) return state;
       list[idx] = { ...list[idx], content };
       return { messages: list };
     }),
@@ -1178,6 +1339,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   startPendingTurn: () =>
     set((state) => ({
       isGenerating: true,
+      lastTurnWasAborted: false,
       activeTurn: {
         turnId: PENDING_PREFIX + Date.now(),
         threadId: state.sessionId,
@@ -1190,6 +1352,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         seq: 0,
       },
     })),
+
+  setLastTurnWasAborted: (aborted) => set({ lastTurnWasAborted: aborted }),
 
   applyTurnPhase: (payload) => {
     if (!payload) return;
@@ -1215,7 +1379,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     const cur = state.activeTurn;
     // An old turn's event (esp. terminal) must never clobber a newer/different turn.
-    if (cur && turnId && cur.turnId !== turnId && !isActive) return;
+    if (cur && turnId && !cur.turnId.startsWith(PENDING_PREFIX) && cur.turnId !== turnId && !isActive) return;
+
+    const preserveExistingErr =
+      phase === 'error' &&
+      (!cur?.turnId || cur.turnId === turnId || cur.turnId.startsWith(PENDING_PREFIX));
 
     const next: ActiveTurnState = {
       turnId: turnId || cur?.turnId || '',
@@ -1228,13 +1396,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       maxSteps: Number(payload.max_steps ?? payload.maxSteps ?? (cur && cur.turnId === turnId ? cur.maxSteps : 0)),
       thinkingFinished: Boolean(payload.thinking_finished ?? payload.thinkingFinished ?? false),
       activeToolId: payload.active_tool_id ?? payload.activeToolId ?? undefined,
-      error: payload.error || undefined,
+      error: payload.error || (preserveExistingErr ? cur?.error : undefined),
       seq,
     };
     get().reconcileAssistantId(next.messageId);
     set({
       activeTurn: next,
       isGenerating: isActive,
+      lastTurnWasAborted: isActive ? false : phase === 'aborted',
       ...(isActive ? {} : { isThinkingFinished: true }),
     });
     if (!isActive) {
@@ -1257,6 +1426,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().reconcileAssistantId(messageId);
     set((s) => ({
       isGenerating: true,
+      lastTurnWasAborted: false,
       activeTurn: {
         turnId: turnId || s.activeTurn?.turnId || PENDING_PREFIX + Date.now(),
         threadId: payload?.thread_id || payload?.threadId || s.sessionId,
@@ -1280,12 +1450,60 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (turnId && cur && !cur.turnId.startsWith(PENDING_PREFIX) && cur.turnId !== turnId) return;
     if (msgId && cur?.isActive && cur.messageId && cur.messageId !== msgId) return;
     const mid = msgId || cur?.messageId;
+    get().reconcileAssistantId(mid);
     if (payload?.final_content) get().applyFinalContent(payload.final_content, mid);
-    if (phaseProtocolSeen) return; // TURN_PHASE is authoritative for the active flag
+    const errorText =
+      phase === 'error'
+        ? typeof payload?.error === 'string' && payload.error
+          ? payload.error
+          : cur?.error
+        : undefined;
+    if (phaseProtocolSeen) {
+      if (phase === 'aborted') {
+        set({ lastTurnWasAborted: true });
+      }
+      if (phase === 'error' && errorText) {
+        set((s) => ({
+          activeTurn: s.activeTurn
+            ? { ...s.activeTurn, error: errorText }
+            : {
+                turnId: turnId || '',
+                threadId: payload?.thread_id || payload?.threadId || s.sessionId,
+                messageId: mid,
+                phase: 'error',
+                isActive: false,
+                statusLabel: 'Error',
+                step: 0,
+                maxSteps: 0,
+                thinkingFinished: true,
+                error: errorText,
+                seq: 0,
+              },
+        }));
+      }
+      return; // TURN_PHASE is authoritative for the active flag
+    }
     get().finalizeAssistantMessage(mid);
     set((s) => ({
       isGenerating: false,
-      activeTurn: s.activeTurn ? { ...s.activeTurn, isActive: false, phase, statusLabel: '' } : null,
+      lastTurnWasAborted: phase === 'aborted',
+      activeTurn: s.activeTurn
+        ? { ...s.activeTurn, isActive: false, phase, statusLabel: '', error: errorText }
+        : errorText
+        ? {
+            turnId: turnId || '',
+            threadId: payload?.thread_id || payload?.threadId || s.sessionId,
+            messageId: mid,
+            phase: 'error',
+            isActive: false,
+            statusLabel: '',
+            step: 0,
+            maxSteps: 0,
+            thinkingFinished: true,
+            error: errorText,
+            seq: 0,
+          }
+        : null,
     }));
   },
 
@@ -1342,9 +1560,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       id,
       timestamp: Date.now(),
     };
-    set((state) => ({
-      messageQueue: [...state.messageQueue, queuedItem],
-    }));
+    set((state) => {
+      const nextQueue = [...state.messageQueue, queuedItem];
+      return {
+        messageQueue: nextQueue,
+        messageQueues: { ...state.messageQueues, [state.sessionId]: nextQueue },
+      };
+    });
     return id;
   },
 
@@ -1352,23 +1574,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const state = get();
     if (state.messageQueue.length === 0) return undefined;
     const [first, ...rest] = state.messageQueue;
-    set({ messageQueue: rest });
+    set({
+      messageQueue: rest,
+      messageQueues: { ...state.messageQueues, [state.sessionId]: rest },
+    });
     return first;
   },
 
   removeQueuedMessage: (id) => {
-    set((state) => ({
-      messageQueue: state.messageQueue.filter((m) => m.id !== id),
-    }));
+    set((state) => {
+      const nextQueue = state.messageQueue.filter((m) => m.id !== id);
+      return {
+        messageQueue: nextQueue,
+        messageQueues: { ...state.messageQueues, [state.sessionId]: nextQueue },
+      };
+    });
   },
 
   updateQueuedMessage: (id, newText) => {
-    set((state) => ({
-      messageQueue: state.messageQueue.map((m) => (m.id === id ? { ...m, text: newText } : m)),
-    }));
+    set((state) => {
+      const nextQueue = state.messageQueue.map((m) => (m.id === id ? { ...m, text: newText } : m));
+      return {
+        messageQueue: nextQueue,
+        messageQueues: { ...state.messageQueues, [state.sessionId]: nextQueue },
+      };
+    });
   },
 
-  clearQueue: () => set({ messageQueue: [] }),
+  clearQueue: () =>
+    set((state) => ({
+      messageQueue: [],
+      messageQueues: { ...state.messageQueues, [state.sessionId]: [] },
+    })),
 
   createNewProject: () => {
     const newId = 'thread-' + Math.random().toString(36).substring(2, 9);
@@ -1383,12 +1620,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => {
       saveLastLocation(state.activeProjectId, newId);
       const nextHist = [...state.threadHistory.slice(0, state.threadHistoryIndex + 1), newId];
+      const nextQueues = { ...state.messageQueues, [state.sessionId]: state.messageQueue, [newId]: [] };
       return {
         sessionId: newId,
         messages: [],
         messageQueue: [],
+        messageQueues: nextQueues,
+        lastTurnWasAborted: false,
         sessions: [newSession, ...state.sessions],
         currentStreamingThought: '',
+        currentThoughtElapsedMs: 0,
+        currentThoughtTokens: 0,
+        isThinkingFinished: false,
         isGenerating: false,
         activeTurn: null,
         swarmState: null,
@@ -1409,10 +1652,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ...state.threadHistory.slice(0, state.threadHistoryIndex + 1),
       targetSessionId,
     ];
+    const nextQueues = { ...state.messageQueues, [state.sessionId]: state.messageQueue };
     set({
       sessionId: targetSessionId,
       messages: [],
+      messageQueues: nextQueues,
+      messageQueue: nextQueues[targetSessionId] || [],
+      lastTurnWasAborted: false,
       currentStreamingThought: '',
+      currentThoughtElapsedMs: 0,
+      currentThoughtTokens: 0,
+      isThinkingFinished: false,
       isGenerating: targetBusy,
       activeTurn: null,
       swarmState: null,
@@ -1425,12 +1675,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => {
       const remaining = state.sessions.filter((s) => s.id !== targetSessionId);
       const remainingThreads = state.threads.filter((t) => t.id !== targetSessionId);
+      const nextQueues = { ...state.messageQueues };
+      delete nextQueues[targetSessionId];
       if (remaining.length === 0) {
         const fallbackId = 'thread-' + Math.random().toString(36).substring(2, 9);
         return {
           sessionId: fallbackId,
           messages: [],
+          messageQueues: nextQueues,
+          messageQueue: [],
+          lastTurnWasAborted: false,
           currentStreamingThought: '',
+          currentThoughtElapsedMs: 0,
+          currentThoughtTokens: 0,
+          isThinkingFinished: false,
           isGenerating: false,
           activeTurn: null,
           swarmState: null,
@@ -1439,12 +1697,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       }
       if (state.sessionId === targetSessionId) {
-        const nextThread = remainingThreads.find((t) => t.id === remaining[0].id);
+        const nextId = remaining[0].id;
+        const nextThread = remainingThreads.find((t) => t.id === nextId);
         const nextBusy = nextThread?.status === 'thinking' || nextThread?.status === 'executing_tool';
         return {
-          sessionId: remaining[0].id,
+          sessionId: nextId,
           messages: [],
+          messageQueues: nextQueues,
+          messageQueue: nextQueues[nextId] || [],
+          lastTurnWasAborted: false,
           currentStreamingThought: '',
+          currentThoughtElapsedMs: 0,
+          currentThoughtTokens: 0,
+          isThinkingFinished: false,
           isGenerating: nextBusy,
           activeTurn: null,
           swarmState: null,
@@ -1452,7 +1717,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           threads: remainingThreads,
         };
       }
-      return { sessions: remaining, threads: remainingThreads };
+      return { sessions: remaining, threads: remainingThreads, messageQueues: nextQueues };
     });
   },
 

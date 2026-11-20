@@ -26,6 +26,19 @@ interface ProviderRegistryState {
   profiles: ProviderProfile[];
 }
 
+export function isForbiddenProviderUrl(rawUrl: string): boolean {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.port === '5000' || parsed.port === '5001';
+  } catch {
+    return /:(5000|5001)(?:\/|$|\?)/.test(trimmed);
+  }
+}
+
+const SAFE_TABBY_DEFAULT_URL = 'http://127.0.0.1:5050/v1';
+
 const DEFAULT_PROFILES: ProviderProfile[] = [
   {
     id: 'strata',
@@ -61,7 +74,7 @@ const DEFAULT_PROFILES: ProviderProfile[] = [
     id: 'tabbyapi',
     name: 'TabbyAPI (Local ExLlamaV2)',
     kind: 'tabbyapi',
-    baseUrl: 'http://127.0.0.1:5000/v1',
+    baseUrl: SAFE_TABBY_DEFAULT_URL,
     defaultModel: 'local-exl2',
     models: ['local-exl2'],
     isLocal: true,
@@ -105,10 +118,21 @@ export class ProviderRegistry {
       if (fs.existsSync(this.filePath)) {
         const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
         if (parsed && Array.isArray(parsed.profiles) && parsed.profiles.length > 0) {
+          let migrated = false;
+          const profiles: ProviderProfile[] = parsed.profiles.map((p: ProviderProfile) => {
+            if (p && p.id === 'tabbyapi' && isForbiddenProviderUrl(p.baseUrl)) {
+              migrated = true;
+              return { ...p, baseUrl: SAFE_TABBY_DEFAULT_URL };
+            }
+            return p;
+          });
           this.state = {
             activeProviderId: String(parsed.activeProviderId || 'strata'),
-            profiles: parsed.profiles,
+            profiles,
           };
+          if (migrated) {
+            this.save();
+          }
           return this.state;
         }
       }
@@ -144,6 +168,9 @@ export class ProviderRegistry {
     if (!found) {
       throw new Error(`Provider profile "${id}" not found`);
     }
+    if (isForbiddenProviderUrl(found.baseUrl)) {
+      throw new Error('Forbidden port 5000/5001 is not allowed in provider baseUrl');
+    }
     found.enabled = true;
     this.state.activeProviderId = found.id;
     this.save();
@@ -151,6 +178,9 @@ export class ProviderRegistry {
   }
 
   public upsertProfile(profile: ProviderProfile): ProviderProfile[] {
+    if (isForbiddenProviderUrl(profile.baseUrl)) {
+      throw new Error('Forbidden port 5000/5001 is not allowed in provider baseUrl');
+    }
     const idx = this.state.profiles.findIndex((p) => p.id === profile.id);
     if (idx >= 0) {
       const existing = this.state.profiles[idx];
@@ -170,6 +200,13 @@ export class ProviderRegistry {
     const profile = this.state.profiles.find((p) => p.id === id);
     if (!profile) {
       return { ok: false, latencyMs: 0, error: `Unknown provider "${id}"` };
+    }
+    if (isForbiddenProviderUrl(profile.baseUrl)) {
+      return {
+        ok: false,
+        latencyMs: 0,
+        error: 'Forbidden port 5000/5001 blocked by security policy',
+      };
     }
     const start = performance.now();
     try {
