@@ -512,6 +512,20 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     Err(format!("Failed to open external URL: {}", url))
 }
 
+#[tauri::command]
+fn is_linux_appimage() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("APPIMAGE")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -535,7 +549,8 @@ pub fn run() {
             install_linux_update,
             get_tray_supervisor_status,
             install_tray_supervisor,
-            open_external_url
+            open_external_url,
+            is_linux_appimage
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

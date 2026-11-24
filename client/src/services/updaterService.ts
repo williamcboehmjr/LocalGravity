@@ -34,7 +34,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.30';
+  let currentVersion = '2.3.31';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
@@ -54,9 +54,14 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
     typeof navigator !== 'undefined' &&
     /aarch64|arm64/i.test(navigator.userAgent || navigator.platform || '');
 
+  const runningAsAppImage =
+    isTauri && isLinux
+      ? await invoke<boolean>('is_linux_appimage').catch(() => false)
+      : false;
+
   // 1. Primary Check on Desktop: Native Tauri Updater (provides signed updateHandle for direct downloadAndInstall)
-  // Note: On macOS, Tauri v2 updater requires tar.gz bundles. If release uses DMG, native check may return an update
-  // whose downloadAndInstall fails because it is a DMG disk image. We extract downloadUrl from rawJson.
+  // Note: On macOS, Tauri v2 updater requires tar.gz bundles (.app.tar.gz + .sig). If a release only ships a DMG,
+  // extract downloadUrl so we can fall back to native DMG mounting.
   if (isTauri && !isAndroid) {
     try {
       const update = await check({
@@ -68,18 +73,23 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
         if (update.rawJson) {
           const platforms = (update.rawJson as any).platforms;
           if (isMac) {
-            nativeDownloadUrl = platforms?.['darwin-aarch64']?.url;
+            nativeDownloadUrl =
+              platforms?.['darwin-aarch64']?.url || platforms?.['darwin-x86_64']?.url;
           } else if (isLinux) {
             const linuxKey = isArm64 ? 'linux-aarch64' : 'linux-x86_64';
             const rawLinuxUrl: string | undefined = platforms?.[linuxKey]?.url;
-            const cleanVer = update.version.replace(/^v/, '');
-            const debFile = `LocalGravity_${cleanVer}_${isArm64 ? 'arm64' : 'amd64'}.deb`;
-            if (rawLinuxUrl && /\.deb(?:$|\?)/i.test(rawLinuxUrl)) {
+            if (runningAsAppImage) {
               nativeDownloadUrl = rawLinuxUrl;
-            } else if (rawLinuxUrl) {
-              nativeDownloadUrl = rawLinuxUrl.replace(/LocalGravity_[^/?#]+\.AppImage/i, debFile);
             } else {
-              nativeDownloadUrl = `https://github.com/williamcboehmjr/LocalGravity/releases/download/v${cleanVer}/${debFile}`;
+              const cleanVer = update.version.replace(/^v/, '');
+              const debFile = `LocalGravity_${cleanVer}_${isArm64 ? 'arm64' : 'amd64'}.deb`;
+              if (rawLinuxUrl && /\.deb(?:$|\?)/i.test(rawLinuxUrl)) {
+                nativeDownloadUrl = rawLinuxUrl;
+              } else if (rawLinuxUrl) {
+                nativeDownloadUrl = rawLinuxUrl.replace(/LocalGravity_[^/?#]+\.AppImage(?:\.tar\.gz)?/i, debFile);
+              } else {
+                nativeDownloadUrl = `https://github.com/williamcboehmjr/LocalGravity/releases/download/v${cleanVer}/${debFile}`;
+              }
             }
           }
         }
@@ -114,7 +124,9 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
         const platformKey = isAndroid
           ? 'android-aarch64'
           : isMac
-          ? 'darwin-aarch64'
+          ? isArm64
+            ? 'darwin-aarch64'
+            : 'darwin-x86_64'
           : isLinux && isArm64
           ? 'linux-aarch64'
           : isLinux
@@ -123,17 +135,21 @@ export async function checkForAppUpdates(): Promise<UpdateInfo> {
         const fallbackFile = isAndroid
           ? `LocalGravity_${latestTag}_arm64.apk`
           : isMac
-          ? `LocalGravity_${latestTag}_aarch64.dmg`
+          ? `LocalGravity_${latestTag}_universal.dmg`
+          : isLinux && runningAsAppImage
+          ? `LocalGravity_${latestTag}_${isArm64 ? 'aarch64' : 'amd64'}.AppImage`
           : isLinux && isArm64
           ? `LocalGravity_${latestTag}_arm64.deb`
           : isLinux
           ? `LocalGravity_${latestTag}_amd64.deb`
           : `LocalGravity_${latestTag}_x64_en-US.msi`;
-        const platform = manifest.platforms?.[platformKey];
+        const platform =
+          manifest.platforms?.[platformKey] ||
+          (isMac ? manifest.platforms?.['darwin-aarch64'] || manifest.platforms?.['darwin-x86_64'] : undefined);
         let resolvedUrl: string = platform?.url || `${apiBaseUrl}/api/updater/download/${fallbackFile}`;
-        if (isLinux && /\.AppImage(?:$|\?)/i.test(resolvedUrl)) {
+        if (isLinux && !runningAsAppImage && /\.AppImage(?:\.tar\.gz)?(?:$|\?)/i.test(resolvedUrl)) {
           resolvedUrl = resolvedUrl.replace(
-            /LocalGravity_[^/?#]+\.AppImage/i,
+            /LocalGravity_[^/?#]+\.AppImage(?:\.tar\.gz)?/i,
             `LocalGravity_${latestTag}_${isArm64 ? 'arm64' : 'amd64'}.deb`
           );
         }
@@ -262,8 +278,9 @@ export async function downloadAndApplyUpdate(
     return;
   }
 
-  // On macOS Desktop, if we have a direct DMG download URL, execute the native DMG installer
-  if (isTauri && isMac && downloadUrl) {
+  // On macOS Desktop, only use install_dmg_update when no native updateHandle exists or when URL is a .dmg.
+  // When updateHandle is present with a .tar.gz updater bundle + .sig, let Tauri's cryptographic updater handle it below.
+  if (isTauri && isMac && downloadUrl && (/\.dmg(?:$|\?)/i.test(downloadUrl) || !updateHandle)) {
     onProgress?.({
       status: 'started',
       downloadedBytes: 0,
@@ -285,17 +302,26 @@ export async function downloadAndApplyUpdate(
       return;
     } catch (dmgErr: any) {
       console.warn('[Updater] Native DMG installer failed, falling back to updater plugin:', dmgErr);
+      if (!updateHandle) {
+        throw dmgErr;
+      }
     }
   }
 
-  // On Linux Desktop (especially ARM64 / Chromebook Crostini .deb installs), invoke install_linux_update
-  // to avoid Tauri signature mismatch against the Windows MSI signature in latest.json.
+  // On Linux Desktop: if running as an AppImage with a native updateHandle, let Tauri's signed AppImage updater
+  // run natively. For .deb-installed clients (Ubuntu/Debian/Crostini), invoke install_linux_update with the .deb.
+  const runningAsAppImage =
+    isTauri && isLinux
+      ? await invoke<boolean>('is_linux_appimage').catch(() => false)
+      : false;
   const linuxDebUrl =
-    (isLinux || (downloadUrl && /\.deb(?:$|\?)/i.test(downloadUrl))) && downloadUrl
+    (isLinux || (downloadUrl && /\.deb(?:$|\?)/i.test(downloadUrl))) &&
+    downloadUrl &&
+    !(runningAsAppImage && updateHandle)
       ? /\.deb(?:$|\?)/i.test(downloadUrl)
         ? downloadUrl
         : downloadUrl.replace(
-            /LocalGravity_([^/?#]+)_amd64\.AppImage/i,
+            /LocalGravity_([^/?#]+)_(?:amd64|aarch64)\.AppImage(?:\.tar\.gz)?/i,
             `LocalGravity_$1_${isArm64 ? 'arm64' : 'amd64'}.deb`
           )
       : undefined;
@@ -426,6 +452,8 @@ export async function downloadAndApplyUpdate(
     if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(apiBaseUrl)) {
       fetch(`${apiBaseUrl}/api/system/restart`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
         signal: AbortSignal.timeout(1500),
       }).catch(() => {});
     }

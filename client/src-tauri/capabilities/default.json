@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "shell:default",
+    "shell:allow-open",
     "fs:default",
     "process:allow-restart",
     "process:allow-exit"

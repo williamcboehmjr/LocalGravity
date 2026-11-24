@@ -90,7 +90,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   );
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.30');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.31');
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'
   >('idle');

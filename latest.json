@@ -1,27 +1,19 @@
 {
-  "version": "v2.3.30",
-  "notes": "Fix Android auto-update spinner & native APK download opener, fix Inkling 2 Mini Strata profile/tokenizer version & model ID mismatch, and include signed arm64 APK.",
-  "pub_date": "2026-11-24T05:40:22.848Z",
+  "version": "v2.3.31",
+  "notes": "Hybrid local+CI release pipeline (WSL2 Linux x64, local Android APK, GitHub Actions macOS Universal + Linux ARM64 + finalized latest.json signatures) and cross-platform auto-update fixes.",
+  "pub_date": "2026-11-24T07:36:04.541Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelpBc2VKbVU4OUYyRm90aTZ5OVhxZ0owbDVJSnovWXExNzVvN0t4a25MT3cxTVNGVEpnSGpTZU5LOFlmWjhuSUVJN0c2aWxaU3RCMkNxNG9qYUxmVkFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDk4ODIyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjMwClFIZndKckZPa0w2YlVQclhBd3BFT2pvNUl0THljdERDWGdRdXlXc3Y2N3NUc2RWNlJTaHFWOWtZWVZVTStkZXBQc0IvL1QrK0VGd1JIaTQvZnUrdkRBPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.30/LocalGravity_2.3.30_x64_en-US.msi"
-    },
-    "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelpBc2VKbVU4OUYyRm90aTZ5OVhxZ0owbDVJSnovWXExNzVvN0t4a25MT3cxTVNGVEpnSGpTZU5LOFlmWjhuSUVJN0c2aWxaU3RCMkNxNG9qYUxmVkFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDk4ODIyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjMwClFIZndKckZPa0w2YlVQclhBd3BFT2pvNUl0THljdERDWGdRdXlXc3Y2N3NUc2RWNlJTaHFWOWtZWVZVTStkZXBQc0IvL1QrK0VGd1JIaTQvZnUrdkRBPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.30/LocalGravity_2.3.30_aarch64.dmg"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemNlNlQzVlpwc0MzU3FKTkJRT3RIY3VIVjBHYi9BbXRnbjRseWZRZ3JybjgxQmhueFVod3MvRWNYZjBrRkRmZzlNb1ZaOXNYaW9Mamc4b3JLem5GK3dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NTQzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMV94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjMxCnltTlhtbkNEeG1FT3NpRmhLSWorY3pORnh1UjQ5eDAzb1lPMEpYWGRFVHlBTVdMN0pFMzB3WXlxNis5N1FGRlV4NEpDazVsOW16dDhnQW1kZ1RoRUFRPT0K",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.31/LocalGravity_2.3.31_x64_en-US.msi"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelpBc2VKbVU4OUYyRm90aTZ5OVhxZ0owbDVJSnovWXExNzVvN0t4a25MT3cxTVNGVEpnSGpTZU5LOFlmWjhuSUVJN0c2aWxaU3RCMkNxNG9qYUxmVkFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDk4ODIyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjMwClFIZndKckZPa0w2YlVQclhBd3BFT2pvNUl0THljdERDWGdRdXlXc3Y2N3NUc2RWNlJTaHFWOWtZWVZVTStkZXBQc0IvL1QrK0VGd1JIaTQvZnUrdkRBPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.30/LocalGravity_2.3.30_amd64.AppImage"
-    },
-    "linux-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvelpBc2VKbVU4OUYyRm90aTZ5OVhxZ0owbDVJSnovWXExNzVvN0t4a25MT3cxTVNGVEpnSGpTZU5LOFlmWjhuSUVJN0c2aWxaU3RCMkNxNG9qYUxmVkFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDk4ODIyCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMF94NjRfZW4tVVMubXNpCXZlcnNpb246Mi4zLjMwClFIZndKckZPa0w2YlVQclhBd3BFT2pvNUl0THljdERDWGdRdXlXc3Y2N3NUc2RWNlJTaHFWOWtZWVZVTStkZXBQc0IvL1QrK0VGd1JIaTQvZnUrdkRBPT0K",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.30/LocalGravity_2.3.30_arm64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZmFsTERjQlhvemRlMWI3aERtL2ZkTXZmODFvenp3QTlyYjUwdG56cUJaOXl0NUVxRi81alUwOGI3M1FmNm91UVFxbUVZbmZ2UTUrMS83OXFManhsM2JoUnBwZ3ZEWFFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NzYzCWZpbGU6TG9jYWxHcmF2aXR5XzIuMy4zMV9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjIuMy4zMQpINmViVkkxY252Z0NaR0dqNk5sazNoMkRkYmpqL1Z2NEtxcnFOVThyRWtEL1NkdDJqbVNIUnUzbFBSSUZaSEgvdnRUWGtuZTZjTC84YmhPcWp0SUtEUT09Cg==",
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.31/LocalGravity_2.3.31_amd64.AppImage"
     },
     "android-aarch64": {
       "signature": "",
-      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.30/LocalGravity_2.3.30_arm64.apk"
+      "url": "https://github.com/williamcboehmjr/LocalGravity/releases/download/v2.3.31/LocalGravity_2.3.31_arm64.apk"
     }
   }
 }

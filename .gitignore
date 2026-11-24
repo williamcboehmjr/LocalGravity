@@ -44,6 +44,7 @@ tray/*.exe
 server/scripts/_*
 
 # Release binaries
+dist-release/
 *.dmg
 *.msi
 *.sig

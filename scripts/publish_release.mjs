@@ -31,6 +31,8 @@ function parseArgs() {
   const args = process.argv.slice(2);
   let bumpType = 'patch';
   let notes = '';
+  let skipLinux = false;
+  let skipAndroid = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--bump' && args[i + 1]) {
@@ -39,12 +41,16 @@ function parseArgs() {
       notes = args[++i];
     } else if (args[i].startsWith('--notes=')) {
       notes = args[i].slice('--notes='.length);
+    } else if (args[i] === '--skip-linux') {
+      skipLinux = true;
+    } else if (args[i] === '--skip-android') {
+      skipAndroid = true;
     } else if (!notes && !args[i].startsWith('--')) {
       notes = args[i];
     }
   }
 
-  return { bumpType, notes };
+  return { bumpType, notes, skipLinux, skipAndroid };
 }
 
 function calculateNextVersion(currentVersion, bumpType) {
@@ -74,7 +80,7 @@ async function main() {
   console.log('🚀 LocalGravity Autonomous Release & Distribution Engine');
   console.log('==================================================================');
 
-  const { bumpType, notes: rawNotes } = parseArgs();
+  const { bumpType, notes: rawNotes, skipLinux, skipAndroid } = parseArgs();
   if (!fs.existsSync(keyPath)) {
     throw new Error(`Signing key not found at ${keyPath}`);
   }
@@ -174,64 +180,163 @@ async function main() {
   const winSignature = fs.readFileSync(msiSigPath, 'utf8').trim();
   console.log(` Windows MSI and signature verified: ${path.basename(msiPath)}\n`);
 
-  // Step 4: Prepare and Sign macOS Apple Silicon DMG
-  console.log('--- Step 4/6: Preparing & Signing macOS DMG ---');
-  const prevDmg = path.join(rootDir, `LocalGravity_${currentVersion}_aarch64.dmg`);
-  const targetDmg = path.join(rootDir, `LocalGravity_${newVersion}_aarch64.dmg`);
-
-  if (!fs.existsSync(targetDmg) && fs.existsSync(prevDmg)) {
-    fs.copyFileSync(prevDmg, targetDmg);
-  }
-
-  let macSignature = winSignature;
-  if (fs.existsSync(targetDmg)) {
-    const signEnv = { ...buildEnv };
-    delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
-    execSync(
-      `npm run tauri -- signer sign -f "${keyPath}" --password "" --app-version "${newVersion}" "${targetDmg}"`,
-      { cwd: clientDir, stdio: 'inherit', env: signEnv }
-    );
-    const dmgSigPath = `${targetDmg}.sig`;
-    if (fs.existsSync(dmgSigPath)) {
-      macSignature = fs.readFileSync(dmgSigPath, 'utf8').trim();
-    }
-    console.log(` macOS DMG signed successfully: ${path.basename(targetDmg)}\n`);
-  }
-
-  // Step 5: Generate latest.json updater manifest
-  console.log('--- Step 5/6: Generating Updater Manifest (latest.json) ---');
+  // Step 4: Build Local Hybrid Artifacts (Android arm64 APK + WSL2 Linux x64 DEB/AppImage)
+  console.log('--- Step 4/6: Building Local Android APK & WSL2 Linux x64 Bundles ---');
   const apkPath = path.join(rootDir, `LocalGravity_${newVersion}_arm64.apk`);
+  const androidSdkDir = fs.existsSync('C:\\Android\\Sdk')
+    ? 'C:\\Android\\Sdk'
+    : path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk');
+  const keystorePropsPath = path.join(clientDir, 'src-tauri', 'keystore.properties');
+
+  if (!skipAndroid && process.platform === 'win32' && fs.existsSync(androidSdkDir) && fs.existsSync(keystorePropsPath)) {
+    console.log('Building signed Android arm64 APK locally...');
+    const ndkRoot = path.join(androidSdkDir, 'ndk');
+    const ndkVersions = fs.existsSync(ndkRoot) ? fs.readdirSync(ndkRoot).sort().reverse() : [];
+    const ndkHome = ndkVersions.length > 0 ? path.join(ndkRoot, ndkVersions[0]) : '';
+    const javaHome = fs.existsSync('C:\\Program Files\\Java\\jdk-20')
+      ? 'C:\\Program Files\\Java\\jdk-20'
+      : process.env.JAVA_HOME || '';
+    const androidEnv = {
+      ...process.env,
+      ANDROID_HOME: androidSdkDir,
+      ANDROID_SDK_ROOT: androidSdkDir,
+      ...(ndkHome ? { NDK_HOME: ndkHome } : {}),
+      ...(javaHome ? { JAVA_HOME: javaHome } : {}),
+    };
+
+    try {
+      execSync(`npx tauri android build --apk --target aarch64`, {
+        cwd: clientDir,
+        stdio: 'inherit',
+        env: androidEnv,
+      });
+    } catch {
+      console.log('Tauri android build hit Windows symlink restriction or completed Rust compile; copying .so and running Gradle...');
+    }
+
+    const soSrc = path.join(
+      clientDir,
+      'src-tauri',
+      'target',
+      'aarch64-linux-android',
+      'release',
+      'liblocalgravity_edge_lib.so'
+    );
+    const jniDir = path.join(
+      clientDir,
+      'src-tauri',
+      'gen',
+      'android',
+      'app',
+      'src',
+      'main',
+      'jniLibs',
+      'arm64-v8a'
+    );
+    if (!fs.existsSync(soSrc)) {
+      throw new Error(`Android release library missing at ${soSrc}`);
+    }
+    fs.mkdirSync(jniDir, { recursive: true });
+    fs.copyFileSync(soSrc, path.join(jniDir, 'liblocalgravity_edge_lib.so'));
+
+    const androidProjDir = path.join(clientDir, 'src-tauri', 'gen', 'android');
+    execSync('.\\gradlew.bat assembleArm64Release -x rustBuildArm64Release', {
+      cwd: androidProjDir,
+      stdio: 'inherit',
+      env: androidEnv,
+    });
+
+    const apkOutDir = path.join(androidProjDir, 'app', 'build', 'outputs', 'apk', 'arm64', 'release');
+    const builtApks = fs.existsSync(apkOutDir)
+      ? fs.readdirSync(apkOutDir).filter((f) => f.endsWith('.apk'))
+      : [];
+    if (builtApks.length === 0) {
+      throw new Error(`No APK output found in ${apkOutDir}`);
+    }
+    fs.copyFileSync(path.join(apkOutDir, builtApks[0]), apkPath);
+    console.log(` Android arm64 APK built: ${path.basename(apkPath)}\n`);
+  } else if (skipAndroid) {
+    console.log(' Skipping local Android APK build (--skip-android).\n');
+  } else {
+    console.log(' Android SDK or keystore.properties not found; skipping local APK build.\n');
+  }
+
+  let linuxDebPath = '';
+  let linuxAppImagePath = '';
+  let linuxAppImageSigPath = '';
+  let linuxX64Signature = '';
+  const linuxOutDir = path.join(rootDir, 'dist-release', 'linux-x64');
+
+  if (!skipLinux && process.platform === 'win32') {
+    const toWslPath = (winPath) => {
+      const m = winPath.match(/^([A-Za-z]):[\\/](.*)$/);
+      if (!m) return winPath.replace(/\\/g, '/');
+      return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`;
+    };
+    const wslScriptPath = toWslPath(path.join(rootDir, 'scripts', 'build-linux-wsl.sh'));
+    console.log(`Building Linux x64 (.deb + .AppImage) via WSL2 Ubuntu (${wslScriptPath})...`);
+    execSync(`wsl -d Ubuntu -- bash "${wslScriptPath}"`, {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+
+    if (fs.existsSync(linuxOutDir)) {
+      const entries = fs.readdirSync(linuxOutDir);
+      const debEntry = entries.find((f) => f.endsWith('.deb'));
+      const appImageEntry = entries.find((f) => f.endsWith('.AppImage'));
+      if (debEntry) linuxDebPath = path.join(linuxOutDir, debEntry);
+      if (appImageEntry) {
+        linuxAppImagePath = path.join(linuxOutDir, appImageEntry);
+        const sigCandidate = `${linuxAppImagePath}.sig`;
+        if (fs.existsSync(sigCandidate)) {
+          linuxAppImageSigPath = sigCandidate;
+          linuxX64Signature = fs.readFileSync(sigCandidate, 'utf8').trim();
+        }
+      }
+    }
+    console.log(
+      ` Linux x64 artifacts ready: deb=${linuxDebPath ? path.basename(linuxDebPath) : 'none'}, appimage=${
+        linuxAppImagePath ? path.basename(linuxAppImagePath) : 'none'
+      }\n`
+    );
+  } else if (skipLinux) {
+    console.log(' Skipping local WSL2 Linux x64 build (--skip-linux).\n');
+  }
+
+  // Step 5: Generate initial honest latest.json updater manifest (only include platforms with real signatures!)
+  // GitHub Actions finalize-manifest will merge macOS Universal and Linux ARM64 once those jobs upload.
+  console.log('--- Step 5/6: Generating Honest Updater Manifest (latest.json) ---');
+  const platforms = {
+    'windows-x86_64': {
+      signature: winSignature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/${path.basename(msiPath)}`,
+    },
+  };
+
+  if (linuxAppImagePath && linuxX64Signature) {
+    platforms['linux-x86_64'] = {
+      signature: linuxX64Signature,
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/${path.basename(linuxAppImagePath)}`,
+    };
+  }
+
+  if (fs.existsSync(apkPath)) {
+    platforms['android-aarch64'] = {
+      signature: '',
+      url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/${path.basename(apkPath)}`,
+    };
+  }
+
   const manifest = {
     version: tag,
     notes,
     pub_date: new Date().toISOString(),
-    platforms: {
-      'windows-x86_64': {
-        signature: winSignature,
-        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_x64_en-US.msi`,
-      },
-      'darwin-aarch64': {
-        signature: macSignature,
-        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_aarch64.dmg`,
-      },
-      'linux-x86_64': {
-        signature: winSignature,
-        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_amd64.AppImage`,
-      },
-      'linux-aarch64': {
-        signature: winSignature,
-        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_arm64.deb`,
-      },
-      'android-aarch64': {
-        signature: '',
-        url: `https://github.com/williamcboehmjr/LocalGravity/releases/download/${tag}/LocalGravity_${newVersion}_arm64.apk`,
-      },
-    },
+    platforms,
   };
 
   const latestJsonPath = path.join(rootDir, 'latest.json');
-  fs.writeFileSync(latestJsonPath, JSON.stringify(manifest, null, 2), 'utf8');
-  console.log(` latest.json generated.\n`);
+  fs.writeFileSync(latestJsonPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  console.log(` latest.json generated with platforms: ${Object.keys(platforms).join(', ')}.\n`);
 
   // Step 6: Git commit, push, and create GitHub release
   console.log('--- Step 6/6: Git Commit & GitHub Release Publish ---');
@@ -252,8 +357,14 @@ async function main() {
   if (fs.existsSync(trayExePath)) {
     assets.push(`"${trayExePath}"`);
   }
-  if (fs.existsSync(targetDmg)) {
-    assets.push(`"${targetDmg}"`);
+  if (linuxDebPath && fs.existsSync(linuxDebPath)) {
+    assets.push(`"${linuxDebPath}"`);
+  }
+  if (linuxAppImagePath && fs.existsSync(linuxAppImagePath)) {
+    assets.push(`"${linuxAppImagePath}"`);
+  }
+  if (linuxAppImageSigPath && fs.existsSync(linuxAppImageSigPath)) {
+    assets.push(`"${linuxAppImageSigPath}"`);
   }
   if (fs.existsSync(apkPath)) {
     assets.push(`"${apkPath}"`);
@@ -268,10 +379,14 @@ async function main() {
   try {
     await fetch('http://127.0.0.1:3390/api/gpu/offload', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
       signal: AbortSignal.timeout(2000),
     }).catch(() => {});
     const restartRes = await fetch('http://127.0.0.1:3390/api/system/restart', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
       signal: AbortSignal.timeout(2000),
     }).catch(() => null);
     if (restartRes && restartRes.ok) {
