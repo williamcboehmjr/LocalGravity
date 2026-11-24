@@ -8,7 +8,7 @@ import { StreamBufferManager, type InFlightStreamBuffer } from './streamBuffer.j
 
 export type { InFlightStreamBuffer };
 
-export type ModelTier = 'low' | 'medium' | 'high';
+export type ModelTier = 'low' | 'medium' | 'high' | 'inkling' | 'inkling_orch';
 export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ThreadStatus = 'idle' | 'thinking' | 'executing_tool' | 'awaiting_approval' | 'error';
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';

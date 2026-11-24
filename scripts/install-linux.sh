@@ -115,3 +115,49 @@ echo "LocalGravity Linux (${TARGET_ARCH}) installed. Launching localgravity-edge
 if command -v localgravity-edge >/dev/null 2>&1; then
   nohup localgravity-edge >/dev/null 2>&1 &
 fi
+
+INSTALL_TRAY="${LOCALGRAVITY_INSTALL_TRAY:-}"
+if [[ -z "${INSTALL_TRAY}" ]]; then
+  for arg in "$@"; do
+    [[ "${arg}" == "--with-tray" ]] && INSTALL_TRAY="1"
+    [[ "${arg}" == "--no-tray" ]] && INSTALL_TRAY="0"
+  done
+fi
+if [[ -z "${INSTALL_TRAY}" ]] && [[ -t 0 ]]; then
+  read -r -p "Optional: Install & enable Central Brain startup supervisor (systemd user service)? [y/N] " REPLY || true
+  if [[ "${REPLY}" =~ ^[Yy]$ ]]; then
+    INSTALL_TRAY="1"
+  fi
+fi
+
+if [[ "${INSTALL_TRAY}" == "1" ]]; then
+  SERVER_ENTRY=""
+  for candidate in "${HOME}/LocalGravity/server/dist/index.js" "${HOME}/.localgravity/server/dist/index.js"; do
+    if [[ -f "${candidate}" ]]; then
+      SERVER_ENTRY="${candidate}"
+      break
+    fi
+  done
+  if [[ -n "${SERVER_ENTRY}" ]] && command -v node >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+    mkdir -p "${HOME}/.config/systemd/user"
+    UNIT="${HOME}/.config/systemd/user/localgravity-brain.service"
+    cat > "${UNIT}" <<EOF
+[Unit]
+Description=LocalGravity Central Brain Supervisor
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/env node ${SERVER_ENTRY}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now localgravity-brain.service
+    echo "Optional Central Brain systemd service enabled and started (${UNIT})."
+  else
+    echo "Note: Local server not found at ~/LocalGravity/server/dist/index.js; skipping background service (you can enable it later in Settings)."
+  fi
+fi

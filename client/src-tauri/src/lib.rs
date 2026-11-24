@@ -222,6 +222,277 @@ async fn install_linux_update(deb_url: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_tray_supervisor_status() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let installed_path = std::path::PathBuf::from(&local_app)
+            .join("LocalGravity")
+            .join("tray.exe");
+        let exe_dir_tray = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("tray.exe")));
+
+        let resolved = if installed_path.exists() {
+            Some(installed_path)
+        } else if exe_dir_tray.as_ref().map(|p| p.exists()).unwrap_or(false) {
+            exe_dir_tray
+        } else {
+            None
+        };
+
+        let autostart = Command::new("reg.exe")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "LocalGravityTray",
+            ])
+            .creation_flags(0x08000000)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        let running = Command::new("tasklist.exe")
+            .args(["/FI", "IMAGENAME eq tray.exe", "/NH"])
+            .creation_flags(0x08000000)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("tray.exe"))
+            .unwrap_or(false);
+
+        return Ok(serde_json::json!({
+            "platform": "windows",
+            "installed": resolved.is_some(),
+            "running": running,
+            "autostart": autostart,
+            "path": resolved.map(|p| p.to_string_lossy().to_string()),
+        }));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let plist = std::path::PathBuf::from(&home)
+            .join("Library/LaunchAgents/com.localgravity.brain.plist");
+        let installed = plist.exists();
+        return Ok(serde_json::json!({
+            "platform": "macos",
+            "installed": installed,
+            "running": installed,
+            "autostart": installed,
+            "path": if installed { Some(plist.to_string_lossy().to_string()) } else { None },
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let svc = std::path::PathBuf::from(&home)
+            .join(".config/systemd/user/localgravity-brain.service");
+        let desktop = std::path::PathBuf::from(&home)
+            .join(".config/autostart/localgravity-brain.desktop");
+        let installed = svc.exists() || desktop.exists();
+        let path = if svc.exists() {
+            Some(svc.to_string_lossy().to_string())
+        } else if desktop.exists() {
+            Some(desktop.to_string_lossy().to_string())
+        } else {
+            None
+        };
+        return Ok(serde_json::json!({
+            "platform": "linux",
+            "installed": installed,
+            "running": installed,
+            "autostart": installed,
+            "path": path,
+        }));
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        Ok(serde_json::json!({
+            "platform": "mobile",
+            "installed": false,
+            "running": false,
+            "autostart": false,
+            "path": serde_json::Value::Null,
+        }))
+    }
+}
+
+#[tauri::command]
+async fn install_tray_supervisor(enable_autostart: bool) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let local_app = std::env::var("LOCALAPPDATA")
+            .map_err(|_| "LOCALAPPDATA environment variable not set".to_string())?;
+        let target_dir = std::path::PathBuf::from(&local_app).join("LocalGravity");
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Failed to create {}: {}", target_dir.display(), e))?;
+        let target_tray = target_dir.join("tray.exe");
+
+        // Copy bundled tray.exe next to executable if present, otherwise download from latest GitHub release
+        let exe_dir_tray = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("tray.exe")));
+
+        if !target_tray.exists() {
+            if let Some(src) = exe_dir_tray.filter(|p| p.exists()) {
+                std::fs::copy(&src, &target_tray)
+                    .map_err(|e| format!("Failed to copy tray.exe: {}", e))?;
+            } else {
+                let url = "https://github.com/williamcboehmjr/LocalGravity/releases/latest/download/tray.exe";
+                let target_str = target_tray.to_string_lossy().to_string();
+                let out = Command::new("curl.exe")
+                    .args(["-s", "-L", "-f", "-o", &target_str, url])
+                    .creation_flags(0x08000000)
+                    .output()
+                    .map_err(|e| format!("Failed to run curl.exe for tray.exe: {}", e))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "Failed to download tray.exe from GitHub release: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+        }
+
+        let quoted_path = format!("\"{}\"", target_tray.to_string_lossy());
+        if enable_autostart {
+            let reg_out = Command::new("reg.exe")
+                .args([
+                    "add",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "LocalGravityTray",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &quoted_path,
+                    "/f",
+                ])
+                .creation_flags(0x08000000)
+                .output()
+                .map_err(|e| format!("Failed to register Windows startup entry: {}", e))?;
+            if !reg_out.status.success() {
+                return Err(format!(
+                    "Registry Run update failed: {}",
+                    String::from_utf8_lossy(&reg_out.stderr)
+                ));
+            }
+        } else {
+            let _ = Command::new("reg.exe")
+                .args([
+                    "delete",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "LocalGravityTray",
+                    "/f",
+                ])
+                .creation_flags(0x08000000)
+                .output();
+        }
+
+        let _ = Command::new(&target_tray)
+            .current_dir(&target_dir)
+            .creation_flags(0x00000008) // DETACHED_PROCESS
+            .spawn()
+            .map_err(|e| format!("Failed to start tray.exe: {}", e))?;
+
+        return Ok(format!(
+            "Installed & started tray.exe at {}{}",
+            target_tray.display(),
+            if enable_autostart { " (Windows startup enabled)" } else { "" }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        let server_js = [
+            format!("{}/LocalGravity/server/dist/index.js", home),
+            format!("{}/.localgravity/server/dist/index.js", home),
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .ok_or_else(|| {
+            "Could not find LocalGravity/server/dist/index.js on this Mac. Clone/build LocalGravity server first or connect to a remote Central Brain.".to_string()
+        })?;
+
+        let launch_agents = std::path::PathBuf::from(&home).join("Library/LaunchAgents");
+        std::fs::create_dir_all(&launch_agents)
+            .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
+        let plist_path = launch_agents.join("com.localgravity.brain.plist");
+        let plist_xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>com.localgravity.brain</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/usr/bin/env</string>\n    <string>node</string>\n    <string>{}</string>\n  </array>\n  <key>RunAtLoad</key><{}/>\n  <key>KeepAlive</key><true/>\n</dict>\n</plist>\n",
+            server_js,
+            if enable_autostart { "true" } else { "false" }
+        );
+        std::fs::write(&plist_path, plist_xml)
+            .map_err(|e| format!("Failed to write LaunchAgent plist: {}", e))?;
+        let _ = Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .output();
+        let _ = Command::new("launchctl")
+            .args(["load", "-w", &plist_path.to_string_lossy()])
+            .output();
+        return Ok(format!("Configured macOS LaunchAgent at {}", plist_path.display()));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+
+        let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+        let server_js = [
+            format!("{}/LocalGravity/server/dist/index.js", home),
+            format!("{}/.localgravity/server/dist/index.js", home),
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .ok_or_else(|| {
+            "Could not find LocalGravity/server/dist/index.js on this Linux host. Clone/build LocalGravity server first or connect to a remote Central Brain.".to_string()
+        })?;
+
+        let systemd_dir = std::path::PathBuf::from(&home).join(".config/systemd/user");
+        std::fs::create_dir_all(&systemd_dir)
+            .map_err(|e| format!("Failed to create systemd user dir: {}", e))?;
+        let unit_path = systemd_dir.join("localgravity-brain.service");
+        let unit_body = format!(
+            "[Unit]\nDescription=LocalGravity Central Brain Supervisor\nAfter=network.target\n\n[Service]\nExecStart=/usr/bin/env node {}\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n",
+            server_js
+        );
+        std::fs::write(&unit_path, unit_body)
+            .map_err(|e| format!("Failed to write systemd unit: {}", e))?;
+        let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).output();
+        if enable_autostart {
+            let _ = Command::new("systemctl")
+                .args(["--user", "enable", "--now", "localgravity-brain.service"])
+                .output();
+        } else {
+            let _ = Command::new("systemctl")
+                .args(["--user", "start", "localgravity-brain.service"])
+                .output();
+        }
+        return Ok(format!("Configured Linux user service at {}", unit_path.display()));
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = enable_autostart;
+        Err("Tray supervisor is only supported on desktop platforms (Windows, macOS, Linux).".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -242,7 +513,9 @@ pub fn run() {
             init_workspace_harness,
             install_dmg_update,
             install_msi_update,
-            install_linux_update
+            install_linux_update,
+            get_tray_supervisor_status,
+            install_tray_supervisor
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

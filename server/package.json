@@ -1,6 +1,6 @@
 {
   "name": "localgravity-fastify-daemon",
-  "version": "2.3.28",
+  "version": "2.3.29",
   "private": true,
   "type": "module",
   "scripts": {

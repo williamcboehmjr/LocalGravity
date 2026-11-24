@@ -248,6 +248,10 @@ async function main() {
     `"${msiSigPath}"`,
     `"${latestJsonPath}"`,
   ];
+  const trayExePath = path.join(rootDir, 'tray', 'tray.exe');
+  if (fs.existsSync(trayExePath)) {
+    assets.push(`"${trayExePath}"`);
+  }
   if (fs.existsSync(targetDmg)) {
     assets.push(`"${targetDmg}"`);
   }

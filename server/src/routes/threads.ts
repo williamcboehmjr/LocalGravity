@@ -5,7 +5,7 @@ import type { GoogleModelId } from '../google/googleAiEngine.js';
 import type { RawAttachmentInput } from '../files/attachmentManager.js';
 import type { RouteContext } from './types.js';
 
-const VALID_MODEL_TIERS = new Set<ModelTier>(['low', 'medium', 'high']);
+const VALID_MODEL_TIERS = new Set<ModelTier>(['low', 'medium', 'high', 'inkling', 'inkling_orch']);
 const VALID_THINKING_BUDGETS = new Set<ThinkingBudget>(['off', 'fast', 'deep', 'low', 'medium', 'high', 'xhigh']);
 const VALID_THREAD_STATUSES = new Set<ThreadStatus>([
   'idle',

@@ -99,6 +99,26 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
       throughputMBps: 2610.0,
       lastWarmedAt: null,
     },
+    inkling: {
+      tier: 'inkling',
+      modelName: 'inkling-2-mini-sq-10',
+      state: 'cold',
+      bytesWarmed: 0,
+      totalBytes: 0,
+      filesCount: 0,
+      throughputMBps: 0,
+      lastWarmedAt: null,
+    },
+    inkling_orch: {
+      tier: 'inkling_orch',
+      modelName: 'orchestrator-inkling-2-mini',
+      state: 'cold',
+      bytesWarmed: 0,
+      totalBytes: 0,
+      filesCount: 0,
+      throughputMBps: 0,
+      lastWarmedAt: null,
+    },
   },
   mcpServers: [
     {

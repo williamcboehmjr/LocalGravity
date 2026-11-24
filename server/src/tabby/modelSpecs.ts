@@ -107,14 +107,59 @@ export const TIER_SPECS: Record<ModelTier, TierModelSpec> = {
     hybridDraftTokens: 4,
     estimatedVramGb: 14.8,
   },
+  inkling: {
+    tier: 'inkling',
+    displayName: 'Inkling 2 Mini',
+    shortLabel: 'Inkling 2 Mini',
+    modelName: 'inkling-2-mini-sq-10',
+    fallbackFolderNames: [
+      'inkling-2-mini',
+      'Inkling-2-Mini',
+      'Inkling-2-Mini-SQ-10',
+      'inkling-2-mini-sq-10',
+    ],
+    bpw: 'SQ-10 (100% VRAM + DSpark + Vision)',
+    maxSeqLen: 65536,
+    cacheMode: 'Q4',
+    autosplitReserve: [256],
+    visionOffload: true,
+    draftMode: 'ngram',
+    hybridDraftTokens: 4,
+    estimatedVramGb: 10.5,
+  },
+  inkling_orch: {
+    tier: 'inkling_orch',
+    displayName: 'Orchestrator - Inkling 2 Mini',
+    shortLabel: 'Orch: Inkling 2 Mini',
+    modelName: 'orchestrator-inkling-2-mini',
+    fallbackFolderNames: [
+      'inkling-2-mini',
+      'Inkling-2-Mini',
+      'Inkling-2-Mini-SQ-10',
+      'inkling-2-mini-sq-10',
+    ],
+    bpw: 'SQ-10 Think-Fast → Execute-Fast',
+    maxSeqLen: 65536,
+    cacheMode: 'Q4',
+    autosplitReserve: [256],
+    visionOffload: true,
+    draftMode: 'ngram',
+    hybridDraftTokens: 4,
+    estimatedVramGb: 10.5,
+  },
 };
 
 export function isStrataOrchestratorTier(tier?: ModelTier): boolean {
-  return tier === 'medium' || tier === 'low';
+  return tier === 'medium' || tier === 'low' || tier === 'inkling_orch';
 }
 
 export function isStrataTier(tier?: ModelTier): boolean {
-  return tier === 'high' || isStrataOrchestratorTier(tier);
+  return tier === 'high' || tier === 'inkling' || isStrataOrchestratorTier(tier);
+}
+
+export function getStrataProfileForTier(tier?: ModelTier): 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl' | 'inkling-2-mini-sq-10' {
+  if (tier === 'inkling' || tier === 'inkling_orch') return 'inkling-2-mini-sq-10';
+  return 'swift-1.5-iq2_xs';
 }
 
 export const THINKING_BUDGET_SPECS: Record<

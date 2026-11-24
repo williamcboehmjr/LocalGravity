@@ -64,6 +64,11 @@ const TIER_LABELS: Record<ModelTier, { name: string; sub: string }> = {
   high: { name: 'Swift 1.5 Flash-Next', sub: 'Strata IQ2_XS + Vision • Single Model' },
   medium: { name: 'Orchestrator - Swift 1.5', sub: 'Think Once (Thinking ON) → Execute Fast (Thinking OFF)' },
   low: { name: 'Orchestrator - Swift 1.5', sub: 'Think Once (Thinking ON) → Execute Fast (Thinking OFF)' },
+  inkling: { name: 'Inkling 2 Mini', sub: 'Strata SQ-10 + DSpark + Vision • 100% VRAM' },
+  inkling_orch: {
+    name: 'Orchestrator - Inkling 2 Mini',
+    sub: 'Think Fast (Thinking ON) → Execute Fast (Thinking OFF)',
+  },
 };
 
 const BUDGET_LABELS: Record<ThinkingBudget, string> = {
@@ -1010,7 +1015,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                     );
                   })
                 ) : (
-                  (['high', 'medium'] as ModelTier[]).map((tier) => {
+                  (['high', 'medium', 'inkling', 'inkling_orch'] as ModelTier[]).map((tier) => {
                     const isActive = !isComfyOllamaMode && selectedTier === tier;
                     return (
                       <button
@@ -1080,7 +1085,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
           />
 
           {/* Thinking Effort Dropdown (hidden for Google/Strata Orchestrators and fast ComfyUI Ollama Vision) */}
-          {!isComfyOllamaMode && !((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low'))) && (() => {
+          {!isComfyOllamaMode && !((brainProvider === 'google_ai_studio' && isGoogleOrchestratorModel(selectedGoogleModel)) || (brainProvider !== 'google_ai_studio' && (selectedTier === 'medium' || selectedTier === 'low' || selectedTier === 'inkling_orch'))) && (() => {
             const isGoogle = brainProvider === 'google_ai_studio';
             const googleLevels =
               GOOGLE_THINKING_LEVELS[selectedGoogleModel] || ['low', 'medium', 'high'];

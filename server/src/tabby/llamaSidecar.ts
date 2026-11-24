@@ -5,7 +5,7 @@ import { getPathsConfig } from '../core/pathsConfig.js';
 import { unloadAllOllamaModels } from '../tools/handlers/comfyui/ollamaClient.js';
 
 export type GpuEngineState = 'active' | 'standby' | 'waking';
-export type StrataProfileId = 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl';
+export type StrataProfileId = 'swift-1.5-iq2_xs' | 'qwen36-ud-q4_k_xl' | 'inkling-2-mini-sq-10';
 
 export interface LlamaSidecarDeps {
   spawn?: typeof spawn;
@@ -29,6 +29,7 @@ export interface LlamaMoESidecarConfig {
 const PROFILE_CONFIG_FILES: Record<StrataProfileId, string> = {
   'swift-1.5-iq2_xs': 'strata-swift-iq2_xs.json',
   'qwen36-ud-q4_k_xl': 'strata-qwen36-ud-q4_k_xl.json',
+  'inkling-2-mini-sq-10': 'strata-inkling-2-mini-sq-10.json',
 };
 
 /**

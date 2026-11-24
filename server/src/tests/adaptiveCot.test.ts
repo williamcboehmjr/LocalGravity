@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { computeAdaptiveThinkingConfig, computeOrchestratorStepConfig } from '../agent/adaptiveCot.js';
-import { isStrataOrchestratorTier } from '../tabby/modelSpecs.js';
+import { isStrataOrchestratorTier, getStrataProfileForTier } from '../tabby/modelSpecs.js';
 
 function runAdaptiveCotTests() {
   console.log('Running Piece 1 Unit Tests: Adaptive Chain-of-Thought...');
@@ -91,7 +91,34 @@ function runAdaptiveCotTests() {
   assert.equal(lowRecover.reasoningBudgetTokens, 1024);
   assert.equal(lowRecover.targetStrataProfile, 'swift-1.5-iq2_xs');
 
-  console.log('✅ Piece 1 Unit Tests PASSED (15/15 assertions & Orchestrator checks)');
+  // 7. Inkling 2 Mini ('inkling' & 'inkling_orch'): Think Fast (Step 1) -> Execute Fast w/ No Thinking (Step 2+) -> Recover
+  assert.equal(isStrataOrchestratorTier('inkling'), false);
+  assert.equal(isStrataOrchestratorTier('inkling_orch'), true);
+  assert.equal(getStrataProfileForTier('inkling'), 'inkling-2-mini-sq-10');
+  assert.equal(getStrataProfileForTier('inkling_orch'), 'inkling-2-mini-sq-10');
+
+  const inkStep1 = computeOrchestratorStepConfig('inkling_orch', 1, false);
+  assert.equal(inkStep1.enableThinking, true);
+  assert.equal(inkStep1.reasoningEffort, 'medium');
+  assert.equal(inkStep1.reasoningBudgetTokens, 1024);
+  assert.equal(inkStep1.prefillClosedThink, false);
+  assert.equal(inkStep1.targetStrataProfile, 'inkling-2-mini-sq-10');
+
+  const inkStep2 = computeOrchestratorStepConfig('inkling_orch', 2, false);
+  assert.equal(inkStep2.enableThinking, false);
+  assert.equal(inkStep2.reasoningEffort, 'none');
+  assert.equal(inkStep2.reasoningBudgetTokens, 0);
+  assert.equal(inkStep2.prefillClosedThink, true);
+  assert.equal(inkStep2.targetStrataProfile, 'inkling-2-mini-sq-10');
+
+  const inkRecover = computeOrchestratorStepConfig('inkling_orch', 3, true);
+  assert.equal(inkRecover.hadToolError, true);
+  assert.equal(inkRecover.enableThinking, true);
+  assert.equal(inkRecover.reasoningEffort, 'medium');
+  assert.equal(inkRecover.reasoningBudgetTokens, 1024);
+  assert.equal(inkRecover.targetStrataProfile, 'inkling-2-mini-sq-10');
+
+  console.log('✅ Piece 1 Unit Tests PASSED (Inkling 2 Mini + Orchestrator checks)');
 }
 
 runAdaptiveCotTests();

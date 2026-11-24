@@ -39,6 +39,55 @@ export function computeOrchestratorStepConfig(
 ): OrchestratorStepConfig {
   const step = Math.max(1, Math.floor(stepIndex));
   const isDualModel = tier === 'low';
+  const isInklingOrch = tier === 'inkling_orch';
+
+  if (isInklingOrch) {
+    if (step === 1) {
+      return {
+        tier,
+        stepIndex: step,
+        hadToolError: false,
+        enableThinking: true,
+        reasoningEffort: 'medium',
+        reasoningBudgetTokens: 1024,
+        prefillClosedThink: false,
+        targetStrataProfile: 'inkling-2-mini-sq-10',
+        executionDirective:
+          '[STRATA ORCHESTRATOR — INKLING 2 MINI THINK FAST]: Think briefly (1-2 short paragraphs max) to identify exact target files/tools, then IMMEDIATELY invoke the first tool(s).',
+        modeLabel: 'Orchestrator Plan (Inkling 2 Mini • Think Fast • Step 1)',
+      };
+    }
+
+    if (hadToolError) {
+      return {
+        tier,
+        stepIndex: step,
+        hadToolError: true,
+        enableThinking: true,
+        reasoningEffort: 'medium',
+        reasoningBudgetTokens: 1024,
+        prefillClosedThink: false,
+        targetStrataProfile: 'inkling-2-mini-sq-10',
+        executionDirective:
+          '[STRATA ORCHESTRATOR — INKLING ERROR RECOVERY]: Previous tool execution reported an error. Diagnose the failure concisely and issue corrective surgical edits or checks.',
+        modeLabel: `Orchestrator Error Recovery (Inkling 2 Mini • Think Fast • Step ${step})`,
+      };
+    }
+
+    return {
+      tier,
+      stepIndex: step,
+      hadToolError: false,
+      enableThinking: false,
+      reasoningEffort: 'none',
+      reasoningBudgetTokens: 0,
+      prefillClosedThink: true,
+      targetStrataProfile: 'inkling-2-mini-sq-10',
+      executionDirective:
+        '[STRATA FAST EXECUTOR — INKLING 2 MINI • THINKING OFF]: Execute boilerplate edits, reads, and tool calls immediately with zero deliberation. Prefer surgical edit_file / apply_diff patches.',
+      modeLabel: `Fast Builder Execute (Inkling 2 Mini • Thinking OFF • Step ${step})`,
+    };
+  }
 
   if (step === 1) {
     return {

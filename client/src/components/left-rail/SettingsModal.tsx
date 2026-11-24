@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 import {
   X,
   SlidersHorizontal,
@@ -89,7 +90,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   );
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.28');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.29');
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'
   >('idle');
@@ -99,6 +100,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     statusText: '',
   });
   const [updateError, setUpdateError] = useState<string | null>(null);
+
+  const [trayStatus, setTrayStatus] = useState<{
+    platform: 'windows' | 'macos' | 'linux' | 'mobile';
+    installed: boolean;
+    running: boolean;
+    autostart: boolean;
+    path: string | null;
+  } | null>(null);
+  const [trayAutostart, setTrayAutostart] = useState(true);
+  const [trayInstalling, setTrayInstalling] = useState(false);
+  const [trayActionMsg, setTrayActionMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
+  const refreshTrayStatus = async () => {
+    if (!isTauriEnvironment()) return;
+    try {
+      const status = await invoke<{
+        platform: 'windows' | 'macos' | 'linux' | 'mobile';
+        installed: boolean;
+        running: boolean;
+        autostart: boolean;
+        path: string | null;
+      }>('get_tray_supervisor_status');
+      setTrayStatus(status);
+      if (status.installed) {
+        setTrayAutostart(status.autostart);
+      }
+    } catch {
+      // Ignore if command is unavailable
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && activeTab === 'connection' && isTauriEnvironment()) {
+      setTrayActionMsg(null);
+      refreshTrayStatus();
+    }
+  }, [isOpen, activeTab]);
+
+  const handleInstallTraySupervisor = async () => {
+    if (!isTauriEnvironment()) return;
+    setTrayInstalling(true);
+    setTrayActionMsg(null);
+    try {
+      const msg = await invoke<string>('install_tray_supervisor', {
+        enableAutostart: trayAutostart,
+      });
+      setTrayActionMsg({ ok: true, text: msg });
+      await refreshTrayStatus();
+    } catch (err) {
+      setTrayActionMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTrayInstalling(false);
+    }
+  };
 
   useEffect(() => {
     if (isTauriEnvironment()) {
@@ -823,6 +884,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         {testState.message}
                         {testState.latency !== undefined ? ` (${testState.latency}ms)` : ''}
                       </span>
+                    </div>
+                  )}
+
+                  {isTauri && trayStatus && trayStatus.platform !== 'mobile' && (
+                    <div className="pt-3 mt-1 border-t border-[#1E2025] space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[12.5px] font-medium text-[#E4E4E7]">
+                            Optional: Central Brain Tray & Startup
+                          </div>
+                          <div className="text-[11px] text-[#71717A] mt-0.5">
+                            {trayStatus.platform === 'windows'
+                              ? 'Installs tray.exe to supervise Central Brain on port 3390 and optionally registers Windows startup.'
+                              : trayStatus.platform === 'macos'
+                              ? 'Configures a macOS LaunchAgent (com.localgravity.brain) to run Central Brain in the background.'
+                              : 'Configures a systemd user service (localgravity-brain) to run Central Brain in the background.'}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10.5px] font-medium border ${
+                              trayStatus.installed
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                : 'border-[#2A2D35] bg-[#181A20] text-[#9499A3]'
+                            }`}
+                          >
+                            {trayStatus.installed ? 'Installed' : 'Not Installed'}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10.5px] font-medium border ${
+                              trayStatus.running
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                : 'border-[#2A2D35] bg-[#181A20] text-[#9499A3]'
+                            }`}
+                          >
+                            {trayStatus.running ? 'Running' : 'Stopped'}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10.5px] font-medium border ${
+                              trayStatus.autostart
+                                ? 'border-[#8AB4F8]/30 bg-[#8AB4F8]/10 text-[#8AB4F8]'
+                                : 'border-[#2A2D35] bg-[#181A20] text-[#9499A3]'
+                            }`}
+                          >
+                            {trayStatus.autostart ? 'Auto-start On' : 'Auto-start Off'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {trayStatus.path && (
+                        <div className="text-[11px] font-mono text-[#71717A] truncate" title={trayStatus.path}>
+                          {trayStatus.path}
+                        </div>
+                      )}
+
+                      <label className="flex items-center gap-2 text-[12px] text-[#E4E4E7] cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={trayAutostart}
+                          onChange={(e) => setTrayAutostart(e.target.checked)}
+                          className="rounded border-[#2A2D35] bg-[#0D0E10] text-[#8AB4F8] focus:ring-0"
+                        />
+                        <span>Start automatically on login (Windows / macOS / Linux)</span>
+                      </label>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleInstallTraySupervisor}
+                          disabled={trayInstalling}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#2A2D35] bg-[#181A20] hover:bg-[#22252D] text-[#E4E4E7] text-[12.5px] font-medium transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {trayInstalling ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5 text-[#8AB4F8]" />
+                          )}
+                          <span>
+                            {trayStatus.installed
+                              ? 'Update & Start Tray Supervisor'
+                              : 'Install & Start Tray Supervisor (Optional)'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {trayActionMsg && (
+                        <div
+                          className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-[12px] ${
+                            trayActionMsg.ok
+                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                              : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+                          }`}
+                        >
+                          {trayActionMsg.ok ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          )}
+                          <span>{trayActionMsg.text}</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

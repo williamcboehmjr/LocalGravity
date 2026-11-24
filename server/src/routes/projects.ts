@@ -4,7 +4,7 @@ import { EdgeBridgeManager } from '../bridge/edgeBridge.js';
 import type { LocalGravityDB, ModelTier, ThinkingBudget } from '../db/database.js';
 import type { RouteContext } from './types.js';
 
-const VALID_MODEL_TIERS = new Set<ModelTier>(['high', 'medium', 'low']);
+const VALID_MODEL_TIERS = new Set<ModelTier>(['high', 'medium', 'low', 'inkling', 'inkling_orch']);
 const VALID_THINKING_BUDGETS = new Set<ThinkingBudget>([
   'off',
   'fast',

@@ -32,6 +32,7 @@ export {
   THINKING_BUDGET_SPECS,
   isStrataOrchestratorTier,
   isStrataTier,
+  getStrataProfileForTier,
 } from './modelSpecs.js';
 export type { TierModelSpec, SysRamWarmStatus, TabbyEngineTelemetry } from './modelSpecs.js';
 import {
@@ -39,6 +40,7 @@ import {
   THINKING_BUDGET_SPECS,
   isStrataOrchestratorTier,
   isStrataTier,
+  getStrataProfileForTier,
   TierModelSpec,
   SysRamWarmStatus,
   TabbyEngineTelemetry,
@@ -137,6 +139,26 @@ export class TabbyEngine implements InferenceBackend {
         throughputMBps: 0,
         lastWarmedAt: new Date().toISOString(),
       },
+      inkling: {
+        tier: 'inkling',
+        modelName: TIER_SPECS.inkling.modelName,
+        state: 'cold',
+        bytesWarmed: 0,
+        totalBytes: 0,
+        filesCount: 0,
+        throughputMBps: 0,
+        lastWarmedAt: null,
+      },
+      inkling_orch: {
+        tier: 'inkling_orch',
+        modelName: TIER_SPECS.inkling_orch.modelName,
+        state: 'cold',
+        bytesWarmed: 0,
+        totalBytes: 0,
+        filesCount: 0,
+        throughputMBps: 0,
+        lastWarmedAt: null,
+      },
     };
   }
 
@@ -221,7 +243,7 @@ export class TabbyEngine implements InferenceBackend {
    * DDR4 System RAM over PCIe into VRAM in ~1 second.
    */
   public async prewarmInactiveTiersInSysRam(): Promise<Record<ModelTier, SysRamWarmStatus>> {
-    const allTiers: ModelTier[] = ['low', 'medium', 'high'];
+    const allTiers: ModelTier[] = ['low', 'medium', 'high', 'inkling', 'inkling_orch'];
 
     for (const tier of allTiers) {
       const resolvedName = this.resolveDiskModelName(tier);
@@ -356,7 +378,8 @@ export class TabbyEngine implements InferenceBackend {
 
     if (isStrataTier(newTier)) {
       const sidecar = this.getSidecar();
-      const ok = await sidecar.ensureRunning('swift-1.5-iq2_xs');
+      const targetProfile = getStrataProfileForTier(newTier);
+      const ok = await sidecar.ensureRunning(targetProfile);
       this.activeTier = newTier;
       this.connected = ok;
       this.lastSwapDurationMs = Math.round(performance.now() - startMs);
@@ -558,7 +581,7 @@ export class TabbyEngine implements InferenceBackend {
     return SwarmTurnScheduler.getInstance().acquireGpuTurn(0, 'wake:gpu', async () => {
       if (isStrataTier(this.activeTier)) {
         const sidecar = this.getSidecar();
-        const ok = await sidecar.ensureRunning('swift-1.5-iq2_xs');
+        const ok = await sidecar.ensureRunning(getStrataProfileForTier(this.activeTier));
         this.connected = ok;
         if (this.activeGenerationCount === 0) {
           this.swapStatus = ok ? 'ready' : 'error';
@@ -1108,7 +1131,9 @@ export class TabbyEngine implements InferenceBackend {
         this.activeGenerationCount += 1;
       }
       let endpointUrl = `${this.tabbyBaseUrl}/v1/chat/completions`;
-      const targetProfile = orchestratorCfg ? orchestratorCfg.targetStrataProfile : 'swift-1.5-iq2_xs';
+      const targetProfile = orchestratorCfg
+        ? orchestratorCfg.targetStrataProfile
+        : getStrataProfileForTier(params.tier);
 
       if (strataMode) {
         const sidecar = this.getSidecar();

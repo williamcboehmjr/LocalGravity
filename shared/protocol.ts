@@ -2,7 +2,7 @@
  * Canonical Shared Protocol Definitions for LocalGravity Central Brain & Edge Clients.
  */
 
-export type ModelTier = 'low' | 'medium' | 'high';
+export type ModelTier = 'low' | 'medium' | 'high' | 'inkling' | 'inkling_orch';
 export type ThinkingBudget = 'off' | 'fast' | 'deep' | 'low' | 'medium' | 'high' | 'xhigh';
 export type GoogleThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 export type PlatformType = 'macos' | 'windows' | 'linux' | 'android';
