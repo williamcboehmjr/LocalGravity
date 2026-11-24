@@ -51,9 +51,11 @@ else
   npm install
 fi
 
+BUNDLE_DIR="$BUILD_ROOT/client/src-tauri/target/release/bundle"
+rm -f "$BUNDLE_DIR/deb/"*.deb "$BUNDLE_DIR/deb/"*.sig "$BUNDLE_DIR/appimage/"*.AppImage* "$BUNDLE_DIR/appimage/"*.sig 2>/dev/null || true
+
 npx tauri build --bundles deb,appimage
 
-BUNDLE_DIR="$BUILD_ROOT/client/src-tauri/target/release/bundle"
 rm -f "$OUT_DIR"/*.deb "$OUT_DIR"/*.AppImage "$OUT_DIR"/*.AppImage.sig "$OUT_DIR"/*.tar.gz "$OUT_DIR"/*.tar.gz.sig 2>/dev/null || true
 
 shopt -s nullglob

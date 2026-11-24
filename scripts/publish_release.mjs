@@ -282,8 +282,12 @@ async function main() {
 
     if (fs.existsSync(linuxOutDir)) {
       const entries = fs.readdirSync(linuxOutDir);
-      const debEntry = entries.find((f) => f.endsWith('.deb'));
-      const appImageEntry = entries.find((f) => f.endsWith('.AppImage'));
+      const debEntry =
+        entries.find((f) => f.includes(`_${newVersion}_`) && f.endsWith('.deb')) ||
+        entries.find((f) => f.endsWith('.deb'));
+      const appImageEntry =
+        entries.find((f) => f.includes(`_${newVersion}_`) && f.endsWith('.AppImage')) ||
+        entries.find((f) => f.endsWith('.AppImage'));
       if (debEntry) linuxDebPath = path.join(linuxOutDir, debEntry);
       if (appImageEntry) {
         linuxAppImagePath = path.join(linuxOutDir, appImageEntry);
