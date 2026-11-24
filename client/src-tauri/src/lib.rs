@@ -493,6 +493,25 @@ async fn install_tray_supervisor(enable_autostart: bool) -> Result<String, Strin
     }
 }
 
+#[tauri::command]
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+    if app.shell().open(&url, None).is_ok() {
+        return Ok(());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let status = std::process::Command::new("am")
+            .args(["start", "-a", "android.intent.action.VIEW", "-d", &url])
+            .status()
+            .map_err(|e| format!("Failed to open URL on Android: {}", e))?;
+        if status.success() {
+            return Ok(());
+        }
+    }
+    Err(format!("Failed to open external URL: {}", url))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = HarnessEngine::ensure_client_app_data();
@@ -515,7 +534,8 @@ pub fn run() {
             install_msi_update,
             install_linux_update,
             get_tray_supervisor_status,
-            install_tray_supervisor
+            install_tray_supervisor,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running localgravity tauri application");

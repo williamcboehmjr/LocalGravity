@@ -90,7 +90,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   );
   const [ramdiskPath, setRamdiskPath] = useState('R:\\models');
 
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.29');
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('2.3.30');
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'found' | 'up-to-date' | 'downloading' | 'error'
   >('idle');
@@ -273,6 +273,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           percent: p.percent,
           statusText: p.statusText,
         });
+        if (p.status === 'finished') {
+          setUpdateStatus('found');
+        }
       });
     } catch (err: any) {
       setUpdateError(err?.message || 'Update failed to download or install.');

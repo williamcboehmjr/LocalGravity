@@ -367,12 +367,32 @@ export class LlamaMoESidecar {
     const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\Sue\\AppData\\Local';
     const appControlDir = path.join(localAppData, 'Programs', 'Strata', 'control');
     const strataTerminalRoot = path.join(strataRoot, 'terminal');
-    const terminalDir = this.deps.existsSync(path.join(appControlDir, 'serve', 'server.py'))
-      ? appControlDir
-      : this.deps.existsSync(path.join(strataTerminalRoot, 'current'))
-        ? path.join(strataTerminalRoot, 'current')
-        : path.join(strataTerminalRoot, '0.1.58');
-    const pythonExe = path.join(terminalDir, 'python', 'python.exe');
+    const currentTerminalDir = path.join(strataTerminalRoot, 'current');
+
+    let configCwd: string | null = null;
+    try {
+      if (this.deps.existsSync(configPath)) {
+        const parsedCfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (typeof parsedCfg?.cwd === 'string' && parsedCfg.cwd.trim()) {
+          configCwd = parsedCfg.cwd.trim();
+        }
+      }
+    } catch {}
+
+    const hasServerPy = (dir: string) => this.deps.existsSync(path.join(dir, 'serve', 'server.py'));
+    const hasPython = (dir: string) => this.deps.existsSync(path.join(dir, 'python', 'python.exe'));
+
+    const terminalDir =
+      configCwd && hasServerPy(configCwd) && (hasPython(configCwd) || hasPython(currentTerminalDir))
+        ? configCwd
+        : hasServerPy(currentTerminalDir) && hasPython(currentTerminalDir)
+          ? currentTerminalDir
+          : hasServerPy(appControlDir) && hasPython(appControlDir)
+            ? appControlDir
+            : path.join(strataTerminalRoot, '0.1.58');
+    const pythonExe = hasPython(terminalDir)
+      ? path.join(terminalDir, 'python', 'python.exe')
+      : path.join(currentTerminalDir, 'python', 'python.exe');
     const serverPy = path.join(terminalDir, 'serve', 'server.py');
 
     if (this.deps.existsSync(configPath) && this.deps.existsSync(pythonExe) && this.deps.existsSync(serverPy)) {

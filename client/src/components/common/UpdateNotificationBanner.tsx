@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Download, AlertTriangle, Loader2, X, ExternalLink } from 'lucide-react';
+import { Sparkles, Download, AlertTriangle, Loader2, X, ExternalLink, CheckCircle2 } from 'lucide-react';
 import {
   UpdateInfo,
   downloadAndApplyUpdate,
@@ -16,6 +16,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
   onDismiss,
 }) => {
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [progressStatus, setProgressStatus] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -28,13 +29,19 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
 
   const handleStartUpdate = async () => {
     setIsUpdating(true);
+    setIsFinished(false);
     setErrorMessage(null);
 
     try {
       await downloadAndApplyUpdate(updateInfo, (progress) => {
         setProgressPercent(progress.percent);
         setProgressStatus(progress.statusText);
+        if (progress.status === 'finished') {
+          setIsFinished(true);
+          setIsUpdating(false);
+        }
       });
+      setIsUpdating(false);
     } catch (err: any) {
       console.error('[Updater] Download/install error:', err);
       setErrorMessage(err?.message || 'Failed to apply update. Please try again.');
@@ -69,7 +76,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
         <div className="flex items-center gap-2 shrink-0">
           {isUpdating ? (
             <div className="flex items-center gap-2.5 bg-surface-muted px-3 py-1 rounded-md border border-border-subtle">
-              <Loader2 className="w-3.5 h-3.5 text-accent-blue animate-spin" />
+              <Loader2 className="w-3.5 h-3.5 text-accent-blue animate-spin shrink-0" />
               <div className="w-24 bg-border-subtle rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-accent-blue h-1.5 rounded-full transition-all duration-300"
@@ -77,9 +84,26 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
                 />
               </div>
               <span className="text-[11px] font-mono text-text-muted">{progressPercent}%</span>
-              <span className="text-[10px] text-text-secondary hidden sm:inline truncate max-w-[120px]">
+              <span className="text-[10px] text-text-secondary truncate max-w-[160px]">
                 {progressStatus}
               </span>
+            </div>
+          ) : isFinished ? (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-300 px-3 py-1 rounded-md border border-emerald-500/30 text-[11px]">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate max-w-[200px]">
+                  {progressStatus || 'Update ready'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={onDismiss}
+                title="Dismiss"
+                className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           ) : errorMessage ? (
             <div className="flex items-center gap-1.5 text-rose-400 text-[11px]">

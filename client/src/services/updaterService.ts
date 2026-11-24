@@ -34,7 +34,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function checkForAppUpdates(): Promise<UpdateInfo> {
   const isTauri = isTauriEnvironment();
-  let currentVersion = '2.3.29';
+  let currentVersion = '2.3.30';
   if (isTauri) {
     try {
       currentVersion = await getVersion();
@@ -229,21 +229,35 @@ export async function downloadAndApplyUpdate(
       downloadedBytes: 0,
       totalBytes: 100,
       percent: 25,
-      statusText: 'Starting Android APK download...',
+      statusText: 'Opening Android APK download...',
     });
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    let openedNatively = false;
+    if (isTauri) {
+      try {
+        await invoke('open_external_url', { url: downloadUrl });
+        openedNatively = true;
+      } catch (err) {
+        console.warn('[Updater] open_external_url failed on Android, falling back to browser link:', err);
+      }
+    }
+    if (!openedNatively) {
+      const win = window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+    }
     onProgress?.({
       status: 'finished',
       downloadedBytes: 100,
       totalBytes: 100,
       percent: 100,
-      statusText: 'APK download opened — tap the downloaded APK to install.',
+      statusText: 'APK download opened — tap notification to install.',
     });
     return;
   }

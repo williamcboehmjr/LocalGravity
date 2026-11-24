@@ -1163,6 +1163,7 @@ export class TabbyEngine implements InferenceBackend {
         this.activeTier = params.tier;
         this.connected = true;
         this.swapStatus = 'generating';
+        requestBody.model = sidecar.getActiveProfile();
         endpointUrl = `${sidecar.getBaseUrl()}/v1/chat/completions`;
       } else {
         let isCurrentlyLoaded = false;
